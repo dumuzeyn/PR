@@ -7,12 +7,14 @@ This repository starts with a real working editor and an architecture intended t
 - multi-layer raster documents
 - custom project format (`.prdx`)
 - PNG/JPEG/WebP/BMP/TIFF import and export
-- brush, eraser, fill, gradient, editable text layers, crop, rectangular/elliptical selection, magic wand, color range, move
+- brush, eraser, fill, gradient, editable text layers, crop, rectangular/elliptical/freehand/polygon selection, magic wand, color range, move
 - layer opacity, visibility, duplication, merge, flatten
 - layer locks, raster layer masks, mask painting and blend modes
 - real selection mask with select all, invert, feather, grow, shrink, opaque-pixel selection, single row/column selection and saved alpha selections
 - numeric Free Transform for active layers
-- local retouch tools: blur, sharpen, dodge and burn
+- local retouch tools: blur, sharpen, dodge, burn, clone stamp and healing brush
+- editable shape layers for rectangles, ellipses and lines
+- grid and guide overlays
 - non-destructive adjustment layers for brightness/contrast, saturation, levels, curves, invert and grayscale
 - undo/redo
 - command-based undo for strokes, moves and layer edits
@@ -43,6 +45,8 @@ The executable will be created in `dist\PhotoRedactor.exe`.
 - Middle mouse button drags the canvas.
 - `Space` + left mouse button drags the canvas.
 - The `Hand` tool also drags the canvas.
+- In Clone/Healing tools, `Alt` + click sets the source point.
+- Polygon lasso is finished with a double click.
 
 ## Scope
 

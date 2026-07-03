@@ -69,6 +69,7 @@ class Layer:
     blend_mode: str = "Normal"
     kind: str = "raster"
     text_data: dict[str, Any] | None = None
+    shape_data: dict[str, Any] | None = None
     adjustment: dict[str, Any] | None = None
     id: str = field(default_factory=lambda: uuid.uuid4().hex)
 
@@ -87,6 +88,7 @@ class Layer:
             blend_mode=self.blend_mode,
             kind=self.kind,
             text_data=None if self.text_data is None else dict(self.text_data),
+            shape_data=None if self.shape_data is None else dict(self.shape_data),
             adjustment=None if self.adjustment is None else dict(self.adjustment),
         )
 
@@ -159,6 +161,7 @@ class Document:
                     "blend_mode": layer.blend_mode,
                     "kind": layer.kind,
                     "text_data": None if layer.text_data is None else dict(layer.text_data),
+                    "shape_data": None if layer.shape_data is None else dict(layer.shape_data),
                     "adjustment": None if layer.adjustment is None else dict(layer.adjustment),
                     "pixels": layer.pixels.copy(),
                 }
@@ -195,6 +198,7 @@ class Document:
                     blend_mode=raw.get("blend_mode", "Normal"),
                     kind=raw.get("kind", "raster"),
                     text_data=raw.get("text_data"),
+                    shape_data=raw.get("shape_data"),
                     adjustment=raw.get("adjustment"),
                     id=raw.get("id", uuid.uuid4().hex),
                 )
@@ -226,6 +230,7 @@ class Document:
                     "blend_mode": layer.blend_mode,
                     "kind": layer.kind,
                     "text_data": layer.text_data,
+                    "shape_data": layer.shape_data,
                     "adjustment": layer.adjustment,
                     "pixels": encode_png(layer.pixels),
                 }
@@ -260,6 +265,7 @@ class Document:
                     blend_mode=raw.get("blend_mode", "Normal"),
                     kind=raw.get("kind", "raster"),
                     text_data=raw.get("text_data"),
+                    shape_data=raw.get("shape_data"),
                     adjustment=raw.get("adjustment"),
                     id=raw.get("id", uuid.uuid4().hex),
                 )
@@ -311,6 +317,7 @@ class Document:
                         "blend_mode": layer.blend_mode,
                         "kind": layer.kind,
                         "text_data": layer.text_data,
+                        "shape_data": layer.shape_data,
                         "adjustment": layer.adjustment,
                         "pixels": layer_path,
                     }
@@ -362,6 +369,7 @@ class Document:
                         blend_mode=raw.get("blend_mode", "Normal"),
                         kind=raw.get("kind", "raster"),
                         text_data=raw.get("text_data"),
+                        shape_data=raw.get("shape_data"),
                         adjustment=raw.get("adjustment"),
                         id=raw.get("id", uuid.uuid4().hex),
                     )
@@ -386,11 +394,13 @@ class Document:
                     alpha_blend_inplace(out, layer.pixels, layer.x, layer.y, layer.opacity, alpha_mask, layer.mask_density, layer.blend_mode)
         return out
 
-    def export_flat(self, path: str | Path) -> None:
+    def export_flat(self, path: str | Path, quality: int = 95) -> None:
         img = rgba_array_to_pil(self.composite(checker=False))
         suffix = Path(path).suffix.lower()
         if suffix in [".jpg", ".jpeg"]:
-            img.convert("RGB").save(path, quality=95, subsampling=0)
+            img.convert("RGB").save(path, quality=max(1, min(100, int(quality))), subsampling=0)
+        elif suffix == ".webp":
+            img.save(path, quality=max(1, min(100, int(quality))))
         else:
             img.save(path)
         self.dirty = False
@@ -419,6 +429,49 @@ class Document:
         render_text_layer(layer)
         self.layers.append(layer)
         self.active_layer = len(self.layers) - 1
+        self.dirty = True
+
+    def add_shape_layer(
+        self,
+        shape: str,
+        box: tuple[int, int, int, int],
+        fill: tuple[int, int, int, int],
+        stroke: tuple[int, int, int, int] | None = None,
+        stroke_width: int = 0,
+    ) -> None:
+        layer = Layer(
+            name=f"{shape.title()} shape",
+            pixels=blank_rgba(self.width, self.height, (0, 0, 0, 0)),
+            kind="shape",
+            shape_data={
+                "shape": shape,
+                "box": [int(v) for v in normalized_box(box)],
+                "fill": list(fill),
+                "stroke": None if stroke is None else list(stroke),
+                "stroke_width": int(stroke_width),
+            },
+        )
+        render_shape_layer(layer)
+        self.layers.append(layer)
+        self.active_layer = len(self.layers) - 1
+        self.dirty = True
+
+    def edit_shape_layer(
+        self,
+        fill: tuple[int, int, int, int] | None = None,
+        stroke: tuple[int, int, int, int] | None = None,
+        stroke_width: int | None = None,
+    ) -> None:
+        layer = self.layer
+        if layer.locked or layer.kind != "shape" or layer.shape_data is None:
+            return
+        if fill is not None:
+            layer.shape_data["fill"] = list(fill)
+        if stroke is not None:
+            layer.shape_data["stroke"] = list(stroke)
+        if stroke_width is not None:
+            layer.shape_data["stroke_width"] = int(stroke_width)
+        render_shape_layer(layer)
         self.dirty = True
 
     def edit_text_layer(self, text: str | None = None, size: int | None = None, color: tuple[int, int, int, int] | None = None) -> None:
@@ -567,6 +620,14 @@ class Document:
             center = ((x1 + x2) // 2, (y1 + y2) // 2)
             axes = (max(1, (x2 - x1) // 2), max(1, (y2 - y1) // 2))
             cv2.ellipse(mask, center, axes, 0, 0, 360, 255, -1)
+        self.apply_selection_mask(mask, mode)
+
+    def set_polygon_selection(self, points: list[tuple[int, int]], mode: str = "replace") -> None:
+        if len(points) < 3:
+            return
+        mask = np.zeros((self.height, self.width), dtype=np.uint8)
+        pts = np.array([[(max(0, min(self.width - 1, int(x))), max(0, min(self.height - 1, int(y)))) for x, y in points]], dtype=np.int32)
+        cv2.fillPoly(mask, pts, 255)
         self.apply_selection_mask(mask, mode)
 
     def set_single_row_selection(self, y: int, mode: str = "replace") -> None:
@@ -1009,6 +1070,55 @@ def local_retouch(layer: Layer, x: int, y: int, radius: int, mode: str, opacity:
     return x1, y1, x2, y2
 
 
+def clone_or_heal(
+    layer: Layer,
+    source_x: int,
+    source_y: int,
+    target_x: int,
+    target_y: int,
+    radius: int,
+    opacity: float = 1.0,
+    heal: bool = False,
+    selection_mask: np.ndarray | None = None,
+) -> tuple[int, int, int, int] | None:
+    if layer.locked:
+        return None
+    radius = max(1, int(radius))
+    sx, sy = int(source_x) - layer.x, int(source_y) - layer.y
+    tx, ty = int(target_x) - layer.x, int(target_y) - layer.y
+    x1 = max(0, tx - radius)
+    y1 = max(0, ty - radius)
+    x2 = min(layer.pixels.shape[1], tx + radius + 1)
+    y2 = min(layer.pixels.shape[0], ty + radius + 1)
+    if x1 >= x2 or y1 >= y2:
+        return None
+    sx1 = sx + (x1 - tx)
+    sy1 = sy + (y1 - ty)
+    sx2 = sx1 + (x2 - x1)
+    sy2 = sy1 + (y2 - y1)
+    if sx1 < 0 or sy1 < 0 or sx2 > layer.pixels.shape[1] or sy2 > layer.pixels.shape[0]:
+        return None
+    full_mask = brush_mask(radius)
+    mx1 = x1 - (tx - radius)
+    my1 = y1 - (ty - radius)
+    mask = full_mask[my1 : my1 + (y2 - y1), mx1 : mx1 + (x2 - x1)]
+    if selection_mask is not None:
+        mask = mask & (selection_mask[y1:y2, x1:x2] > 0)
+        if not np.any(mask):
+            return None
+    src = layer.pixels[sy1:sy2, sx1:sx2].astype(np.float32)
+    dst = layer.pixels[y1:y2, x1:x2].astype(np.float32)
+    edited = src.copy()
+    if heal:
+        src_mean = src[mask, :3].mean(axis=0) if np.any(mask) else src[:, :, :3].reshape(-1, 3).mean(axis=0)
+        dst_mean = dst[mask, :3].mean(axis=0) if np.any(mask) else dst[:, :, :3].reshape(-1, 3).mean(axis=0)
+        edited[:, :, :3] = np.clip(src[:, :, :3] - src_mean + dst_mean, 0, 255)
+    mix = np.clip(float(opacity), 0, 1)
+    dst[mask] = dst[mask] * (1.0 - mix) + edited[mask] * mix
+    layer.pixels[y1:y2, x1:x2] = np.clip(dst, 0, 255).astype(np.uint8)
+    return x1, y1, x2, y2
+
+
 def flood_fill(layer: Layer, x: int, y: int, color: tuple[int, int, int, int], tolerance: int, selection_mask: np.ndarray | None = None) -> None:
     if layer.locked:
         return
@@ -1083,6 +1193,28 @@ def render_text_layer(layer: Layer) -> None:
         font = ImageFont.load_default()
     color = tuple(int(v) for v in data.get("color", [255, 255, 255, 255]))
     draw.multiline_text((int(data.get("x", 0)), int(data.get("y", 0))), str(data.get("text", "")), fill=color, font=font, spacing=max(2, int(data.get("size", 48)) // 5))
+    layer.pixels = pil_to_rgba_array(pil)
+
+
+def render_shape_layer(layer: Layer) -> None:
+    if layer.shape_data is None:
+        return
+    layer.pixels[:] = 0
+    data = layer.shape_data
+    pil = rgba_array_to_pil(layer.pixels)
+    draw = ImageDraw.Draw(pil)
+    box = tuple(int(v) for v in data.get("box", [0, 0, 1, 1]))
+    fill = tuple(int(v) for v in data.get("fill", [255, 255, 255, 255]))
+    stroke = data.get("stroke")
+    outline = None if stroke is None else tuple(int(v) for v in stroke)
+    stroke_width = max(0, int(data.get("stroke_width", 0)))
+    shape = str(data.get("shape", "rectangle")).lower()
+    if shape == "ellipse":
+        draw.ellipse(box, fill=fill, outline=outline, width=stroke_width)
+    elif shape == "line":
+        draw.line((box[0], box[1], box[2], box[3]), fill=outline or fill, width=max(1, stroke_width or 1))
+    else:
+        draw.rectangle(box, fill=fill, outline=outline, width=stroke_width)
     layer.pixels = pil_to_rgba_array(pil)
 
 

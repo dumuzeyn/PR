@@ -19,6 +19,7 @@ from .core import (
     apply_gradient,
     blur,
     curves,
+    clone_or_heal,
     draw_mask_brush,
     draw_brush,
     flood_fill,
@@ -47,6 +48,8 @@ class PhotoRedactorApp(tk.Tk):
         self.brush_size = tk.IntVar(value=28)
         self.opacity = tk.DoubleVar(value=1.0)
         self.tolerance = tk.IntVar(value=24)
+        self.grid_visible = tk.BooleanVar(value=False)
+        self.grid_spacing = tk.IntVar(value=64)
         self.foreground = (30, 120, 255, 255)
         self.background = (255, 255, 255, 255)
         self.drag_start: tuple[int, int] | None = None
@@ -63,6 +66,14 @@ class PhotoRedactorApp(tk.Tk):
         self._panning = False
         self.selection_id: int | None = None
         self.selection_box: tuple[int, int, int, int] | None = None
+        self._lasso_points: list[tuple[int, int]] = []
+        self._polygon_points: list[tuple[int, int]] = []
+        self._polygon_ids: list[int] = []
+        self._clone_source: tuple[int, int] | None = None
+        self._clone_anchor_target: tuple[int, int] | None = None
+        self._clone_anchor_source: tuple[int, int] | None = None
+        self._guide_doc_lines: list[tuple[str, int]] = []
+        self._overlay_ids: list[int] = []
         self._preview_image: ImageTk.PhotoImage | None = None
         self._canvas_image_id: int | None = None
         self._render_after_id: str | None = None
@@ -164,8 +175,10 @@ class PhotoRedactorApp(tk.Tk):
         layer.add_command(label="New layer", command=self.new_layer)
         layer.add_command(label="Duplicate layer", command=self.duplicate_layer)
         layer.add_command(label="Delete layer", command=self.delete_layer)
+        layer.add_command(label="Rename layer", command=self.rename_layer)
         layer.add_command(label="Lock/unlock layer", command=self.toggle_layer_lock)
         layer.add_command(label="Edit text layer", command=self.edit_text_layer)
+        layer.add_command(label="Edit shape layer", command=self.edit_shape_layer)
         layer.add_separator()
         layer.add_command(label="Move up", command=lambda: self.move_layer(1))
         layer.add_command(label="Move down", command=lambda: self.move_layer(-1))
@@ -204,6 +217,12 @@ class PhotoRedactorApp(tk.Tk):
         view.add_command(label="Zoom out", command=lambda: self.set_zoom(self.zoom.get() / 1.25))
         view.add_command(label="100%", command=lambda: self.set_zoom(1.0))
         view.add_command(label="Fit", command=self.fit_to_screen)
+        view.add_separator()
+        view.add_checkbutton(label="Grid", variable=self.grid_visible, command=self.refresh_canvas)
+        view.add_command(label="Grid spacing", command=self.set_grid_spacing)
+        view.add_command(label="Add horizontal guide", command=self.add_horizontal_guide)
+        view.add_command(label="Add vertical guide", command=self.add_vertical_guide)
+        view.add_command(label="Clear guides", command=self.clear_guides)
 
     def _build_tools(self, parent: ttk.Frame) -> None:
         ttk.Label(parent, text="Tools").pack(pady=(8, 4))
@@ -216,11 +235,18 @@ class PhotoRedactorApp(tk.Tk):
             ("Sharpen", "sharpen_tool"),
             ("Dodge", "dodge"),
             ("Burn", "burn"),
+            ("Clone", "clone"),
+            ("Healing", "healing"),
             ("Fill", "fill"),
             ("Gradient", "gradient"),
             ("Text", "text"),
+            ("Rect Shape", "rect_shape"),
+            ("Ellipse Shape", "ellipse_shape"),
+            ("Line Shape", "line_shape"),
             ("Rect Sel", "select"),
             ("Ellipse Sel", "ellipse_select"),
+            ("Lasso", "lasso"),
+            ("Polygon", "polygon_lasso"),
             ("Magic Wand", "magic_wand"),
             ("Color Range", "color_range"),
             ("Crop", "crop"),
@@ -263,6 +289,7 @@ class PhotoRedactorApp(tk.Tk):
         self.canvas.bind("<ButtonPress-1>", self.pointer_down)
         self.canvas.bind("<B1-Motion>", self.pointer_drag)
         self.canvas.bind("<ButtonRelease-1>", self.pointer_up)
+        self.canvas.bind("<Double-Button-1>", self.pointer_double_click)
         self.canvas.bind("<ButtonPress-2>", self.pan_down)
         self.canvas.bind("<B2-Motion>", self.pan_drag)
         self.canvas.bind("<ButtonRelease-2>", self.pan_up)
@@ -357,6 +384,7 @@ class PhotoRedactorApp(tk.Tk):
         self._last_render_time = time.perf_counter()
         self._view_dirty = False
         self.update_selection_overlay()
+        self.update_grid_and_guides()
 
     def request_canvas_refresh(self) -> None:
         self.invalidate_pixels()
@@ -465,7 +493,19 @@ class PhotoRedactorApp(tk.Tk):
         self.drag_start = point
         self.last_point = point
         tool = self.tool.get()
-        if tool in ["brush", "eraser", "blur_tool", "sharpen_tool", "dodge", "burn"]:
+        if tool in ["brush", "eraser", "blur_tool", "sharpen_tool", "dodge", "burn", "clone", "healing"]:
+            if tool in ["clone", "healing"]:
+                if event.state & 0x0008:
+                    self._clone_source = point
+                    self.status_text(f"Clone source: {point[0]}, {point[1]}")
+                    self.drag_start = None
+                    return
+                if self._clone_source is None:
+                    self.status_text("Alt-click to set clone source first")
+                    self.drag_start = None
+                    return
+                self._clone_anchor_target = point
+                self._clone_anchor_source = self._clone_source
             kind = "mask" if tool in ["brush", "eraser"] and self.paint_target.get() == "mask" else "pixels"
             self.begin_stroke(kind)
             self.paint_at(point)
@@ -492,6 +532,11 @@ class PhotoRedactorApp(tk.Tk):
                 return
             self._move_layer_id = self.doc.layer.id
             self._move_start = (self.doc.layer.x, self.doc.layer.y)
+        elif tool == "polygon_lasso":
+            self._polygon_points.append(point)
+            self.draw_polygon_lasso()
+        elif tool == "lasso":
+            self._lasso_points = [point]
 
     def pointer_drag(self, event) -> None:
         if self._panning:
@@ -499,7 +544,7 @@ class PhotoRedactorApp(tk.Tk):
             return
         point = self.canvas_to_doc(event)
         tool = self.tool.get()
-        if tool in ["brush", "eraser", "blur_tool", "sharpen_tool", "dodge", "burn"]:
+        if tool in ["brush", "eraser", "blur_tool", "sharpen_tool", "dodge", "burn", "clone", "healing"]:
             self.paint_line(self.last_point or point, point)
             self.last_point = point
         elif tool == "move" and self.drag_start:
@@ -509,8 +554,11 @@ class PhotoRedactorApp(tk.Tk):
             self.drag_start = point
             self.doc.dirty = True
             self.request_canvas_refresh()
-        elif tool in ["select", "ellipse_select", "crop", "gradient"]:
+        elif tool in ["select", "ellipse_select", "crop", "gradient", "rect_shape", "ellipse_shape", "line_shape"]:
             self.draw_selection(self.drag_start, point)
+        elif tool == "lasso" and self.drag_start:
+            self._lasso_points.append(point)
+            self.draw_lasso()
 
     def pointer_up(self, event) -> None:
         if self._panning:
@@ -518,13 +566,19 @@ class PhotoRedactorApp(tk.Tk):
             return
         point = self.canvas_to_doc(event)
         tool = self.tool.get()
-        if tool in ["brush", "eraser", "blur_tool", "sharpen_tool", "dodge", "burn"]:
+        if tool in ["brush", "eraser", "blur_tool", "sharpen_tool", "dodge", "burn", "clone", "healing"]:
             self.end_stroke(f"{tool.title()} stroke")
+            self._clone_anchor_target = None
+            self._clone_anchor_source = None
         elif tool == "move":
             self.end_move_layer()
         elif tool == "gradient" and self.drag_start:
             self.run_document_command("Gradient", lambda: apply_gradient(self.doc.layer, (*self.drag_start, *point), self.foreground, self.background, self.doc.layer_selection_mask(self.doc.layer)))
             self.doc.dirty = True
+            self.refresh()
+        elif tool in ["rect_shape", "ellipse_shape", "line_shape"] and self.drag_start:
+            shape = "rectangle" if tool == "rect_shape" else "ellipse" if tool == "ellipse_shape" else "line"
+            self.run_document_command("Shape layer", lambda: self.doc.add_shape_layer(shape, (*self.drag_start, *point), self.foreground, self.background, 2 if shape != "line" else int(self.brush_size.get())))
             self.refresh()
         elif tool in ["select", "ellipse_select", "crop"] and self.drag_start:
             self.selection_box = (*self.drag_start, *point)
@@ -535,8 +589,20 @@ class PhotoRedactorApp(tk.Tk):
                 mode = self.selection_mode_from_event(event)
                 self.run_selection_command("Elliptical selection", lambda: self.doc.set_ellipse_selection(self.selection_box, mode))
             self.draw_selection(self.drag_start, point)
+        elif tool == "lasso" and len(self._lasso_points) >= 3:
+            mode = self.selection_mode_from_event(event)
+            points = list(self._lasso_points)
+            self.run_selection_command("Lasso selection", lambda: self.doc.set_polygon_selection(points, mode))
+            self.clear_lasso_overlay()
         self.drag_start = None
         self.last_point = None
+
+    def pointer_double_click(self, event) -> None:
+        if self.tool.get() == "polygon_lasso" and len(self._polygon_points) >= 3:
+            mode = self.selection_mode_from_event(event)
+            points = list(self._polygon_points)
+            self.run_selection_command("Polygon lasso selection", lambda: self.doc.set_polygon_selection(points, mode))
+            self.clear_lasso_overlay()
 
     def begin_stroke(self, kind: str = "pixels") -> None:
         self._stroke_layer_id = self.doc.layer.id
@@ -613,7 +679,11 @@ class PhotoRedactorApp(tk.Tk):
         self.capture_stroke_before(self.brush_local_rect(point))
         tool = self.tool.get()
         selection_mask = self.doc.layer_selection_mask(self.doc.layer)
-        if self._stroke_kind == "mask":
+        if tool in ["clone", "healing"]:
+            source = self.clone_source_for_point(point)
+            if source is not None:
+                clone_or_heal(self.doc.layer, source[0], source[1], point[0], point[1], int(self.brush_size.get()), float(self.opacity.get()), tool == "healing", selection_mask)
+        elif self._stroke_kind == "mask":
             draw_mask_brush(self.doc.layer, point[0], point[1], int(self.brush_size.get()), 0 if tool == "eraser" else 255, float(self.opacity.get()), selection_mask)
         elif tool in ["blur_tool", "sharpen_tool", "dodge", "burn"]:
             mode = "blur" if tool == "blur_tool" else "sharpen" if tool == "sharpen_tool" else tool
@@ -641,7 +711,11 @@ class PhotoRedactorApp(tk.Tk):
             self.capture_stroke_before(self.brush_local_rect((x, y)))
             tool = self.tool.get()
             selection_mask = self.doc.layer_selection_mask(self.doc.layer)
-            if self._stroke_kind == "mask":
+            if tool in ["clone", "healing"]:
+                source = self.clone_source_for_point((x, y))
+                if source is not None:
+                    clone_or_heal(self.doc.layer, source[0], source[1], x, y, int(self.brush_size.get()), float(self.opacity.get()), tool == "healing", selection_mask)
+            elif self._stroke_kind == "mask":
                 draw_mask_brush(self.doc.layer, x, y, int(self.brush_size.get()), 0 if tool == "eraser" else 255, float(self.opacity.get()), selection_mask)
             elif tool in ["blur_tool", "sharpen_tool", "dodge", "burn"]:
                 mode = "blur" if tool == "blur_tool" else "sharpen" if tool == "sharpen_tool" else tool
@@ -660,6 +734,14 @@ class PhotoRedactorApp(tk.Tk):
         self.doc.dirty = True
         self.request_canvas_refresh()
 
+    def clone_source_for_point(self, point: tuple[int, int]) -> tuple[int, int] | None:
+        if self._clone_anchor_source is None or self._clone_anchor_target is None:
+            return self._clone_source
+        return (
+            self._clone_anchor_source[0] + point[0] - self._clone_anchor_target[0],
+            self._clone_anchor_source[1] + point[1] - self._clone_anchor_target[1],
+        )
+
     def draw_selection(self, start: tuple[int, int] | None, end: tuple[int, int]) -> None:
         if not start:
             return
@@ -669,6 +751,33 @@ class PhotoRedactorApp(tk.Tk):
             self.selection_id = self.canvas.create_rectangle(*coords, outline="#50e3ff", dash=(5, 4), width=2)
         else:
             self.canvas.coords(self.selection_id, *coords)
+
+    def draw_lasso(self) -> None:
+        self.delete_lasso_overlay()
+        if len(self._lasso_points) < 2:
+            return
+        scale = self.zoom.get()
+        coords = [coord * scale for point in self._lasso_points for coord in point]
+        self._polygon_ids.append(self.canvas.create_line(*coords, fill="#50e3ff", dash=(4, 3), width=2, smooth=True))
+
+    def draw_polygon_lasso(self) -> None:
+        self.delete_lasso_overlay()
+        scale = self.zoom.get()
+        if len(self._polygon_points) >= 2:
+            coords = [coord * scale for point in self._polygon_points for coord in point]
+            self._polygon_ids.append(self.canvas.create_line(*coords, fill="#50e3ff", dash=(4, 3), width=2))
+        for x, y in self._polygon_points:
+            self._polygon_ids.append(self.canvas.create_oval(x * scale - 3, y * scale - 3, x * scale + 3, y * scale + 3, fill="#50e3ff", outline=""))
+
+    def clear_lasso_overlay(self) -> None:
+        self.delete_lasso_overlay()
+        self._lasso_points.clear()
+        self._polygon_points.clear()
+
+    def delete_lasso_overlay(self) -> None:
+        for item_id in self._polygon_ids:
+            self.canvas.delete(item_id)
+        self._polygon_ids.clear()
 
     def update_selection_overlay(self) -> None:
         bounds = self.doc.selection_bounds()
@@ -684,6 +793,28 @@ class PhotoRedactorApp(tk.Tk):
         else:
             self.canvas.coords(self.selection_id, *coords)
         self.canvas.tag_raise(self.selection_id)
+        self.update_grid_and_guides()
+
+    def update_grid_and_guides(self) -> None:
+        for item_id in self._overlay_ids:
+            self.canvas.delete(item_id)
+        self._overlay_ids.clear()
+        scale = self.zoom.get()
+        if self.grid_visible.get():
+            spacing = max(4, int(self.grid_spacing.get()))
+            width = int(self.doc.width * scale)
+            height = int(self.doc.height * scale)
+            for x in range(spacing, self.doc.width, spacing):
+                self._overlay_ids.append(self.canvas.create_line(x * scale, 0, x * scale, height, fill="#3b3f48", dash=(2, 6)))
+            for y in range(spacing, self.doc.height, spacing):
+                self._overlay_ids.append(self.canvas.create_line(0, y * scale, width, y * scale, fill="#3b3f48", dash=(2, 6)))
+        for orientation, value in self._guide_doc_lines:
+            if orientation == "h":
+                self._overlay_ids.append(self.canvas.create_line(0, value * scale, self.doc.width * scale, value * scale, fill="#ff4fd8", width=1))
+            else:
+                self._overlay_ids.append(self.canvas.create_line(value * scale, 0, value * scale, self.doc.height * scale, fill="#ff4fd8", width=1))
+        for item_id in self._overlay_ids:
+            self.canvas.tag_raise(item_id)
 
     def clear_selection(self) -> None:
         self.run_selection_command("Clear selection", self.doc.clear_selection)
@@ -800,10 +931,14 @@ class PhotoRedactorApp(tk.Tk):
     def export_image(self) -> None:
         path = filedialog.asksaveasfilename(defaultextension=".png", filetypes=[("PNG", "*.png"), ("JPEG", "*.jpg"), ("WebP", "*.webp"), ("TIFF", "*.tiff"), ("BMP", "*.bmp")])
         if path:
+            suffix = Path(path).suffix.lower()
+            quality = 95
+            if suffix in {".jpg", ".jpeg", ".webp"}:
+                quality = simpledialog.askinteger("Export quality", "Quality 1..100:", initialvalue=95, minvalue=1, maxvalue=100) or 95
             snapshot = self.document_copy()
 
             def worker():
-                snapshot.export_flat(path)
+                snapshot.export_flat(path, quality)
                 return path
 
             self.run_background("Export image", worker)
@@ -828,6 +963,18 @@ class PhotoRedactorApp(tk.Tk):
 
     def delete_layer(self) -> None:
         self.run_document_command("Delete layer", self.doc.delete_active_layer)
+        self.refresh()
+
+    def rename_layer(self) -> None:
+        name = simpledialog.askstring("Rename layer", "Name:", initialvalue=self.doc.layer.name)
+        if not name:
+            return
+
+        def edit():
+            self.doc.layer.name = name
+            self.doc.dirty = True
+
+        self.run_document_command("Rename layer", edit)
         self.refresh()
 
     def move_layer(self, delta: int) -> None:
@@ -963,6 +1110,17 @@ class PhotoRedactorApp(tk.Tk):
         if size is None:
             return
         self.run_document_command("Edit text layer", lambda: self.doc.edit_text_layer(text=text, size=size, color=self.foreground))
+        self.refresh()
+
+    def edit_shape_layer(self) -> None:
+        layer = self.doc.layer
+        if layer.kind != "shape" or layer.shape_data is None:
+            messagebox.showinfo("Shape layer", "Select a shape layer first.")
+            return
+        stroke_width = simpledialog.askinteger("Shape layer", "Stroke width:", initialvalue=int(layer.shape_data.get("stroke_width", 0)), minvalue=0, maxvalue=200)
+        if stroke_width is None:
+            return
+        self.run_document_command("Edit shape layer", lambda: self.doc.edit_shape_layer(fill=self.foreground, stroke=self.background, stroke_width=stroke_width))
         self.refresh()
 
     def resize_image(self) -> None:
@@ -1176,6 +1334,28 @@ class PhotoRedactorApp(tk.Tk):
         w = max(1, self.canvas.winfo_width() - 20)
         h = max(1, self.canvas.winfo_height() - 20)
         self.set_zoom(min(w / self.doc.width, h / self.doc.height))
+
+    def set_grid_spacing(self) -> None:
+        spacing = simpledialog.askinteger("Grid", "Spacing px:", initialvalue=int(self.grid_spacing.get()), minvalue=4, maxvalue=5000)
+        if spacing:
+            self.grid_spacing.set(spacing)
+            self.refresh_canvas()
+
+    def add_horizontal_guide(self) -> None:
+        y = simpledialog.askinteger("Horizontal guide", "Y coordinate:", initialvalue=self.doc.height // 2, minvalue=0, maxvalue=max(0, self.doc.height))
+        if y is not None:
+            self._guide_doc_lines.append(("h", y))
+            self.refresh_canvas()
+
+    def add_vertical_guide(self) -> None:
+        x = simpledialog.askinteger("Vertical guide", "X coordinate:", initialvalue=self.doc.width // 2, minvalue=0, maxvalue=max(0, self.doc.width))
+        if x is not None:
+            self._guide_doc_lines.append(("v", x))
+            self.refresh_canvas()
+
+    def clear_guides(self) -> None:
+        self._guide_doc_lines.clear()
+        self.refresh_canvas()
 
     def mouse_wheel(self, event) -> None:
         if event.state & 0x0004:
