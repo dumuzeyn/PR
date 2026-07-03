@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+import json
+import os
 from pathlib import Path
 import time
 import tkinter as tk
@@ -42,6 +44,9 @@ class PhotoRedactorApp(tk.Tk):
         self.doc = Document.new()
         self.history = History()
         self.executor = ThreadPoolExecutor(max_workers=2)
+        self.recovery_path = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "PhotoRedactor" / "recovery.prdx"
+        self.action_recording = False
+        self.recorded_actions: list[str] = []
         self.tool = tk.StringVar(value="brush")
         self.paint_target = tk.StringVar(value="pixels")
         self.zoom = tk.DoubleVar(value=1.0)
@@ -84,8 +89,11 @@ class PhotoRedactorApp(tk.Tk):
 
         self._build_ui()
         self.refresh()
+        self.after(500, self.check_recovery_file)
+        self.schedule_autosave()
 
     def destroy(self) -> None:
+        self.autosave_recovery()
         self.executor.shutdown(wait=False, cancel_futures=True)
         super().destroy()
 
@@ -129,6 +137,9 @@ class PhotoRedactorApp(tk.Tk):
         file_menu.add_command(label="Save project", command=self.save, accelerator="Ctrl+S")
         file_menu.add_command(label="Save project as", command=self.save_as_project)
         file_menu.add_command(label="Export image", command=self.export_image)
+        file_menu.add_separator()
+        file_menu.add_command(label="Open recovery", command=self.open_recovery)
+        file_menu.add_command(label="Clear recovery", command=self.clear_recovery)
         file_menu.add_separator()
         file_menu.add_command(label="Batch resize/convert", command=self.batch_process)
         file_menu.add_separator()
@@ -183,6 +194,8 @@ class PhotoRedactorApp(tk.Tk):
         layer.add_command(label="Move up", command=lambda: self.move_layer(1))
         layer.add_command(label="Move down", command=lambda: self.move_layer(-1))
         layer.add_command(label="Free transform", command=self.free_transform_layer)
+        layer.add_command(label="Toggle clipping mask", command=self.toggle_clipping_mask)
+        layer.add_command(label="Layer styles", command=self.edit_layer_styles)
         layer.add_command(label="Merge down", command=self.merge_down)
         layer.add_command(label="Flatten image", command=self.flatten)
         layer.add_separator()
@@ -210,6 +223,13 @@ class PhotoRedactorApp(tk.Tk):
         filters.add_command(label="Gaussian blur", command=self.filter_blur)
         filters.add_command(label="Sharpen", command=self.filter_sharpen)
         filters.add_command(label="Noise", command=self.filter_noise)
+
+        actions = tk.Menu(menu, tearoff=False)
+        menu.add_cascade(label="Actions", menu=actions)
+        actions.add_command(label="Start recording", command=self.start_action_recording)
+        actions.add_command(label="Stop recording", command=self.stop_action_recording)
+        actions.add_command(label="Save recording", command=self.save_action_recording)
+        actions.add_command(label="Clear recording", command=self.clear_action_recording)
 
         view = tk.Menu(menu, tearoff=False)
         menu.add_cascade(label="View", menu=view)
@@ -326,6 +346,7 @@ class PhotoRedactorApp(tk.Tk):
 
     def push_command(self, command) -> None:
         self.history.push(command)
+        self.record_action(command.label)
         self.status_text(command.label)
 
     def run_document_command(self, label: str, fn) -> None:
@@ -333,6 +354,7 @@ class PhotoRedactorApp(tk.Tk):
         fn()
         after = self.doc.raw_state()
         self.history.push(DocumentStateCommand(label, before, after))
+        self.record_action(label)
         self.status_text(label)
 
     def run_selection_command(self, label: str, fn) -> None:
@@ -340,9 +362,75 @@ class PhotoRedactorApp(tk.Tk):
         fn()
         after = None if self.doc.selection_mask is None else self.doc.selection_mask.copy()
         self.history.push(SelectionMaskCommand(label, before, after))
+        self.record_action(label)
         self.selection_box = self.doc.selection_bounds()
         self.update_selection_overlay()
         self.status_text(label)
+
+    def record_action(self, label: str) -> None:
+        if self.action_recording:
+            self.recorded_actions.append(label)
+
+    def start_action_recording(self) -> None:
+        self.action_recording = True
+        self.recorded_actions.clear()
+        self.status_text("Action recording started")
+
+    def stop_action_recording(self) -> None:
+        self.action_recording = False
+        self.status_text(f"Action recording stopped: {len(self.recorded_actions)} steps")
+
+    def clear_action_recording(self) -> None:
+        self.recorded_actions.clear()
+        self.status_text("Action recording cleared")
+
+    def save_action_recording(self) -> None:
+        if not self.recorded_actions:
+            messagebox.showinfo("Actions", "No recorded steps.")
+            return
+        path = filedialog.asksaveasfilename(defaultextension=".json", filetypes=[("Action JSON", "*.json")])
+        if not path:
+            return
+        data = {"name": Path(path).stem, "steps": list(self.recorded_actions), "format": "PhotoRedactor action log v1"}
+        Path(path).write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        self.status_text(f"Saved action: {path}")
+
+    def schedule_autosave(self) -> None:
+        self.after(60000, self.autosave_tick)
+
+    def autosave_tick(self) -> None:
+        self.autosave_recovery()
+        self.schedule_autosave()
+
+    def autosave_recovery(self) -> None:
+        if not getattr(self, "doc", None) or not self.doc.dirty:
+            return
+        try:
+            self.recovery_path.parent.mkdir(parents=True, exist_ok=True)
+            snapshot = self.document_copy()
+            snapshot.save_project(self.recovery_path)
+            self.doc.dirty = True
+        except Exception:
+            pass
+
+    def check_recovery_file(self) -> None:
+        if self.recovery_path.exists() and messagebox.askyesno("Recovery", "A recovery file was found. Open it?"):
+            self.open_recovery()
+
+    def open_recovery(self) -> None:
+        if not self.recovery_path.exists():
+            messagebox.showinfo("Recovery", "No recovery file found.")
+            return
+        self.doc = Document.open_project(self.recovery_path)
+        self.history.clear()
+        self.selection_box = self.doc.selection_bounds()
+        self.refresh()
+        self.status_text(f"Opened recovery: {self.recovery_path}")
+
+    def clear_recovery(self) -> None:
+        if self.recovery_path.exists():
+            self.recovery_path.unlink()
+        self.status_text("Recovery cleared")
 
     def undo(self) -> None:
         label = self.history.undo(self.doc)
@@ -413,8 +501,10 @@ class PhotoRedactorApp(tk.Tk):
             marker = "*" if layer.visible else "-"
             mask_marker = "M" if layer.mask is not None and layer.mask_enabled else "m" if layer.mask is not None else " "
             lock_marker = "L" if layer.locked else " "
-            kind_marker = "T" if layer.kind == "text" else "A" if layer.kind == "adjustment" else " "
-            self.layer_list.insert(tk.END, f"{marker}{mask_marker}{lock_marker}{kind_marker} {layer.name}  {round(layer.opacity * 100)}%")
+            kind_marker = "T" if layer.kind == "text" else "A" if layer.kind == "adjustment" else "S" if layer.kind == "shape" else " "
+            clip_marker = "C" if layer.clipping else " "
+            fx_marker = "F" if layer.effects else " "
+            self.layer_list.insert(tk.END, f"{marker}{mask_marker}{lock_marker}{kind_marker}{clip_marker}{fx_marker} {layer.name}  {round(layer.opacity * 100)}%")
         self.layer_list.selection_clear(0, tk.END)
         self.layer_list.selection_set(len(self.doc.layers) - 1 - self.doc.active_layer)
         self.layer_opacity.set(self.doc.layer.opacity)
@@ -1011,6 +1101,63 @@ class PhotoRedactorApp(tk.Tk):
             return
         self.run_document_command("Free transform", lambda: self.doc.transform_active_layer(x, y, width, height, angle, flip_h, flip_v))
         self.refresh()
+
+    def toggle_clipping_mask(self) -> None:
+        if self.doc.active_layer <= 0:
+            messagebox.showinfo("Clipping mask", "The bottom layer cannot be clipped.")
+            return
+        self.run_document_command("Toggle clipping mask", self.doc.toggle_active_clipping)
+        self.refresh()
+
+    def edit_layer_styles(self) -> None:
+        layer = self.doc.layer
+        initial = self.effects_to_text(layer.effects)
+        raw = simpledialog.askstring(
+            "Layer styles",
+            "Use semicolon-separated styles:\nstroke,size,opacity\nshadow,x,y,blur,opacity\nglow,blur,opacity\nempty clears styles",
+            initialvalue=initial,
+        )
+        if raw is None:
+            return
+        try:
+            effects = self.parse_effects(raw)
+        except ValueError:
+            messagebox.showerror("Layer styles", "Invalid style string.")
+            return
+        self.run_document_command("Layer styles", lambda: self.doc.set_active_layer_effects(effects))
+        self.refresh()
+
+    def effects_to_text(self, effects: dict) -> str:
+        parts = []
+        stroke = effects.get("stroke")
+        if stroke:
+            parts.append(f"stroke,{stroke.get('size', 4)},{stroke.get('opacity', 1.0)}")
+        shadow = effects.get("drop_shadow")
+        if shadow:
+            parts.append(f"shadow,{shadow.get('x', 10)},{shadow.get('y', 10)},{shadow.get('blur', 12)},{shadow.get('opacity', 0.55)}")
+        glow = effects.get("outer_glow")
+        if glow:
+            parts.append(f"glow,{glow.get('blur', 18)},{glow.get('opacity', 0.5)}")
+        return ";".join(parts)
+
+    def parse_effects(self, raw: str) -> dict:
+        effects = {}
+        if not raw.strip():
+            return effects
+        for chunk in raw.split(";"):
+            parts = [part.strip() for part in chunk.split(",") if part.strip()]
+            if not parts:
+                continue
+            kind = parts[0].lower()
+            if kind == "stroke" and len(parts) == 3:
+                effects["stroke"] = {"enabled": True, "size": int(float(parts[1])), "opacity": float(parts[2]), "color": list(self.background)}
+            elif kind == "shadow" and len(parts) == 5:
+                effects["drop_shadow"] = {"enabled": True, "x": int(float(parts[1])), "y": int(float(parts[2])), "blur": int(float(parts[3])), "opacity": float(parts[4]), "color": [0, 0, 0, 255]}
+            elif kind == "glow" and len(parts) == 3:
+                effects["outer_glow"] = {"enabled": True, "blur": int(float(parts[1])), "opacity": float(parts[2]), "color": list(self.foreground)}
+            else:
+                raise ValueError
+        return effects
 
     def merge_down(self) -> None:
         self.run_document_command("Merge down", self.doc.merge_down)

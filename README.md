@@ -10,11 +10,14 @@ This repository starts with a real working editor and an architecture intended t
 - brush, eraser, fill, gradient, editable text layers, crop, rectangular/elliptical/freehand/polygon selection, magic wand, color range, move
 - layer opacity, visibility, duplication, merge, flatten
 - layer locks, raster layer masks, mask painting and blend modes
+- clipping masks and basic layer styles: stroke, drop shadow and outer glow
 - real selection mask with select all, invert, feather, grow, shrink, opaque-pixel selection, single row/column selection and saved alpha selections
 - numeric Free Transform for active layers
 - local retouch tools: blur, sharpen, dodge, burn, clone stamp and healing brush
 - editable shape layers for rectangles, ellipses and lines
 - grid and guide overlays
+- recovery autosave and manual recovery opening
+- simple action recording to JSON logs
 - non-destructive adjustment layers for brightness/contrast, saturation, levels, curves, invert and grayscale
 - undo/redo
 - command-based undo for strokes, moves and layer edits

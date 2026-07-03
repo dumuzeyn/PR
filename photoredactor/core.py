@@ -67,6 +67,8 @@ class Layer:
     mask_enabled: bool = True
     mask_density: float = 1.0
     blend_mode: str = "Normal"
+    clipping: bool = False
+    effects: dict[str, Any] = field(default_factory=dict)
     kind: str = "raster"
     text_data: dict[str, Any] | None = None
     shape_data: dict[str, Any] | None = None
@@ -86,6 +88,8 @@ class Layer:
             mask_enabled=self.mask_enabled,
             mask_density=self.mask_density,
             blend_mode=self.blend_mode,
+            clipping=self.clipping,
+            effects=json.loads(json.dumps(self.effects)),
             kind=self.kind,
             text_data=None if self.text_data is None else dict(self.text_data),
             shape_data=None if self.shape_data is None else dict(self.shape_data),
@@ -159,6 +163,8 @@ class Document:
                     "mask_enabled": layer.mask_enabled,
                     "mask_density": layer.mask_density,
                     "blend_mode": layer.blend_mode,
+                    "clipping": layer.clipping,
+                    "effects": json.loads(json.dumps(layer.effects)),
                     "kind": layer.kind,
                     "text_data": None if layer.text_data is None else dict(layer.text_data),
                     "shape_data": None if layer.shape_data is None else dict(layer.shape_data),
@@ -196,6 +202,8 @@ class Document:
                     mask_enabled=bool(raw.get("mask_enabled", True)),
                     mask_density=float(raw.get("mask_density", 1.0)),
                     blend_mode=raw.get("blend_mode", "Normal"),
+                    clipping=bool(raw.get("clipping", False)),
+                    effects=raw.get("effects", {}),
                     kind=raw.get("kind", "raster"),
                     text_data=raw.get("text_data"),
                     shape_data=raw.get("shape_data"),
@@ -228,6 +236,8 @@ class Document:
                     "mask_enabled": layer.mask_enabled,
                     "mask_density": layer.mask_density,
                     "blend_mode": layer.blend_mode,
+                    "clipping": layer.clipping,
+                    "effects": layer.effects,
                     "kind": layer.kind,
                     "text_data": layer.text_data,
                     "shape_data": layer.shape_data,
@@ -263,6 +273,8 @@ class Document:
                     mask_enabled=bool(raw.get("mask_enabled", True)),
                     mask_density=float(raw.get("mask_density", 1.0)),
                     blend_mode=raw.get("blend_mode", "Normal"),
+                    clipping=bool(raw.get("clipping", False)),
+                    effects=raw.get("effects", {}),
                     kind=raw.get("kind", "raster"),
                     text_data=raw.get("text_data"),
                     shape_data=raw.get("shape_data"),
@@ -315,6 +327,8 @@ class Document:
                         "mask_enabled": layer.mask_enabled,
                         "mask_density": layer.mask_density,
                         "blend_mode": layer.blend_mode,
+                        "clipping": layer.clipping,
+                        "effects": layer.effects,
                         "kind": layer.kind,
                         "text_data": layer.text_data,
                         "shape_data": layer.shape_data,
@@ -367,6 +381,8 @@ class Document:
                         mask_enabled=bool(raw.get("mask_enabled", True)),
                         mask_density=float(raw.get("mask_density", 1.0)),
                         blend_mode=raw.get("blend_mode", "Normal"),
+                        clipping=bool(raw.get("clipping", False)),
+                        effects=raw.get("effects", {}),
                         kind=raw.get("kind", "raster"),
                         text_data=raw.get("text_data"),
                         shape_data=raw.get("shape_data"),
@@ -385,13 +401,20 @@ class Document:
 
     def composite(self, checker: bool = False) -> np.ndarray:
         out = checker_background(self.width, self.height).copy() if checker else blank_rgba(self.width, self.height, (0, 0, 0, 0))
+        previous_alpha: np.ndarray | None = None
         for layer in self.layers:
             if layer.visible:
                 if layer.kind == "adjustment" and layer.adjustment is not None:
                     apply_adjustment_layer(out, layer)
                 else:
                     alpha_mask = layer.mask if layer.mask_enabled else None
+                    if layer.clipping and previous_alpha is not None:
+                        clipping_mask = document_alpha_to_layer_mask(previous_alpha, layer)
+                        alpha_mask = clipping_mask if alpha_mask is None else np.minimum(alpha_mask, clipping_mask)
+                    for pixels, x, y, opacity, blend_mode in render_layer_effects(layer):
+                        alpha_blend_inplace(out, pixels, x, y, opacity, None, 1.0, blend_mode)
                     alpha_blend_inplace(out, layer.pixels, layer.x, layer.y, layer.opacity, alpha_mask, layer.mask_density, layer.blend_mode)
+                    previous_alpha = layer_alpha_canvas(self, layer)
         return out
 
     def export_flat(self, path: str | Path, quality: int = 95) -> None:
@@ -504,6 +527,16 @@ class Document:
             return
         del self.layers[self.active_layer]
         self.active_layer = max(0, self.active_layer - 1)
+        self.dirty = True
+
+    def toggle_active_clipping(self) -> None:
+        if self.active_layer <= 0:
+            return
+        self.layer.clipping = not self.layer.clipping
+        self.dirty = True
+
+    def set_active_layer_effects(self, effects: dict[str, Any]) -> None:
+        self.layer.effects = json.loads(json.dumps(effects))
         self.dirty = True
 
     def duplicate_active_layer(self) -> None:
@@ -878,6 +911,80 @@ def paste_mask(dst: np.ndarray, src: np.ndarray, x: int, y: int) -> None:
         return
     sx1, sy1 = x1 - x, y1 - y
     dst[y1:y2, x1:x2] = src[sy1 : sy1 + (y2 - y1), sx1 : sx1 + (x2 - x1)]
+
+
+def layer_alpha_canvas(document: Document, layer: Layer) -> np.ndarray:
+    canvas = np.zeros((document.height, document.width), dtype=np.uint8)
+    alpha = layer.pixels[:, :, 3].copy()
+    if layer.mask is not None and layer.mask_enabled:
+        mask_alpha = ((1.0 - float(layer.mask_density)) + (layer.mask.astype(np.float32) / 255.0) * float(layer.mask_density)).clip(0, 1)
+        alpha = np.clip(alpha.astype(np.float32) * mask_alpha, 0, 255).astype(np.uint8)
+    paste_mask(canvas, alpha, layer.x, layer.y)
+    return canvas
+
+
+def document_alpha_to_layer_mask(alpha_canvas: np.ndarray, layer: Layer) -> np.ndarray:
+    mask = np.zeros(layer.pixels.shape[:2], dtype=np.uint8)
+    x1, y1 = max(0, layer.x), max(0, layer.y)
+    x2 = min(alpha_canvas.shape[1], layer.x + layer.pixels.shape[1])
+    y2 = min(alpha_canvas.shape[0], layer.y + layer.pixels.shape[0])
+    if x1 >= x2 or y1 >= y2:
+        return mask
+    lx1, ly1 = x1 - layer.x, y1 - layer.y
+    mask[ly1 : ly1 + (y2 - y1), lx1 : lx1 + (x2 - x1)] = alpha_canvas[y1:y2, x1:x2]
+    return mask
+
+
+def render_layer_effects(layer: Layer) -> list[tuple[np.ndarray, int, int, float, str]]:
+    effects: list[tuple[np.ndarray, int, int, float, str]] = []
+    if not layer.effects:
+        return effects
+    alpha = layer.pixels[:, :, 3]
+    if not np.any(alpha):
+        return effects
+    shadow = layer.effects.get("drop_shadow")
+    if shadow and shadow.get("enabled", True):
+        blur_radius = max(0, int(shadow.get("blur", 12)))
+        offset_x = int(shadow.get("x", 10))
+        offset_y = int(shadow.get("y", 10))
+        opacity = float(shadow.get("opacity", 0.55))
+        color = tuple(int(v) for v in shadow.get("color", [0, 0, 0, 255]))
+        mask = effect_mask(alpha, blur_radius)
+        effects.append((solid_from_alpha(mask, color), layer.x + offset_x, layer.y + offset_y, opacity, "Normal"))
+    glow = layer.effects.get("outer_glow")
+    if glow and glow.get("enabled", True):
+        blur_radius = max(1, int(glow.get("blur", 18)))
+        opacity = float(glow.get("opacity", 0.5))
+        color = tuple(int(v) for v in glow.get("color", [255, 220, 80, 255]))
+        mask = effect_mask(alpha, blur_radius)
+        effects.append((solid_from_alpha(mask, color), layer.x, layer.y, opacity, "Screen"))
+    stroke = layer.effects.get("stroke")
+    if stroke and stroke.get("enabled", True):
+        size = max(1, int(stroke.get("size", 4)))
+        opacity = float(stroke.get("opacity", 1.0))
+        color = tuple(int(v) for v in stroke.get("color", [255, 255, 255, 255]))
+        kernel = np.ones((size * 2 + 1, size * 2 + 1), dtype=np.uint8)
+        expanded = cv2.dilate((alpha > 0).astype(np.uint8) * 255, kernel)
+        outline = np.where((expanded > 0) & (alpha == 0), 255, 0).astype(np.uint8)
+        effects.append((solid_from_alpha(outline, color), layer.x, layer.y, opacity, "Normal"))
+    return effects
+
+
+def effect_mask(alpha: np.ndarray, blur_radius: int) -> np.ndarray:
+    mask = alpha.copy()
+    if blur_radius > 0:
+        kernel = np.ones((max(1, blur_radius // 2) * 2 + 1, max(1, blur_radius // 2) * 2 + 1), dtype=np.uint8)
+        mask = cv2.dilate(mask, kernel)
+        k = blur_radius * 2 + 1
+        mask = cv2.GaussianBlur(mask, (k, k), blur_radius)
+    return mask
+
+
+def solid_from_alpha(alpha: np.ndarray, color: tuple[int, int, int, int]) -> np.ndarray:
+    arr = np.zeros((alpha.shape[0], alpha.shape[1], 4), dtype=np.uint8)
+    arr[:, :, :3] = color[:3]
+    arr[:, :, 3] = np.clip(alpha.astype(np.float32) * (color[3] / 255.0), 0, 255).astype(np.uint8)
+    return arr
 
 
 def rotate_bound(arr: np.ndarray, angle: float, interpolation: int) -> np.ndarray:
