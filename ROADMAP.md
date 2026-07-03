@@ -6,26 +6,28 @@
 - Document geometry: resize image, resize canvas, rotate, flip, crop.
 - Navigation: zoom, fit to screen, pan with scrollbars.
 - Raster layers: create, duplicate, delete, reorder, visibility, opacity, merge, flatten.
-- Raster selections: rectangular selection, select all, invert, feather, grow, shrink.
-- Raster layer masks: reveal all, hide all, from selection, invert, toggle, apply, delete.
+- Raster selections: rectangular, elliptical, magic wand, color range, single row/column, opaque pixels, select all, invert, feather, grow, shrink, saved alpha selections.
+- Raster layer masks: reveal all, hide all, from selection, paint on mask, invert, toggle, apply, delete.
 - Blend modes: Normal, Multiply, Screen, Overlay, Soft Light, Darken, Lighten, Difference, Color, Luminosity.
-- Tools: move, brush, eraser, fill, gradient, text, rectangular selection, crop.
-- Adjustments: brightness, contrast, saturation, levels, curves, grayscale, invert.
+- Tools: move, brush, eraser, fill, gradient, editable text, rectangular/elliptical selection, magic wand, color range, crop.
+- Local retouching: blur, sharpen, dodge and burn brushes.
+- Adjustments: destructive brightness, contrast, saturation, levels, curves, grayscale, invert plus non-destructive adjustment layers for the same core set.
 - Filters: Gaussian blur, sharpen, noise.
 - History: undo and redo snapshots.
 - Automation: simple batch resize/convert.
+- Transform: numeric Free Transform for scale, rotate, position and flips.
 - Performance baseline: numpy arrays, OpenCV filters, cached composite preview.
 - Export: PNG, JPEG, WebP, BMP, TIFF, plus `.prdx` project files.
 
 ## Next milestones toward the full list
 
-1. Selection engine: lasso, polygonal lasso, magic wand, color range, saved alpha selections.
-2. Editable masks: direct mask painting, density/feather controls and mask thumbnails.
-3. Non-destructive adjustments: adjustment layers and editable filter stack.
-4. Free Transform: scaling, rotation, numeric coordinates and transform handles.
-5. Text engine: editable text layers instead of rasterized text.
+1. Selection engine: lasso, polygonal lasso, quick selection and better edge refinement.
+2. Editable masks: density/feather controls, mask thumbnails and linked/unlinked mask movement.
+3. Non-destructive editing: editable filter stack, adjustment-layer UI previews and clipping masks.
+4. Free Transform: transform handles, warp, perspective and selected-pixel transforms.
+5. Text engine: paragraph boxes, font picker, alignment, wrapping and text-on-path.
 6. Shapes and paths: vector layer model with Bezier editing.
-7. Retouching: clone stamp, healing brush, patch, red-eye.
+7. Retouching: clone stamp, healing brush, patch, red-eye and content-aware fill.
 8. Smart objects: embedded image payloads, re-editable transforms, linked file updates.
 9. RAW/color management: ICC profiles, 16/32-bit channels, Lab/CMYK workflows.
 10. GPU/tiled rendering: tile cache, dirty-region recomposition, scratch disk, background save.

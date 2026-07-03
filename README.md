@@ -7,10 +7,13 @@ This repository starts with a real working editor and an architecture intended t
 - multi-layer raster documents
 - custom project format (`.prdx`)
 - PNG/JPEG/WebP/BMP/TIFF import and export
-- brush, eraser, fill, gradient, text, crop, rectangular selection, move
+- brush, eraser, fill, gradient, editable text layers, crop, rectangular/elliptical selection, magic wand, color range, move
 - layer opacity, visibility, duplication, merge, flatten
-- layer locks, raster layer masks and blend modes
-- real selection mask with select all, invert, feather, grow and shrink
+- layer locks, raster layer masks, mask painting and blend modes
+- real selection mask with select all, invert, feather, grow, shrink, opaque-pixel selection, single row/column selection and saved alpha selections
+- numeric Free Transform for active layers
+- local retouch tools: blur, sharpen, dodge and burn
+- non-destructive adjustment layers for brightness/contrast, saturation, levels, curves, invert and grayscale
 - undo/redo
 - command-based undo for strokes, moves and layer edits
 - `.prdx` projects with `manifest.json` and separate layer PNG files, without Base64-packed layers

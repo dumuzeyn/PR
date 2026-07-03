@@ -67,6 +67,9 @@ class Layer:
     mask_enabled: bool = True
     mask_density: float = 1.0
     blend_mode: str = "Normal"
+    kind: str = "raster"
+    text_data: dict[str, Any] | None = None
+    adjustment: dict[str, Any] | None = None
     id: str = field(default_factory=lambda: uuid.uuid4().hex)
 
     def clone(self) -> "Layer":
@@ -82,6 +85,9 @@ class Layer:
             mask_enabled=self.mask_enabled,
             mask_density=self.mask_density,
             blend_mode=self.blend_mode,
+            kind=self.kind,
+            text_data=None if self.text_data is None else dict(self.text_data),
+            adjustment=None if self.adjustment is None else dict(self.adjustment),
         )
 
 
@@ -98,6 +104,7 @@ class Document:
     path: str | None = None
     dirty: bool = False
     selection_mask: np.ndarray | None = None
+    saved_selections: dict[str, np.ndarray] = field(default_factory=dict)
 
     @classmethod
     def new(cls, width: int = 1280, height: int = 900, background=(255, 255, 255, 255)) -> "Document":
@@ -136,6 +143,7 @@ class Document:
             "active_layer": self.active_layer,
             "path": self.path,
             "selection_mask": None if self.selection_mask is None else self.selection_mask.copy(),
+            "saved_selections": {name: mask.copy() for name, mask in self.saved_selections.items()},
             "layers": [
                 {
                     "id": layer.id,
@@ -149,6 +157,9 @@ class Document:
                     "mask_enabled": layer.mask_enabled,
                     "mask_density": layer.mask_density,
                     "blend_mode": layer.blend_mode,
+                    "kind": layer.kind,
+                    "text_data": None if layer.text_data is None else dict(layer.text_data),
+                    "adjustment": None if layer.adjustment is None else dict(layer.adjustment),
                     "pixels": layer.pixels.copy(),
                 }
                 for layer in self.layers
@@ -166,6 +177,7 @@ class Document:
         self.path = data.get("path")
         selection = data.get("selection_mask")
         self.selection_mask = None if selection is None else selection.copy()
+        self.saved_selections = {name: mask.copy() for name, mask in data.get("saved_selections", {}).items()}
         self.layers = []
         for raw in data["layers"]:
             self.layers.append(
@@ -181,6 +193,9 @@ class Document:
                     mask_enabled=bool(raw.get("mask_enabled", True)),
                     mask_density=float(raw.get("mask_density", 1.0)),
                     blend_mode=raw.get("blend_mode", "Normal"),
+                    kind=raw.get("kind", "raster"),
+                    text_data=raw.get("text_data"),
+                    adjustment=raw.get("adjustment"),
                     id=raw.get("id", uuid.uuid4().hex),
                 )
             )
@@ -196,6 +211,7 @@ class Document:
             "background": list(self.background),
             "active_layer": self.active_layer,
             "selection": None if self.selection_mask is None else encode_png(np.dstack([self.selection_mask] * 4)),
+            "saved_selections": {name: encode_png(np.dstack([mask] * 4)) for name, mask in self.saved_selections.items()},
             "layers": [
                 {
                     "name": layer.name,
@@ -208,6 +224,9 @@ class Document:
                     "mask_enabled": layer.mask_enabled,
                     "mask_density": layer.mask_density,
                     "blend_mode": layer.blend_mode,
+                    "kind": layer.kind,
+                    "text_data": layer.text_data,
+                    "adjustment": layer.adjustment,
                     "pixels": encode_png(layer.pixels),
                 }
                 for layer in self.layers
@@ -239,12 +258,16 @@ class Document:
                     mask_enabled=bool(raw.get("mask_enabled", True)),
                     mask_density=float(raw.get("mask_density", 1.0)),
                     blend_mode=raw.get("blend_mode", "Normal"),
+                    kind=raw.get("kind", "raster"),
+                    text_data=raw.get("text_data"),
+                    adjustment=raw.get("adjustment"),
                     id=raw.get("id", uuid.uuid4().hex),
                 )
             )
         doc.active_layer = min(int(data.get("active_layer", 0)), max(0, len(doc.layers) - 1))
         if data.get("selection"):
             doc.selection_mask = decode_png(data["selection"])[:, :, 0]
+        doc.saved_selections = {name: decode_png(mask)[:, :, 0] for name, mask in data.get("saved_selections", {}).items()}
         return doc
 
     def save_project(self, path: str | Path) -> None:
@@ -257,6 +280,7 @@ class Document:
             "background": list(self.background),
             "active_layer": self.active_layer,
             "selection": "selection.png" if self.selection_mask is not None else None,
+            "saved_selections": {},
             "layers": [],
         }
         with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
@@ -264,6 +288,12 @@ class Document:
                 buf = io.BytesIO()
                 rgba_array_to_pil(np.dstack([self.selection_mask] * 4)).save(buf, "PNG")
                 zf.writestr("selection.png", buf.getvalue())
+            for i, (name, mask) in enumerate(self.saved_selections.items()):
+                selection_path = f"selections/{i:04d}.png"
+                mask_buf = io.BytesIO()
+                rgba_array_to_pil(np.dstack([mask] * 4)).save(mask_buf, "PNG")
+                zf.writestr(selection_path, mask_buf.getvalue())
+                manifest["saved_selections"][name] = selection_path
             for i, layer in enumerate(self.layers):
                 layer_path = f"layers/{i:04d}.png"
                 manifest["layers"].append(
@@ -279,6 +309,9 @@ class Document:
                         "mask_enabled": layer.mask_enabled,
                         "mask_density": layer.mask_density,
                         "blend_mode": layer.blend_mode,
+                        "kind": layer.kind,
+                        "text_data": layer.text_data,
+                        "adjustment": layer.adjustment,
                         "pixels": layer_path,
                     }
                 )
@@ -327,12 +360,18 @@ class Document:
                         mask_enabled=bool(raw.get("mask_enabled", True)),
                         mask_density=float(raw.get("mask_density", 1.0)),
                         blend_mode=raw.get("blend_mode", "Normal"),
+                        kind=raw.get("kind", "raster"),
+                        text_data=raw.get("text_data"),
+                        adjustment=raw.get("adjustment"),
                         id=raw.get("id", uuid.uuid4().hex),
                     )
                 )
             doc.active_layer = min(int(manifest.get("active_layer", 0)), max(0, len(doc.layers) - 1))
             if manifest.get("selection"):
                 doc.selection_mask = pil_to_rgba_array(Image.open(io.BytesIO(zf.read(manifest["selection"]))))[:, :, 0]
+            doc.saved_selections = {}
+            for name, selection_path in manifest.get("saved_selections", {}).items():
+                doc.saved_selections[name] = pil_to_rgba_array(Image.open(io.BytesIO(zf.read(selection_path))))[:, :, 0]
         doc.path = str(path)
         return doc
 
@@ -340,8 +379,11 @@ class Document:
         out = checker_background(self.width, self.height).copy() if checker else blank_rgba(self.width, self.height, (0, 0, 0, 0))
         for layer in self.layers:
             if layer.visible:
-                alpha_mask = layer.mask if layer.mask_enabled else None
-                alpha_blend_inplace(out, layer.pixels, layer.x, layer.y, layer.opacity, alpha_mask, layer.mask_density, layer.blend_mode)
+                if layer.kind == "adjustment" and layer.adjustment is not None:
+                    apply_adjustment_layer(out, layer)
+                else:
+                    alpha_mask = layer.mask if layer.mask_enabled else None
+                    alpha_blend_inplace(out, layer.pixels, layer.x, layer.y, layer.opacity, alpha_mask, layer.mask_density, layer.blend_mode)
         return out
 
     def export_flat(self, path: str | Path) -> None:
@@ -357,6 +399,50 @@ class Document:
         if pixels is None:
             pixels = blank_rgba(self.width, self.height, (0, 0, 0, 0))
         self.layers.append(Layer(name, pixels))
+        self.active_layer = len(self.layers) - 1
+        self.dirty = True
+
+    def add_text_layer(self, text: str, x: int, y: int, color: tuple[int, int, int, int], size: int, font_family: str = "arial.ttf") -> None:
+        layer = Layer(
+            name=f"Text: {text[:24]}",
+            pixels=blank_rgba(self.width, self.height, (0, 0, 0, 0)),
+            kind="text",
+            text_data={
+                "text": text,
+                "x": int(x),
+                "y": int(y),
+                "color": list(color),
+                "size": int(size),
+                "font_family": font_family,
+            },
+        )
+        render_text_layer(layer)
+        self.layers.append(layer)
+        self.active_layer = len(self.layers) - 1
+        self.dirty = True
+
+    def edit_text_layer(self, text: str | None = None, size: int | None = None, color: tuple[int, int, int, int] | None = None) -> None:
+        layer = self.layer
+        if layer.locked or layer.kind != "text" or layer.text_data is None:
+            return
+        if text is not None:
+            layer.text_data["text"] = text
+            layer.name = f"Text: {text[:24]}"
+        if size is not None:
+            layer.text_data["size"] = int(size)
+        if color is not None:
+            layer.text_data["color"] = list(color)
+        render_text_layer(layer)
+        self.dirty = True
+
+    def add_adjustment_layer(self, name: str, adjustment: dict[str, Any]) -> None:
+        layer = Layer(
+            name=name,
+            pixels=blank_rgba(self.width, self.height, (0, 0, 0, 0)),
+            kind="adjustment",
+            adjustment=dict(adjustment),
+        )
+        self.layers.append(layer)
         self.active_layer = len(self.layers) - 1
         self.dirty = True
 
@@ -410,6 +496,8 @@ class Document:
         self.width, self.height = width, height
         if self.selection_mask is not None:
             self.selection_mask = cv2.resize(self.selection_mask, (width, height), interpolation=cv2.INTER_NEAREST)
+        for name, mask in list(self.saved_selections.items()):
+            self.saved_selections[name] = cv2.resize(mask, (width, height), interpolation=cv2.INTER_NEAREST)
         self.dirty = True
 
     def resize_canvas(self, width: int, height: int, anchor="center") -> None:
@@ -427,6 +515,14 @@ class Document:
                 sx1, sy1 = x1 - dx, y1 - dy
                 new_mask[y1:y2, x1:x2] = self.selection_mask[sy1 : sy1 + (y2 - y1), sx1 : sx1 + (x2 - x1)]
             self.selection_mask = new_mask
+        for name, mask in list(self.saved_selections.items()):
+            new_mask = np.zeros((height, width), dtype=np.uint8)
+            x1, y1 = max(0, dx), max(0, dy)
+            x2, y2 = min(width, dx + mask.shape[1]), min(height, dy + mask.shape[0])
+            if x1 < x2 and y1 < y2:
+                sx1, sy1 = x1 - dx, y1 - dy
+                new_mask[y1:y2, x1:x2] = mask[sy1 : sy1 + (y2 - y1), sx1 : sx1 + (x2 - x1)]
+            self.saved_selections[name] = new_mask
         self.dirty = True
 
     def crop(self, box: tuple[int, int, int, int]) -> None:
@@ -449,6 +545,8 @@ class Document:
         self.width, self.height = new_w, new_h
         if self.selection_mask is not None:
             self.selection_mask = self.selection_mask[y1:y2, x1:x2].copy()
+        for name, mask in list(self.saved_selections.items()):
+            self.saved_selections[name] = mask[y1:y2, x1:x2].copy()
         self.dirty = True
 
     def set_rect_selection(self, box: tuple[int, int, int, int], mode: str = "replace") -> None:
@@ -459,6 +557,74 @@ class Document:
         if x1 < x2 and y1 < y2:
             mask[y1:y2, x1:x2] = 255
         self.apply_selection_mask(mask, mode)
+
+    def set_ellipse_selection(self, box: tuple[int, int, int, int], mode: str = "replace") -> None:
+        x1, y1, x2, y2 = normalized_box(box)
+        x1, x2 = max(0, min(self.width, x1)), max(0, min(self.width, x2))
+        y1, y2 = max(0, min(self.height, y1)), max(0, min(self.height, y2))
+        mask = np.zeros((self.height, self.width), dtype=np.uint8)
+        if x1 < x2 and y1 < y2:
+            center = ((x1 + x2) // 2, (y1 + y2) // 2)
+            axes = (max(1, (x2 - x1) // 2), max(1, (y2 - y1) // 2))
+            cv2.ellipse(mask, center, axes, 0, 0, 360, 255, -1)
+        self.apply_selection_mask(mask, mode)
+
+    def set_single_row_selection(self, y: int, mode: str = "replace") -> None:
+        mask = np.zeros((self.height, self.width), dtype=np.uint8)
+        if 0 <= y < self.height:
+            mask[y : y + 1, :] = 255
+        self.apply_selection_mask(mask, mode)
+
+    def set_single_column_selection(self, x: int, mode: str = "replace") -> None:
+        mask = np.zeros((self.height, self.width), dtype=np.uint8)
+        if 0 <= x < self.width:
+            mask[:, x : x + 1] = 255
+        self.apply_selection_mask(mask, mode)
+
+    def magic_wand_selection(self, layer: Layer, x: int, y: int, tolerance: int, mode: str = "replace") -> None:
+        lx, ly = int(x) - layer.x, int(y) - layer.y
+        if lx < 0 or ly < 0 or lx >= layer.pixels.shape[1] or ly >= layer.pixels.shape[0]:
+            return
+        seed = layer.pixels[ly, lx].astype(np.int16)
+        diff = np.abs(layer.pixels.astype(np.int16) - seed).max(axis=2)
+        candidates = (diff <= int(tolerance)).astype(np.uint8)
+        _, labels, _, _ = cv2.connectedComponentsWithStats(candidates, 4)
+        local = (labels == labels[ly, lx]).astype(np.uint8) * 255
+        self.apply_selection_mask(self._layer_mask_to_document(layer, local), mode)
+
+    def color_range_selection(self, layer: Layer, x: int, y: int, tolerance: int, mode: str = "replace") -> None:
+        lx, ly = int(x) - layer.x, int(y) - layer.y
+        if lx < 0 or ly < 0 or lx >= layer.pixels.shape[1] or ly >= layer.pixels.shape[0]:
+            return
+        seed = layer.pixels[ly, lx].astype(np.int16)
+        diff = np.abs(layer.pixels.astype(np.int16) - seed).max(axis=2)
+        local = (diff <= int(tolerance)).astype(np.uint8) * 255
+        self.apply_selection_mask(self._layer_mask_to_document(layer, local), mode)
+
+    def select_opaque_pixels(self, layer: Layer, mode: str = "replace") -> None:
+        local = (layer.pixels[:, :, 3] > 0).astype(np.uint8) * 255
+        self.apply_selection_mask(self._layer_mask_to_document(layer, local), mode)
+
+    def save_selection(self, name: str) -> None:
+        if self.selection_mask is None:
+            return
+        self.saved_selections[name] = self.selection_mask.copy()
+        self.dirty = True
+
+    def load_selection(self, name: str, mode: str = "replace") -> None:
+        mask = self.saved_selections.get(name)
+        if mask is not None:
+            self.apply_selection_mask(mask.copy(), mode)
+
+    def delete_saved_selection(self, name: str) -> None:
+        if name in self.saved_selections:
+            del self.saved_selections[name]
+            self.dirty = True
+
+    def _layer_mask_to_document(self, layer: Layer, local_mask: np.ndarray) -> np.ndarray:
+        mask = np.zeros((self.height, self.width), dtype=np.uint8)
+        paste_mask(mask, local_mask, layer.x, layer.y)
+        return mask
 
     def apply_selection_mask(self, mask: np.ndarray, mode: str = "replace") -> None:
         mask = np.clip(mask, 0, 255).astype(np.uint8)
@@ -568,6 +734,47 @@ class Document:
         layer.pixels[:, :, 3] = np.clip(layer.pixels[:, :, 3].astype(np.float32) * alpha, 0, 255).astype(np.uint8)
         layer.mask = None
 
+    def transform_active_layer(
+        self,
+        x: int | None = None,
+        y: int | None = None,
+        width: int | None = None,
+        height: int | None = None,
+        angle: float = 0.0,
+        flip_horizontal: bool = False,
+        flip_vertical: bool = False,
+    ) -> None:
+        layer = self.layer
+        if layer.locked:
+            return
+        if x is not None:
+            layer.x = int(x)
+        if y is not None:
+            layer.y = int(y)
+        target_w = max(1, int(width or layer.pixels.shape[1]))
+        target_h = max(1, int(height or layer.pixels.shape[0]))
+        if (target_w, target_h) != (layer.pixels.shape[1], layer.pixels.shape[0]):
+            layer.pixels = cv2.resize(layer.pixels, (target_w, target_h), interpolation=cv2.INTER_CUBIC)
+            if layer.mask is not None:
+                layer.mask = cv2.resize(layer.mask, (target_w, target_h), interpolation=cv2.INTER_NEAREST)
+        if flip_horizontal:
+            layer.pixels = cv2.flip(layer.pixels, 1)
+            if layer.mask is not None:
+                layer.mask = cv2.flip(layer.mask, 1)
+        if flip_vertical:
+            layer.pixels = cv2.flip(layer.pixels, 0)
+            if layer.mask is not None:
+                layer.mask = cv2.flip(layer.mask, 0)
+        if abs(float(angle)) > 0.001:
+            center_x = layer.x + layer.pixels.shape[1] / 2.0
+            center_y = layer.y + layer.pixels.shape[0] / 2.0
+            layer.pixels = rotate_bound(layer.pixels, float(angle), cv2.INTER_CUBIC)
+            if layer.mask is not None:
+                layer.mask = rotate_bound(layer.mask, float(angle), cv2.INTER_LINEAR)
+            layer.x = round(center_x - layer.pixels.shape[1] / 2.0)
+            layer.y = round(center_y - layer.pixels.shape[0] / 2.0)
+        self.dirty = True
+
 
 def normalized_box(box: tuple[int, int, int, int]) -> tuple[int, int, int, int]:
     x1, y1, x2, y2 = box
@@ -610,6 +817,20 @@ def paste_mask(dst: np.ndarray, src: np.ndarray, x: int, y: int) -> None:
         return
     sx1, sy1 = x1 - x, y1 - y
     dst[y1:y2, x1:x2] = src[sy1 : sy1 + (y2 - y1), sx1 : sx1 + (x2 - x1)]
+
+
+def rotate_bound(arr: np.ndarray, angle: float, interpolation: int) -> np.ndarray:
+    h, w = arr.shape[:2]
+    center = (w / 2.0, h / 2.0)
+    matrix = cv2.getRotationMatrix2D(center, -angle, 1.0)
+    cos = abs(matrix[0, 0])
+    sin = abs(matrix[0, 1])
+    new_w = max(1, int(h * sin + w * cos))
+    new_h = max(1, int(h * cos + w * sin))
+    matrix[0, 2] += new_w / 2.0 - center[0]
+    matrix[1, 2] += new_h / 2.0 - center[1]
+    border = 0 if arr.ndim == 2 else (0, 0, 0, 0)
+    return cv2.warpAffine(arr, matrix, (new_w, new_h), flags=interpolation, borderMode=cv2.BORDER_CONSTANT, borderValue=border)
 
 
 def alpha_blend(dst: np.ndarray, src: np.ndarray, x: int, y: int, opacity: float) -> np.ndarray:
@@ -722,6 +943,72 @@ def draw_brush(layer: Layer, x: int, y: int, radius: int, color: tuple[int, int,
     return x1, y1, x2, y2
 
 
+def draw_mask_brush(layer: Layer, x: int, y: int, radius: int, value: int, opacity: float = 1.0, selection_mask: np.ndarray | None = None) -> tuple[int, int, int, int] | None:
+    if layer.locked:
+        return None
+    if layer.mask is None:
+        layer.mask = np.full(layer.pixels.shape[:2], 255, dtype=np.uint8)
+        layer.mask_enabled = True
+    lx, ly = x - layer.x, y - layer.y
+    if lx < -radius or ly < -radius or lx >= layer.mask.shape[1] + radius or ly >= layer.mask.shape[0] + radius:
+        return None
+    x1 = max(0, lx - radius)
+    y1 = max(0, ly - radius)
+    x2 = min(layer.mask.shape[1], lx + radius + 1)
+    y2 = min(layer.mask.shape[0], ly + radius + 1)
+    full_mask = brush_mask(radius)
+    mx1 = x1 - (lx - radius)
+    my1 = y1 - (ly - radius)
+    mask = full_mask[my1 : my1 + (y2 - y1), mx1 : mx1 + (x2 - x1)]
+    if selection_mask is not None:
+        mask = mask & (selection_mask[y1:y2, x1:x2] > 0)
+        if not np.any(mask):
+            return None
+    target = layer.mask[y1:y2, x1:x2].astype(np.float32)
+    target[mask] = target[mask] * (1.0 - opacity) + int(value) * opacity
+    layer.mask[y1:y2, x1:x2] = np.clip(target, 0, 255).astype(np.uint8)
+    return x1, y1, x2, y2
+
+
+def local_retouch(layer: Layer, x: int, y: int, radius: int, mode: str, opacity: float = 1.0, selection_mask: np.ndarray | None = None) -> tuple[int, int, int, int] | None:
+    if layer.locked:
+        return None
+    lx, ly = x - layer.x, y - layer.y
+    if lx < -radius or ly < -radius or lx >= layer.pixels.shape[1] + radius or ly >= layer.pixels.shape[0] + radius:
+        return None
+    x1 = max(0, lx - radius)
+    y1 = max(0, ly - radius)
+    x2 = min(layer.pixels.shape[1], lx + radius + 1)
+    y2 = min(layer.pixels.shape[0], ly + radius + 1)
+    full_mask = brush_mask(radius)
+    mx1 = x1 - (lx - radius)
+    my1 = y1 - (ly - radius)
+    mask = full_mask[my1 : my1 + (y2 - y1), mx1 : mx1 + (x2 - x1)]
+    if selection_mask is not None:
+        mask = mask & (selection_mask[y1:y2, x1:x2] > 0)
+        if not np.any(mask):
+            return None
+    patch = layer.pixels[y1:y2, x1:x2].copy()
+    edited = patch.copy().astype(np.float32)
+    if mode == "blur":
+        k = max(3, radius // 2 * 2 + 1)
+        edited[:, :, :3] = cv2.GaussianBlur(patch[:, :, :3], (k, k), max(1, radius / 3))
+    elif mode == "sharpen":
+        blurred = cv2.GaussianBlur(patch[:, :, :3], (0, 0), 1.2)
+        edited[:, :, :3] = np.clip(patch[:, :, :3].astype(np.float32) * 1.8 - blurred.astype(np.float32) * 0.8, 0, 255)
+    elif mode == "dodge":
+        edited[:, :, :3] = np.clip(patch[:, :, :3].astype(np.float32) + 45, 0, 255)
+    elif mode == "burn":
+        edited[:, :, :3] = np.clip(patch[:, :, :3].astype(np.float32) - 45, 0, 255)
+    else:
+        return None
+    target = layer.pixels[y1:y2, x1:x2].astype(np.float32)
+    mix = np.clip(float(opacity), 0, 1)
+    target[mask] = target[mask] * (1.0 - mix) + edited[mask] * mix
+    layer.pixels[y1:y2, x1:x2] = np.clip(target, 0, 255).astype(np.uint8)
+    return x1, y1, x2, y2
+
+
 def flood_fill(layer: Layer, x: int, y: int, color: tuple[int, int, int, int], tolerance: int, selection_mask: np.ndarray | None = None) -> None:
     if layer.locked:
         return
@@ -783,6 +1070,22 @@ def add_text(layer: Layer, x: int, y: int, text: str, color: tuple[int, int, int
         layer.pixels[mask] = rendered[mask]
 
 
+def render_text_layer(layer: Layer) -> None:
+    if layer.text_data is None:
+        return
+    layer.pixels[:] = 0
+    pil = rgba_array_to_pil(layer.pixels)
+    draw = ImageDraw.Draw(pil)
+    data = layer.text_data
+    try:
+        font = ImageFont.truetype(str(data.get("font_family", "arial.ttf")), int(data.get("size", 48)))
+    except OSError:
+        font = ImageFont.load_default()
+    color = tuple(int(v) for v in data.get("color", [255, 255, 255, 255]))
+    draw.multiline_text((int(data.get("x", 0)), int(data.get("y", 0))), str(data.get("text", "")), fill=color, font=font, spacing=max(2, int(data.get("size", 48)) // 5))
+    layer.pixels = pil_to_rgba_array(pil)
+
+
 def adjust_brightness_contrast(arr: np.ndarray, brightness: int, contrast: float) -> np.ndarray:
     out = arr.copy().astype(np.float32)
     out[:, :, :3] = np.clip((out[:, :, :3] - 127.5) * contrast + 127.5 + brightness, 0, 255)
@@ -834,3 +1137,34 @@ def add_noise(arr: np.ndarray, amount: float) -> np.ndarray:
     noise = np.random.normal(0, amount * 255, out[:, :, :3].shape)
     out[:, :, :3] = np.clip(out[:, :, :3] + noise, 0, 255)
     return out.astype(np.uint8)
+
+
+def apply_adjustment_layer(out: np.ndarray, layer: Layer) -> None:
+    if layer.adjustment is None:
+        return
+    kind = str(layer.adjustment.get("type", "")).lower()
+    if kind == "brightness_contrast":
+        adjusted = adjust_brightness_contrast(out, int(layer.adjustment.get("brightness", 0)), float(layer.adjustment.get("contrast", 1.0)))
+    elif kind == "saturation":
+        adjusted = adjust_saturation(out, float(layer.adjustment.get("saturation", 1.0)))
+    elif kind == "levels":
+        adjusted = levels(out, int(layer.adjustment.get("black", 0)), int(layer.adjustment.get("white", 255)), float(layer.adjustment.get("gamma", 1.0)))
+    elif kind == "curves":
+        adjusted = curves(out, int(layer.adjustment.get("shadows", 64)), int(layer.adjustment.get("midtones", 128)), int(layer.adjustment.get("highlights", 192)))
+    elif kind == "invert":
+        adjusted = out.copy()
+        adjusted[:, :, :3] = 255 - adjusted[:, :, :3]
+    elif kind == "grayscale":
+        adjusted = out.copy()
+        gray = cv2.cvtColor(adjusted[:, :, :3], cv2.COLOR_RGB2GRAY)
+        adjusted[:, :, :3] = cv2.cvtColor(gray, cv2.COLOR_GRAY2RGB)
+    else:
+        return
+    alpha = np.full(out.shape[:2], float(layer.opacity), dtype=np.float32)
+    if layer.mask is not None and layer.mask_enabled:
+        mask_canvas = np.zeros(out.shape[:2], dtype=np.uint8)
+        paste_mask(mask_canvas, layer.mask, layer.x, layer.y)
+        mask_alpha = ((1.0 - float(layer.mask_density)) + (mask_canvas.astype(np.float32) / 255.0) * float(layer.mask_density))
+        alpha *= mask_alpha
+    alpha = alpha[:, :, None].clip(0, 1)
+    out[:, :, :3] = np.clip(adjusted[:, :, :3].astype(np.float32) * alpha + out[:, :, :3].astype(np.float32) * (1.0 - alpha), 0, 255).astype(np.uint8)

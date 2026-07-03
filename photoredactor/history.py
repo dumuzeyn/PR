@@ -52,6 +52,37 @@ class PixelPatchCommand:
 
 
 @dataclass
+class MaskPatchCommand:
+    label: str
+    layer_id: str
+    rect: tuple[int, int, int, int]
+    before: np.ndarray
+    after: np.ndarray
+
+    @property
+    def memory_bytes(self) -> int:
+        return int(self.before.nbytes + self.after.nbytes)
+
+    def undo(self, document: Document) -> None:
+        layer = document.get_layer(self.layer_id)
+        if layer is None or layer.mask is None:
+            return
+        x1, y1, x2, y2 = self.rect
+        layer.mask[y1:y2, x1:x2] = self.before
+        document.dirty = True
+
+    def redo(self, document: Document) -> None:
+        layer = document.get_layer(self.layer_id)
+        if layer is None:
+            return
+        if layer.mask is None:
+            layer.mask = np.full(layer.pixels.shape[:2], 255, dtype=np.uint8)
+        x1, y1, x2, y2 = self.rect
+        layer.mask[y1:y2, x1:x2] = self.after
+        document.dirty = True
+
+
+@dataclass
 class LayerMoveCommand:
     label: str
     layer_id: str
