@@ -7,10 +7,12 @@ import tkinter as tk
 from tkinter import colorchooser, filedialog, messagebox, simpledialog, ttk
 
 import cv2
+import numpy as np
 from PIL import Image, ImageTk
 
 from .core import (
     Document,
+    BLEND_MODES,
     add_noise,
     add_text,
     adjust_brightness_contrast,
@@ -25,7 +27,7 @@ from .core import (
     union_rect,
     sharpen,
 )
-from .history import DocumentStateCommand, History, LayerMoveCommand, LayerOpacityCommand, PixelPatchCommand
+from .history import DocumentStateCommand, History, LayerBlendModeCommand, LayerMoveCommand, LayerOpacityCommand, PixelPatchCommand, SelectionMaskCommand
 
 
 class PhotoRedactorApp(tk.Tk):
@@ -125,6 +127,16 @@ class PhotoRedactorApp(tk.Tk):
         edit.add_separator()
         edit.add_command(label="Clear selection", command=self.clear_selection)
 
+        select = tk.Menu(menu, tearoff=False)
+        menu.add_cascade(label="Select", menu=select)
+        select.add_command(label="Select All", command=self.select_all)
+        select.add_command(label="Invert Selection", command=self.invert_selection)
+        select.add_command(label="Clear Selection", command=self.clear_selection)
+        select.add_separator()
+        select.add_command(label="Feather", command=self.feather_selection)
+        select.add_command(label="Grow", command=self.grow_selection)
+        select.add_command(label="Shrink", command=self.shrink_selection)
+
         image = tk.Menu(menu, tearoff=False)
         menu.add_cascade(label="Image", menu=image)
         image.add_command(label="Resize image", command=self.resize_image)
@@ -141,11 +153,20 @@ class PhotoRedactorApp(tk.Tk):
         layer.add_command(label="New layer", command=self.new_layer)
         layer.add_command(label="Duplicate layer", command=self.duplicate_layer)
         layer.add_command(label="Delete layer", command=self.delete_layer)
+        layer.add_command(label="Lock/unlock layer", command=self.toggle_layer_lock)
         layer.add_separator()
         layer.add_command(label="Move up", command=lambda: self.move_layer(1))
         layer.add_command(label="Move down", command=lambda: self.move_layer(-1))
         layer.add_command(label="Merge down", command=self.merge_down)
         layer.add_command(label="Flatten image", command=self.flatten)
+        layer.add_separator()
+        layer.add_command(label="Add mask from selection", command=self.add_mask_from_selection)
+        layer.add_command(label="Add reveal-all mask", command=self.add_reveal_all_mask)
+        layer.add_command(label="Add hide-all mask", command=self.add_hide_all_mask)
+        layer.add_command(label="Invert mask", command=self.invert_layer_mask)
+        layer.add_command(label="Enable/disable mask", command=self.toggle_layer_mask)
+        layer.add_command(label="Apply mask", command=self.apply_layer_mask)
+        layer.add_command(label="Delete mask", command=self.delete_layer_mask)
 
         adj = tk.Menu(menu, tearoff=False)
         menu.add_cascade(label="Adjust", menu=adj)
@@ -241,7 +262,13 @@ class PhotoRedactorApp(tk.Tk):
         self.layer_opacity_scale.pack(fill=tk.X, padx=8)
         self.layer_opacity_scale.bind("<ButtonPress-1>", self.begin_layer_opacity_change)
         self.layer_opacity_scale.bind("<ButtonRelease-1>", self.end_layer_opacity_change)
-        ttk.Button(parent, text="Toggle visible", command=self.toggle_layer_visible).pack(fill=tk.X, padx=8, pady=6)
+        ttk.Label(parent, text="Blend mode").pack(anchor=tk.W, padx=8, pady=(6, 0))
+        self.blend_mode = tk.StringVar(value="Normal")
+        self.blend_mode_box = ttk.Combobox(parent, textvariable=self.blend_mode, values=BLEND_MODES, state="readonly")
+        self.blend_mode_box.pack(fill=tk.X, padx=8)
+        self.blend_mode_box.bind("<<ComboboxSelected>>", self.change_blend_mode)
+        ttk.Button(parent, text="Toggle visible", command=self.toggle_layer_visible).pack(fill=tk.X, padx=8, pady=(6, 2))
+        ttk.Button(parent, text="Lock / unlock", command=self.toggle_layer_lock).pack(fill=tk.X, padx=8, pady=(0, 6))
         ttk.Separator(parent).pack(fill=tk.X, pady=8)
         self.info = ttk.Label(parent, text="", justify=tk.LEFT)
         self.info.pack(anchor=tk.W, padx=8)
@@ -255,6 +282,15 @@ class PhotoRedactorApp(tk.Tk):
         fn()
         after = self.doc.raw_state()
         self.history.push(DocumentStateCommand(label, before, after))
+        self.status_text(label)
+
+    def run_selection_command(self, label: str, fn) -> None:
+        before = None if self.doc.selection_mask is None else self.doc.selection_mask.copy()
+        fn()
+        after = None if self.doc.selection_mask is None else self.doc.selection_mask.copy()
+        self.history.push(SelectionMaskCommand(label, before, after))
+        self.selection_box = self.doc.selection_bounds()
+        self.update_selection_overlay()
         self.status_text(label)
 
     def undo(self) -> None:
@@ -296,6 +332,7 @@ class PhotoRedactorApp(tk.Tk):
         self.zoom_label.configure(text=f"{round(scale * 100)}%")
         self._last_render_time = time.perf_counter()
         self._view_dirty = False
+        self.update_selection_overlay()
 
     def request_canvas_refresh(self) -> None:
         self.invalidate_pixels()
@@ -322,10 +359,13 @@ class PhotoRedactorApp(tk.Tk):
         self.layer_list.delete(0, tk.END)
         for i, layer in enumerate(reversed(self.doc.layers)):
             marker = "*" if layer.visible else "-"
-            self.layer_list.insert(tk.END, f"{marker} {layer.name}  {round(layer.opacity * 100)}%")
+            mask_marker = "M" if layer.mask is not None and layer.mask_enabled else "m" if layer.mask is not None else " "
+            lock_marker = "L" if layer.locked else " "
+            self.layer_list.insert(tk.END, f"{marker}{mask_marker}{lock_marker} {layer.name}  {round(layer.opacity * 100)}%")
         self.layer_list.selection_clear(0, tk.END)
         self.layer_list.selection_set(len(self.doc.layers) - 1 - self.doc.active_layer)
         self.layer_opacity.set(self.doc.layer.opacity)
+        self.blend_mode.set(self.doc.layer.blend_mode)
 
     def status_text(self, text: str) -> None:
         if hasattr(self, "status"):
@@ -392,14 +432,14 @@ class PhotoRedactorApp(tk.Tk):
             self.begin_stroke()
             self.paint_at(point)
         elif tool == "fill":
-            self.run_document_command("Fill", lambda: flood_fill(self.doc.layer, point[0], point[1], self.foreground, int(self.tolerance.get())))
+            self.run_document_command("Fill", lambda: flood_fill(self.doc.layer, point[0], point[1], self.foreground, int(self.tolerance.get()), self.doc.layer_selection_mask(self.doc.layer)))
             self.doc.dirty = True
             self.refresh()
         elif tool == "text":
             text = simpledialog.askstring("Text", "Text:")
             if text:
                 size = simpledialog.askinteger("Text size", "Size:", initialvalue=48, minvalue=4, maxvalue=500) or 48
-                self.run_document_command("Text", lambda: add_text(self.doc.layer, point[0], point[1], text, self.foreground, size))
+                self.run_document_command("Text", lambda: add_text(self.doc.layer, point[0], point[1], text, self.foreground, size, self.doc.layer_selection_mask(self.doc.layer)))
                 self.doc.dirty = True
                 self.refresh()
         elif tool == "move":
@@ -436,11 +476,13 @@ class PhotoRedactorApp(tk.Tk):
         elif tool == "move":
             self.end_move_layer()
         elif tool == "gradient" and self.drag_start:
-            self.run_document_command("Gradient", lambda: apply_gradient(self.doc.layer, (*self.drag_start, *point), self.foreground, self.background))
+            self.run_document_command("Gradient", lambda: apply_gradient(self.doc.layer, (*self.drag_start, *point), self.foreground, self.background, self.doc.layer_selection_mask(self.doc.layer)))
             self.doc.dirty = True
             self.refresh()
         elif tool in ["select", "crop"] and self.drag_start:
             self.selection_box = (*self.drag_start, *point)
+            if tool == "select":
+                self.run_selection_command("Rectangular selection", lambda: self.doc.set_rect_selection(self.selection_box))
             self.draw_selection(self.drag_start, point)
         self.drag_start = None
         self.last_point = None
@@ -506,7 +548,16 @@ class PhotoRedactorApp(tk.Tk):
 
     def paint_at(self, point: tuple[int, int]) -> None:
         self.capture_stroke_before(self.brush_local_rect(point))
-        draw_brush(self.doc.layer, point[0], point[1], int(self.brush_size.get()), self.foreground, float(self.opacity.get()), self.tool.get() == "eraser")
+        draw_brush(
+            self.doc.layer,
+            point[0],
+            point[1],
+            int(self.brush_size.get()),
+            self.foreground,
+            float(self.opacity.get()),
+            self.tool.get() == "eraser",
+            self.doc.layer_selection_mask(self.doc.layer),
+        )
         self.doc.dirty = True
         self.request_canvas_refresh()
 
@@ -517,7 +568,16 @@ class PhotoRedactorApp(tk.Tk):
             x = round(start[0] * (1 - t) + end[0] * t)
             y = round(start[1] * (1 - t) + end[1] * t)
             self.capture_stroke_before(self.brush_local_rect((x, y)))
-            draw_brush(self.doc.layer, x, y, int(self.brush_size.get()), self.foreground, float(self.opacity.get()), self.tool.get() == "eraser")
+            draw_brush(
+                self.doc.layer,
+                x,
+                y,
+                int(self.brush_size.get()),
+                self.foreground,
+                float(self.opacity.get()),
+                self.tool.get() == "eraser",
+                self.doc.layer_selection_mask(self.doc.layer),
+            )
         self.doc.dirty = True
         self.request_canvas_refresh()
 
@@ -531,11 +591,44 @@ class PhotoRedactorApp(tk.Tk):
         else:
             self.canvas.coords(self.selection_id, *coords)
 
+    def update_selection_overlay(self) -> None:
+        bounds = self.doc.selection_bounds()
+        if bounds is None:
+            if self.selection_id is not None:
+                self.canvas.delete(self.selection_id)
+                self.selection_id = None
+            return
+        scale = self.zoom.get()
+        coords = [v * scale for v in bounds]
+        if self.selection_id is None:
+            self.selection_id = self.canvas.create_rectangle(*coords, outline="#50e3ff", dash=(5, 4), width=2)
+        else:
+            self.canvas.coords(self.selection_id, *coords)
+        self.canvas.tag_raise(self.selection_id)
+
     def clear_selection(self) -> None:
-        self.selection_box = None
-        if self.selection_id is not None:
-            self.canvas.delete(self.selection_id)
-            self.selection_id = None
+        self.run_selection_command("Clear selection", self.doc.clear_selection)
+
+    def select_all(self) -> None:
+        self.run_selection_command("Select all", self.doc.select_all)
+
+    def invert_selection(self) -> None:
+        self.run_selection_command("Invert selection", self.doc.invert_selection)
+
+    def feather_selection(self) -> None:
+        radius = simpledialog.askinteger("Feather", "Radius px:", initialvalue=8, minvalue=1, maxvalue=500)
+        if radius:
+            self.run_selection_command("Feather selection", lambda: self.doc.feather_selection(radius))
+
+    def grow_selection(self) -> None:
+        pixels = simpledialog.askinteger("Grow", "Pixels:", initialvalue=8, minvalue=1, maxvalue=500)
+        if pixels:
+            self.run_selection_command("Grow selection", lambda: self.doc.grow_selection(pixels))
+
+    def shrink_selection(self) -> None:
+        pixels = simpledialog.askinteger("Shrink", "Pixels:", initialvalue=8, minvalue=1, maxvalue=500)
+        if pixels:
+            self.run_selection_command("Shrink selection", lambda: self.doc.shrink_selection(pixels))
 
     def new_document(self) -> None:
         width = simpledialog.askinteger("New document", "Width px:", initialvalue=1280, minvalue=1, maxvalue=50000)
@@ -547,6 +640,7 @@ class PhotoRedactorApp(tk.Tk):
         color = colorchooser.askcolor(title="Background color", initialcolor="#ffffff")[0] or (255, 255, 255)
         self.doc = Document.new(width, height, tuple(map(int, color)) + (255,))
         self.history.clear()
+        self.selection_box = None
         self.refresh()
 
     def open_file(self) -> None:
@@ -555,6 +649,7 @@ class PhotoRedactorApp(tk.Tk):
             return
         self.doc = Document.open_project(path) if path.lower().endswith(".prdx") else Document.from_image(path)
         self.history.clear()
+        self.selection_box = self.doc.selection_bounds()
         self.refresh()
 
     def save(self) -> None:
@@ -634,6 +729,34 @@ class PhotoRedactorApp(tk.Tk):
         self.run_document_command("Flatten", self.doc.flatten)
         self.refresh()
 
+    def add_mask_from_selection(self) -> None:
+        self.run_document_command("Add mask from selection", self.doc.add_mask_from_selection)
+        self.refresh()
+
+    def add_reveal_all_mask(self) -> None:
+        self.run_document_command("Add reveal-all mask", self.doc.add_reveal_all_mask)
+        self.refresh()
+
+    def add_hide_all_mask(self) -> None:
+        self.run_document_command("Add hide-all mask", self.doc.add_hide_all_mask)
+        self.refresh()
+
+    def invert_layer_mask(self) -> None:
+        self.run_document_command("Invert mask", self.doc.invert_active_mask)
+        self.refresh()
+
+    def toggle_layer_mask(self) -> None:
+        self.run_document_command("Toggle mask", self.doc.toggle_active_mask)
+        self.refresh()
+
+    def apply_layer_mask(self) -> None:
+        self.run_document_command("Apply mask", self.doc.apply_active_mask)
+        self.refresh()
+
+    def delete_layer_mask(self) -> None:
+        self.run_document_command("Delete mask", self.doc.delete_active_mask)
+        self.refresh()
+
     def layer_selected(self, _event) -> None:
         sel = self.layer_list.curselection()
         if sel:
@@ -657,12 +780,31 @@ class PhotoRedactorApp(tk.Tk):
         self._opacity_layer_id = None
         self._opacity_before = None
 
+    def change_blend_mode(self, _event) -> None:
+        layer = self.doc.layer
+        before = layer.blend_mode
+        after = self.blend_mode.get()
+        if before == after:
+            return
+        layer.blend_mode = after
+        self.doc.dirty = True
+        self.push_command(LayerBlendModeCommand("Layer blend mode", layer.id, before, after))
+        self.refresh()
+
     def toggle_layer_visible(self) -> None:
         def edit():
             self.doc.layer.visible = not self.doc.layer.visible
             self.doc.dirty = True
 
         self.run_document_command("Toggle layer visible", edit)
+        self.refresh()
+
+    def toggle_layer_lock(self) -> None:
+        def edit():
+            self.doc.layer.locked = not self.doc.layer.locked
+            self.doc.dirty = True
+
+        self.run_document_command("Toggle layer lock", edit)
         self.refresh()
 
     def resize_image(self) -> None:
@@ -680,11 +822,14 @@ class PhotoRedactorApp(tk.Tk):
             self.refresh()
 
     def crop_to_selection(self) -> None:
-        if not self.selection_box:
+        crop_box = self.doc.selection_bounds() or self.selection_box
+        if not crop_box:
             messagebox.showinfo("Crop", "Create a rectangular selection first.")
             return
-        self.run_document_command("Crop", lambda: self.doc.crop(self.selection_box))
-        self.clear_selection()
+        self.run_document_command("Crop", lambda: self.doc.crop(crop_box))
+        self.doc.clear_selection()
+        self.selection_box = None
+        self.update_selection_overlay()
         self.refresh()
 
     def rotate(self, angle: int) -> None:
@@ -728,10 +873,15 @@ class PhotoRedactorApp(tk.Tk):
             return
         layer_id = layer.id
         before = layer.pixels.copy()
+        selection_mask = self.doc.layer_selection_mask(layer)
         rect = (0, 0, before.shape[1], before.shape[0])
 
         def worker():
-            return fn(before.copy())
+            after = fn(before.copy())
+            if selection_mask is not None:
+                alpha = (selection_mask.astype(np.float32) / 255.0)[:, :, None]
+                after = (after.astype(np.float32) * alpha + before.astype(np.float32) * (1.0 - alpha)).astype(np.uint8)
+            return after
 
         def done(after):
             target = self.doc.get_layer(layer_id)

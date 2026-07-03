@@ -6,6 +6,9 @@
 - Document geometry: resize image, resize canvas, rotate, flip, crop.
 - Navigation: zoom, fit to screen, pan with scrollbars.
 - Raster layers: create, duplicate, delete, reorder, visibility, opacity, merge, flatten.
+- Raster selections: rectangular selection, select all, invert, feather, grow, shrink.
+- Raster layer masks: reveal all, hide all, from selection, invert, toggle, apply, delete.
+- Blend modes: Normal, Multiply, Screen, Overlay, Soft Light, Darken, Lighten, Difference, Color, Luminosity.
 - Tools: move, brush, eraser, fill, gradient, text, rectangular selection, crop.
 - Adjustments: brightness, contrast, saturation, levels, curves, grayscale, invert.
 - Filters: Gaussian blur, sharpen, noise.
@@ -16,10 +19,10 @@
 
 ## Next milestones toward the full list
 
-1. Selection engine: lasso, polygonal lasso, magic wand, color range, feather/grow/shrink.
-2. Masks and alpha channels: editable raster masks per layer, save/load selections.
-3. Blend modes: multiply, screen, overlay, color, luminosity, and brush blend modes.
-4. Non-destructive adjustments: adjustment layers and editable filter stack.
+1. Selection engine: lasso, polygonal lasso, magic wand, color range, saved alpha selections.
+2. Editable masks: direct mask painting, density/feather controls and mask thumbnails.
+3. Non-destructive adjustments: adjustment layers and editable filter stack.
+4. Free Transform: scaling, rotation, numeric coordinates and transform handles.
 5. Text engine: editable text layers instead of rasterized text.
 6. Shapes and paths: vector layer model with Bezier editing.
 7. Retouching: clone stamp, healing brush, patch, red-eye.

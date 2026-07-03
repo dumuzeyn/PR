@@ -9,6 +9,8 @@ This repository starts with a real working editor and an architecture intended t
 - PNG/JPEG/WebP/BMP/TIFF import and export
 - brush, eraser, fill, gradient, text, crop, rectangular selection, move
 - layer opacity, visibility, duplication, merge, flatten
+- layer locks, raster layer masks and blend modes
+- real selection mask with select all, invert, feather, grow and shrink
 - undo/redo
 - command-based undo for strokes, moves and layer edits
 - `.prdx` projects with `manifest.json` and separate layer PNG files, without Base64-packed layers

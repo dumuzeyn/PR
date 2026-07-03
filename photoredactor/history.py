@@ -100,6 +100,30 @@ class LayerOpacityCommand:
 
 
 @dataclass
+class LayerBlendModeCommand:
+    label: str
+    layer_id: str
+    before: str
+    after: str
+
+    @property
+    def memory_bytes(self) -> int:
+        return 128
+
+    def undo(self, document: Document) -> None:
+        layer = document.get_layer(self.layer_id)
+        if layer is not None:
+            layer.blend_mode = self.before
+            document.dirty = True
+
+    def redo(self, document: Document) -> None:
+        layer = document.get_layer(self.layer_id)
+        if layer is not None:
+            layer.blend_mode = self.after
+            document.dirty = True
+
+
+@dataclass
 class DocumentStateCommand:
     label: str
     before: dict[str, Any]
@@ -121,6 +145,30 @@ class DocumentStateCommand:
 
     def redo(self, document: Document) -> None:
         document.restore_raw_state(self.after)
+        document.dirty = True
+
+
+@dataclass
+class SelectionMaskCommand:
+    label: str
+    before: np.ndarray | None
+    after: np.ndarray | None
+
+    @property
+    def memory_bytes(self) -> int:
+        total = 0
+        if self.before is not None:
+            total += int(self.before.nbytes)
+        if self.after is not None:
+            total += int(self.after.nbytes)
+        return max(total, 1)
+
+    def undo(self, document: Document) -> None:
+        document.selection_mask = None if self.before is None else self.before.copy()
+        document.dirty = True
+
+    def redo(self, document: Document) -> None:
+        document.selection_mask = None if self.after is None else self.after.copy()
         document.dirty = True
 
 
