@@ -10,6 +10,8 @@ This repository starts with a real working editor and an architecture intended t
 - brush, eraser, fill, gradient, text, crop, rectangular selection, move
 - layer opacity, visibility, duplication, merge, flatten
 - undo/redo
+- command-based undo for strokes, moves and layer edits
+- `.prdx` projects with `manifest.json` and separate layer PNG files, without Base64-packed layers
 - resize, canvas resize, rotate, flip
 - brightness, contrast, saturation, levels, curves, blur, sharpen, noise, grayscale, invert
 - batch processing for folders

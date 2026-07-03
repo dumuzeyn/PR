@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import time
 import tkinter as tk
@@ -21,8 +22,10 @@ from .core import (
     flood_fill,
     levels,
     rgba_array_to_pil,
+    union_rect,
     sharpen,
 )
+from .history import DocumentStateCommand, History, LayerMoveCommand, LayerOpacityCommand, PixelPatchCommand
 
 
 class PhotoRedactorApp(tk.Tk):
@@ -33,8 +36,8 @@ class PhotoRedactorApp(tk.Tk):
         self.minsize(1000, 640)
 
         self.doc = Document.new()
-        self.history: list[dict] = []
-        self.redo_stack: list[dict] = []
+        self.history = History()
+        self.executor = ThreadPoolExecutor(max_workers=2)
         self.tool = tk.StringVar(value="brush")
         self.zoom = tk.DoubleVar(value=1.0)
         self.brush_size = tk.IntVar(value=28)
@@ -44,6 +47,13 @@ class PhotoRedactorApp(tk.Tk):
         self.background = (255, 255, 255, 255)
         self.drag_start: tuple[int, int] | None = None
         self.last_point: tuple[int, int] | None = None
+        self._move_layer_id: str | None = None
+        self._move_start: tuple[int, int] | None = None
+        self._stroke_layer_id: str | None = None
+        self._stroke_rect: tuple[int, int, int, int] | None = None
+        self._stroke_before: np.ndarray | None = None
+        self._opacity_layer_id: str | None = None
+        self._opacity_before: float | None = None
         self._space_down = False
         self._panning = False
         self.selection_id: int | None = None
@@ -57,8 +67,11 @@ class PhotoRedactorApp(tk.Tk):
         self._view_dirty = True
 
         self._build_ui()
-        self.push_history("Initial")
         self.refresh()
+
+    def destroy(self) -> None:
+        self.executor.shutdown(wait=False, cancel_futures=True)
+        super().destroy()
 
     def _build_ui(self) -> None:
         self._build_menu()
@@ -224,43 +237,45 @@ class PhotoRedactorApp(tk.Tk):
         ttk.Button(buttons, text="Dn", command=lambda: self.move_layer(-1)).pack(side=tk.LEFT)
         ttk.Label(parent, text="Layer opacity").pack(anchor=tk.W, padx=8)
         self.layer_opacity = tk.DoubleVar(value=1.0)
-        ttk.Scale(parent, from_=0.0, to=1.0, variable=self.layer_opacity, command=self.change_layer_opacity).pack(fill=tk.X, padx=8)
+        self.layer_opacity_scale = ttk.Scale(parent, from_=0.0, to=1.0, variable=self.layer_opacity, command=self.change_layer_opacity)
+        self.layer_opacity_scale.pack(fill=tk.X, padx=8)
+        self.layer_opacity_scale.bind("<ButtonPress-1>", self.begin_layer_opacity_change)
+        self.layer_opacity_scale.bind("<ButtonRelease-1>", self.end_layer_opacity_change)
         ttk.Button(parent, text="Toggle visible", command=self.toggle_layer_visible).pack(fill=tk.X, padx=8, pady=6)
         ttk.Separator(parent).pack(fill=tk.X, pady=8)
         self.info = ttk.Label(parent, text="", justify=tk.LEFT)
         self.info.pack(anchor=tk.W, padx=8)
 
-    def push_history(self, label: str) -> None:
-        self.history.append(self.doc.snapshot())
-        if len(self.history) > 40:
-            self.history.pop(0)
-        self.redo_stack.clear()
+    def push_command(self, command) -> None:
+        self.history.push(command)
+        self.status_text(command.label)
+
+    def run_document_command(self, label: str, fn) -> None:
+        before = self.doc.raw_state()
+        fn()
+        after = self.doc.raw_state()
+        self.history.push(DocumentStateCommand(label, before, after))
         self.status_text(label)
 
-    def restore_snapshot(self, data: dict) -> None:
-        path = self.doc.path
-        self.doc = Document.restore(data)
-        self.doc.path = path
-        self.mark_dirty()
-        self.refresh()
-
     def undo(self) -> None:
-        if len(self.history) <= 1:
-            return
-        self.redo_stack.append(self.history.pop())
-        self.restore_snapshot(self.history[-1])
-        self.status_text("Undo")
+        label = self.history.undo(self.doc)
+        if label:
+            self.invalidate_pixels()
+            self.refresh()
+            self.status_text(f"Undo: {label}")
 
     def redo(self) -> None:
-        if not self.redo_stack:
-            return
-        data = self.redo_stack.pop()
-        self.history.append(data)
-        self.restore_snapshot(data)
-        self.status_text("Redo")
+        label = self.history.redo(self.doc)
+        if label:
+            self.invalidate_pixels()
+            self.refresh()
+            self.status_text(f"Redo: {label}")
 
-    def mark_dirty(self) -> None:
+    def invalidate_pixels(self) -> None:
         self._composite_dirty = True
+        self._view_dirty = True
+
+    def invalidate_view(self) -> None:
         self._view_dirty = True
 
     def refresh_canvas(self) -> None:
@@ -283,7 +298,7 @@ class PhotoRedactorApp(tk.Tk):
         self._view_dirty = False
 
     def request_canvas_refresh(self) -> None:
-        self.mark_dirty()
+        self.invalidate_pixels()
         if self._render_after_id is not None:
             return
         elapsed_ms = (time.perf_counter() - self._last_render_time) * 1000
@@ -295,7 +310,7 @@ class PhotoRedactorApp(tk.Tk):
         self.refresh_canvas()
 
     def refresh(self) -> None:
-        self.mark_dirty()
+        self.invalidate_pixels()
         if self._render_after_id is not None:
             self.after_cancel(self._render_after_id)
             self._render_after_id = None
@@ -315,6 +330,28 @@ class PhotoRedactorApp(tk.Tk):
     def status_text(self, text: str) -> None:
         if hasattr(self, "status"):
             self.status.configure(text=text)
+
+    def document_copy(self) -> Document:
+        doc = Document.new(1, 1)
+        doc.restore_raw_state(self.doc.raw_state())
+        return doc
+
+    def run_background(self, label: str, worker, done=None) -> None:
+        self.status_text(f"{label}...")
+        future = self.executor.submit(worker)
+
+        def complete() -> None:
+            try:
+                result = future.result()
+            except Exception as exc:
+                messagebox.showerror(label, str(exc))
+                self.status_text(f"{label}: error")
+                return
+            if done:
+                done(result)
+            self.status_text(f"{label}: done")
+
+        future.add_done_callback(lambda _future: self.after(0, complete))
 
     def canvas_to_doc(self, event) -> tuple[int, int]:
         x = int(self.canvas.canvasx(event.x) / self.zoom.get())
@@ -352,20 +389,22 @@ class PhotoRedactorApp(tk.Tk):
         self.last_point = point
         tool = self.tool.get()
         if tool in ["brush", "eraser"]:
+            self.begin_stroke()
             self.paint_at(point)
         elif tool == "fill":
-            flood_fill(self.doc.layer, point[0], point[1], self.foreground, int(self.tolerance.get()))
+            self.run_document_command("Fill", lambda: flood_fill(self.doc.layer, point[0], point[1], self.foreground, int(self.tolerance.get())))
             self.doc.dirty = True
-            self.push_history("Fill")
             self.refresh()
         elif tool == "text":
             text = simpledialog.askstring("Text", "Text:")
             if text:
                 size = simpledialog.askinteger("Text size", "Size:", initialvalue=48, minvalue=4, maxvalue=500) or 48
-                add_text(self.doc.layer, point[0], point[1], text, self.foreground, size)
+                self.run_document_command("Text", lambda: add_text(self.doc.layer, point[0], point[1], text, self.foreground, size))
                 self.doc.dirty = True
-                self.push_history("Text")
                 self.refresh()
+        elif tool == "move":
+            self._move_layer_id = self.doc.layer.id
+            self._move_start = (self.doc.layer.x, self.doc.layer.y)
 
     def pointer_drag(self, event) -> None:
         if self._panning:
@@ -393,13 +432,12 @@ class PhotoRedactorApp(tk.Tk):
         point = self.canvas_to_doc(event)
         tool = self.tool.get()
         if tool in ["brush", "eraser"]:
-            self.push_history(f"{tool.title()} stroke")
+            self.end_stroke(f"{tool.title()} stroke")
         elif tool == "move":
-            self.push_history("Move layer")
+            self.end_move_layer()
         elif tool == "gradient" and self.drag_start:
-            apply_gradient(self.doc.layer, (*self.drag_start, *point), self.foreground, self.background)
+            self.run_document_command("Gradient", lambda: apply_gradient(self.doc.layer, (*self.drag_start, *point), self.foreground, self.background))
             self.doc.dirty = True
-            self.push_history("Gradient")
             self.refresh()
         elif tool in ["select", "crop"] and self.drag_start:
             self.selection_box = (*self.drag_start, *point)
@@ -407,7 +445,67 @@ class PhotoRedactorApp(tk.Tk):
         self.drag_start = None
         self.last_point = None
 
+    def begin_stroke(self) -> None:
+        self._stroke_layer_id = self.doc.layer.id
+        self._stroke_rect = None
+        self._stroke_before = None
+
+    def brush_local_rect(self, point: tuple[int, int]) -> tuple[int, int, int, int] | None:
+        layer = self.doc.layer
+        radius = int(self.brush_size.get())
+        lx, ly = point[0] - layer.x, point[1] - layer.y
+        if lx < -radius or ly < -radius or lx >= layer.pixels.shape[1] + radius or ly >= layer.pixels.shape[0] + radius:
+            return None
+        return (
+            max(0, lx - radius),
+            max(0, ly - radius),
+            min(layer.pixels.shape[1], lx + radius + 1),
+            min(layer.pixels.shape[0], ly + radius + 1),
+        )
+
+    def capture_stroke_before(self, rect: tuple[int, int, int, int] | None) -> None:
+        if rect is None:
+            return
+        layer = self.doc.layer
+        if self._stroke_rect is None or self._stroke_before is None:
+            x1, y1, x2, y2 = rect
+            self._stroke_rect = rect
+            self._stroke_before = layer.pixels[y1:y2, x1:x2].copy()
+            return
+        old = self._stroke_rect
+        new = union_rect(old, rect)
+        if new == old:
+            return
+        nx1, ny1, nx2, ny2 = new
+        ox1, oy1, ox2, oy2 = old
+        merged = layer.pixels[ny1:ny2, nx1:nx2].copy()
+        merged[oy1 - ny1 : oy2 - ny1, ox1 - nx1 : ox2 - nx1] = self._stroke_before
+        self._stroke_rect = new
+        self._stroke_before = merged
+
+    def end_stroke(self, label: str) -> None:
+        if self._stroke_layer_id and self._stroke_rect and self._stroke_before is not None:
+            layer = self.doc.get_layer(self._stroke_layer_id)
+            if layer is not None:
+                x1, y1, x2, y2 = self._stroke_rect
+                after = layer.pixels[y1:y2, x1:x2].copy()
+                self.push_command(PixelPatchCommand(label, self._stroke_layer_id, self._stroke_rect, self._stroke_before, after))
+        self._stroke_layer_id = None
+        self._stroke_rect = None
+        self._stroke_before = None
+
+    def end_move_layer(self) -> None:
+        if self._move_layer_id and self._move_start:
+            layer = self.doc.get_layer(self._move_layer_id)
+            if layer is not None:
+                end = (layer.x, layer.y)
+                if end != self._move_start:
+                    self.push_command(LayerMoveCommand("Move layer", self._move_layer_id, self._move_start, end))
+        self._move_layer_id = None
+        self._move_start = None
+
     def paint_at(self, point: tuple[int, int]) -> None:
+        self.capture_stroke_before(self.brush_local_rect(point))
         draw_brush(self.doc.layer, point[0], point[1], int(self.brush_size.get()), self.foreground, float(self.opacity.get()), self.tool.get() == "eraser")
         self.doc.dirty = True
         self.request_canvas_refresh()
@@ -418,6 +516,7 @@ class PhotoRedactorApp(tk.Tk):
             t = i / steps
             x = round(start[0] * (1 - t) + end[0] * t)
             y = round(start[1] * (1 - t) + end[1] * t)
+            self.capture_stroke_before(self.brush_local_rect((x, y)))
             draw_brush(self.doc.layer, x, y, int(self.brush_size.get()), self.foreground, float(self.opacity.get()), self.tool.get() == "eraser")
         self.doc.dirty = True
         self.request_canvas_refresh()
@@ -448,8 +547,6 @@ class PhotoRedactorApp(tk.Tk):
         color = colorchooser.askcolor(title="Background color", initialcolor="#ffffff")[0] or (255, 255, 255)
         self.doc = Document.new(width, height, tuple(map(int, color)) + (255,))
         self.history.clear()
-        self.redo_stack.clear()
-        self.push_history("New document")
         self.refresh()
 
     def open_file(self) -> None:
@@ -458,28 +555,42 @@ class PhotoRedactorApp(tk.Tk):
             return
         self.doc = Document.open_project(path) if path.lower().endswith(".prdx") else Document.from_image(path)
         self.history.clear()
-        self.redo_stack.clear()
-        self.push_history("Open")
         self.refresh()
 
     def save(self) -> None:
         if self.doc.path and self.doc.path.lower().endswith(".prdx"):
-            self.doc.save_project(self.doc.path)
-            self.status_text(f"Saved {self.doc.path}")
+            self.save_project_async(self.doc.path)
         else:
             self.save_as_project()
 
     def save_as_project(self) -> None:
         path = filedialog.asksaveasfilename(defaultextension=".prdx", filetypes=[("PhotoRedactor project", "*.prdx")])
         if path:
-            self.doc.save_project(path)
-            self.status_text(f"Saved {path}")
+            self.save_project_async(path)
+
+    def save_project_async(self, path: str) -> None:
+        snapshot = self.document_copy()
+
+        def worker():
+            snapshot.save_project(path)
+            return path
+
+        def done(saved_path):
+            self.doc.path = saved_path
+            self.doc.dirty = False
+
+        self.run_background("Save project", worker, done)
 
     def export_image(self) -> None:
         path = filedialog.asksaveasfilename(defaultextension=".png", filetypes=[("PNG", "*.png"), ("JPEG", "*.jpg"), ("WebP", "*.webp"), ("TIFF", "*.tiff"), ("BMP", "*.bmp")])
         if path:
-            self.doc.export_flat(path)
-            self.status_text(f"Exported {path}")
+            snapshot = self.document_copy()
+
+            def worker():
+                snapshot.export_flat(path)
+                return path
+
+            self.run_background("Export image", worker)
 
     def pick_foreground(self) -> None:
         color = colorchooser.askcolor(title="Foreground")[0]
@@ -492,38 +603,35 @@ class PhotoRedactorApp(tk.Tk):
             self.background = tuple(map(int, color)) + (255,)
 
     def new_layer(self) -> None:
-        self.doc.add_layer(f"Layer {len(self.doc.layers) + 1}")
-        self.push_history("New layer")
+        self.run_document_command("New layer", lambda: self.doc.add_layer(f"Layer {len(self.doc.layers) + 1}"))
         self.refresh()
 
     def duplicate_layer(self) -> None:
-        self.doc.duplicate_active_layer()
-        self.push_history("Duplicate layer")
+        self.run_document_command("Duplicate layer", self.doc.duplicate_active_layer)
         self.refresh()
 
     def delete_layer(self) -> None:
-        self.doc.delete_active_layer()
-        self.push_history("Delete layer")
+        self.run_document_command("Delete layer", self.doc.delete_active_layer)
         self.refresh()
 
     def move_layer(self, delta: int) -> None:
         i = self.doc.active_layer
         j = i + delta
         if 0 <= j < len(self.doc.layers):
-            self.doc.layers[i], self.doc.layers[j] = self.doc.layers[j], self.doc.layers[i]
-            self.doc.active_layer = j
-            self.doc.dirty = True
-            self.push_history("Layer reorder")
+            def edit():
+                self.doc.layers[i], self.doc.layers[j] = self.doc.layers[j], self.doc.layers[i]
+                self.doc.active_layer = j
+                self.doc.dirty = True
+
+            self.run_document_command("Layer reorder", edit)
             self.refresh()
 
     def merge_down(self) -> None:
-        self.doc.merge_down()
-        self.push_history("Merge down")
+        self.run_document_command("Merge down", self.doc.merge_down)
         self.refresh()
 
     def flatten(self) -> None:
-        self.doc.flatten()
-        self.push_history("Flatten")
+        self.run_document_command("Flatten", self.doc.flatten)
         self.refresh()
 
     def layer_selected(self, _event) -> None:
@@ -532,66 +640,110 @@ class PhotoRedactorApp(tk.Tk):
             self.doc.active_layer = len(self.doc.layers) - 1 - sel[0]
             self.refresh_layers()
 
+    def begin_layer_opacity_change(self, _event) -> None:
+        self._opacity_layer_id = self.doc.layer.id
+        self._opacity_before = self.doc.layer.opacity
+
     def change_layer_opacity(self, _value) -> None:
         self.doc.layer.opacity = float(self.layer_opacity.get())
         self.doc.dirty = True
         self.request_canvas_refresh()
 
+    def end_layer_opacity_change(self, _event) -> None:
+        if self._opacity_layer_id is not None and self._opacity_before is not None:
+            layer = self.doc.get_layer(self._opacity_layer_id)
+            if layer is not None and layer.opacity != self._opacity_before:
+                self.push_command(LayerOpacityCommand("Layer opacity", self._opacity_layer_id, self._opacity_before, layer.opacity))
+        self._opacity_layer_id = None
+        self._opacity_before = None
+
     def toggle_layer_visible(self) -> None:
-        self.doc.layer.visible = not self.doc.layer.visible
-        self.doc.dirty = True
+        def edit():
+            self.doc.layer.visible = not self.doc.layer.visible
+            self.doc.dirty = True
+
+        self.run_document_command("Toggle layer visible", edit)
         self.refresh()
 
     def resize_image(self) -> None:
         width = simpledialog.askinteger("Resize image", "Width px:", initialvalue=self.doc.width, minvalue=1, maxvalue=100000)
         height = simpledialog.askinteger("Resize image", "Height px:", initialvalue=self.doc.height, minvalue=1, maxvalue=100000)
         if width and height:
-            self.doc.resize_image(width, height)
-            self.push_history("Resize image")
+            self.run_document_command("Resize image", lambda: self.doc.resize_image(width, height))
             self.refresh()
 
     def resize_canvas(self) -> None:
         width = simpledialog.askinteger("Resize canvas", "Width px:", initialvalue=self.doc.width, minvalue=1, maxvalue=100000)
         height = simpledialog.askinteger("Resize canvas", "Height px:", initialvalue=self.doc.height, minvalue=1, maxvalue=100000)
         if width and height:
-            self.doc.resize_canvas(width, height)
-            self.push_history("Resize canvas")
+            self.run_document_command("Resize canvas", lambda: self.doc.resize_canvas(width, height))
             self.refresh()
 
     def crop_to_selection(self) -> None:
         if not self.selection_box:
             messagebox.showinfo("Crop", "Create a rectangular selection first.")
             return
-        self.doc.crop(self.selection_box)
-        self.push_history("Crop")
+        self.run_document_command("Crop", lambda: self.doc.crop(self.selection_box))
         self.clear_selection()
         self.refresh()
 
     def rotate(self, angle: int) -> None:
-        for layer in self.doc.layers:
-            if angle == 90:
-                layer.pixels = cv2.rotate(layer.pixels, cv2.ROTATE_90_CLOCKWISE)
-            elif angle == 180:
-                layer.pixels = cv2.rotate(layer.pixels, cv2.ROTATE_180)
-        if angle in [90, 270]:
-            self.doc.width, self.doc.height = self.doc.height, self.doc.width
-        self.doc.dirty = True
-        self.push_history("Rotate")
+        def edit():
+            old_w, old_h = self.doc.width, self.doc.height
+            for layer in self.doc.layers:
+                lx, ly, lw, lh = layer.x, layer.y, layer.pixels.shape[1], layer.pixels.shape[0]
+                if angle == 90:
+                    layer.pixels = cv2.rotate(layer.pixels, cv2.ROTATE_90_CLOCKWISE)
+                    layer.x = old_h - (ly + lh)
+                    layer.y = lx
+                elif angle == 180:
+                    layer.pixels = cv2.rotate(layer.pixels, cv2.ROTATE_180)
+                    layer.x = old_w - (lx + lw)
+                    layer.y = old_h - (ly + lh)
+            if angle in [90, 270]:
+                self.doc.width, self.doc.height = self.doc.height, self.doc.width
+            self.doc.dirty = True
+
+        self.run_document_command("Rotate", edit)
         self.refresh()
 
     def flip(self, horizontal: bool) -> None:
-        code = 1 if horizontal else 0
-        for layer in self.doc.layers:
-            layer.pixels = cv2.flip(layer.pixels, code)
-        self.doc.dirty = True
-        self.push_history("Flip")
+        def edit():
+            code = 1 if horizontal else 0
+            for layer in self.doc.layers:
+                layer.pixels = cv2.flip(layer.pixels, code)
+                if horizontal:
+                    layer.x = self.doc.width - (layer.x + layer.pixels.shape[1])
+                else:
+                    layer.y = self.doc.height - (layer.y + layer.pixels.shape[0])
+            self.doc.dirty = True
+
+        self.run_document_command("Flip", edit)
         self.refresh()
 
     def apply_to_layer(self, label: str, fn) -> None:
-        self.doc.layer.pixels = fn(self.doc.layer.pixels)
-        self.doc.dirty = True
-        self.push_history(label)
-        self.refresh()
+        layer = self.doc.layer
+        if layer.locked:
+            self.status_text("Layer is locked")
+            return
+        layer_id = layer.id
+        before = layer.pixels.copy()
+        rect = (0, 0, before.shape[1], before.shape[0])
+
+        def worker():
+            return fn(before.copy())
+
+        def done(after):
+            target = self.doc.get_layer(layer_id)
+            if target is None:
+                return
+            target.pixels = after
+            self.doc.dirty = True
+            self.push_command(PixelPatchCommand(label, layer_id, rect, before, after.copy()))
+            self.invalidate_pixels()
+            self.refresh()
+
+        self.run_background(label, worker, done)
 
     def adjust_brightness_contrast(self) -> None:
         b = simpledialog.askinteger("Brightness", "Brightness -255..255:", initialvalue=0, minvalue=-255, maxvalue=255)
@@ -654,7 +806,8 @@ class PhotoRedactorApp(tk.Tk):
 
     def set_zoom(self, value: float) -> None:
         self.zoom.set(max(0.05, min(16.0, value)))
-        self.refresh()
+        self.invalidate_view()
+        self.refresh_canvas()
 
     def fit_to_screen(self) -> None:
         self.update_idletasks()
@@ -678,18 +831,22 @@ class PhotoRedactorApp(tk.Tk):
         if not dst:
             return
         width = simpledialog.askinteger("Batch", "Max width px, empty for original:", initialvalue=1920, minvalue=1, maxvalue=50000)
-        exts = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
-        count = 0
-        for path in Path(src).rglob("*"):
-            if path.suffix.lower() not in exts:
-                continue
-            doc = Document.from_image(path)
-            if width and doc.width > width:
-                doc.resize_image(width, max(1, round(doc.height * width / doc.width)))
-            out = Path(dst) / f"{path.stem}.png"
-            doc.export_flat(out)
-            count += 1
-        messagebox.showinfo("Batch", f"Processed {count} files.")
+
+        def worker():
+            exts = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
+            count = 0
+            for path in Path(src).rglob("*"):
+                if path.suffix.lower() not in exts:
+                    continue
+                doc = Document.from_image(path)
+                if width and doc.width > width:
+                    doc.resize_image(width, max(1, round(doc.height * width / doc.width)))
+                out = Path(dst) / f"{path.stem}.png"
+                doc.export_flat(out)
+                count += 1
+            return count
+
+        self.run_background("Batch", worker, lambda count: messagebox.showinfo("Batch", f"Processed {count} files."))
 
 
 def main() -> None:
