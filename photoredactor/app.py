@@ -223,8 +223,11 @@ class PhotoRedactorApp(tk.Tk):
         select.add_command(label="Single column", command=self.single_column_selection)
         select.add_separator()
         select.add_command(label="Feather", command=self.feather_selection)
+        select.add_command(label="Smooth", command=self.smooth_selection)
         select.add_command(label="Grow", command=self.grow_selection)
         select.add_command(label="Shrink", command=self.shrink_selection)
+        select.add_command(label="Border", command=self.border_selection)
+        select.add_command(label="Refine selection", command=self.refine_selection)
         select.add_separator()
         select.add_command(label="Save selection", command=self.save_selection)
         select.add_command(label="Load selection", command=self.load_selection)
@@ -1088,6 +1091,33 @@ class PhotoRedactorApp(tk.Tk):
         pixels = simpledialog.askinteger("Shrink", "Pixels:", initialvalue=8, minvalue=1, maxvalue=500)
         if pixels:
             self.run_selection_command("Shrink selection", lambda: self.doc.shrink_selection(pixels))
+
+    def smooth_selection(self) -> None:
+        radius = simpledialog.askinteger("Smooth", "Radius px:", initialvalue=4, minvalue=1, maxvalue=500)
+        if radius:
+            self.run_selection_command("Smooth selection", lambda: self.doc.smooth_selection(radius))
+
+    def border_selection(self) -> None:
+        width = simpledialog.askinteger("Border", "Width px:", initialvalue=8, minvalue=1, maxvalue=500)
+        if width:
+            self.run_selection_command("Border selection", lambda: self.doc.border_selection(width))
+
+    def refine_selection(self) -> None:
+        raw = simpledialog.askstring("Refine selection", "smooth,feather,contrast,shift:", initialvalue="2,2,1.25,0")
+        if not raw:
+            return
+        try:
+            parts = [part.strip() for part in raw.split(",")]
+            if len(parts) != 4:
+                raise ValueError
+            smooth = max(0, int(float(parts[0])))
+            feather = max(0, int(float(parts[1])))
+            contrast = max(0.0, float(parts[2]))
+            shift = int(float(parts[3]))
+        except ValueError:
+            messagebox.showerror("Refine selection", "Use: smooth,feather,contrast,shift")
+            return
+        self.run_selection_command("Refine selection", lambda: self.doc.refine_selection(smooth, feather, contrast, shift))
 
     def select_opaque_pixels(self) -> None:
         self.run_selection_command("Select opaque pixels", lambda: self.doc.select_opaque_pixels(self.doc.layer))

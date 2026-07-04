@@ -934,6 +934,7 @@ class Document:
         radius = max(1, int(radius))
         k = radius * 2 + 1
         self.selection_mask = cv2.GaussianBlur(self.selection_mask, (k, k), radius)
+        self.dirty = True
 
     def grow_selection(self, pixels: int) -> None:
         if self.selection_mask is None:
@@ -941,6 +942,7 @@ class Document:
         pixels = max(1, int(pixels))
         kernel = np.ones((pixels * 2 + 1, pixels * 2 + 1), dtype=np.uint8)
         self.selection_mask = cv2.dilate(self.selection_mask, kernel)
+        self.dirty = True
 
     def shrink_selection(self, pixels: int) -> None:
         if self.selection_mask is None:
@@ -950,6 +952,54 @@ class Document:
         self.selection_mask = cv2.erode(self.selection_mask, kernel)
         if not np.any(self.selection_mask):
             self.selection_mask = None
+        self.dirty = True
+
+    def smooth_selection(self, radius: int) -> None:
+        if self.selection_mask is None:
+            return
+        radius = max(1, int(radius))
+        k = radius * 2 + 1
+        mask = cv2.GaussianBlur(self.selection_mask, (k, k), radius)
+        self.selection_mask = np.where(mask >= 128, 255, 0).astype(np.uint8)
+        if not np.any(self.selection_mask):
+            self.selection_mask = None
+        self.dirty = True
+
+    def border_selection(self, width: int) -> None:
+        if self.selection_mask is None:
+            return
+        width = max(1, int(width))
+        kernel = np.ones((width * 2 + 1, width * 2 + 1), dtype=np.uint8)
+        outer = cv2.dilate(self.selection_mask, kernel)
+        inner = cv2.erode(self.selection_mask, kernel)
+        border = np.clip(outer.astype(np.int16) - inner.astype(np.int16), 0, 255).astype(np.uint8)
+        self.selection_mask = border if np.any(border) else None
+        self.dirty = True
+
+    def refine_selection(self, smooth: int = 0, feather: int = 0, contrast: float = 1.0, shift: int = 0) -> None:
+        if self.selection_mask is None:
+            return
+        mask = self.selection_mask.copy()
+        if shift > 0:
+            kernel = np.ones((shift * 2 + 1, shift * 2 + 1), dtype=np.uint8)
+            mask = cv2.dilate(mask, kernel)
+        elif shift < 0:
+            amount = abs(int(shift))
+            kernel = np.ones((amount * 2 + 1, amount * 2 + 1), dtype=np.uint8)
+            mask = cv2.erode(mask, kernel)
+        if smooth > 0:
+            k = int(smooth) * 2 + 1
+            mask = cv2.GaussianBlur(mask, (k, k), smooth)
+            mask = np.where(mask >= 128, 255, 0).astype(np.uint8)
+        if feather > 0:
+            k = int(feather) * 2 + 1
+            mask = cv2.GaussianBlur(mask, (k, k), feather)
+        if abs(float(contrast) - 1.0) > 0.001:
+            work = mask.astype(np.float32)
+            work = (work - 127.5) * max(0.0, float(contrast)) + 127.5
+            mask = np.clip(work, 0, 255).astype(np.uint8)
+        self.selection_mask = mask if np.any(mask) else None
+        self.dirty = True
 
     def selection_bounds(self) -> tuple[int, int, int, int] | None:
         if self.selection_mask is None or not np.any(self.selection_mask):
