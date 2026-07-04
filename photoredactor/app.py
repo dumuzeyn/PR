@@ -81,6 +81,8 @@ class PhotoRedactorApp(tk.Tk):
         self._lasso_points: list[tuple[int, int]] = []
         self._polygon_points: list[tuple[int, int]] = []
         self._polygon_ids: list[int] = []
+        self._quick_points: list[tuple[int, int]] = []
+        self._quick_mode = "replace"
         self._clone_source: tuple[int, int] | None = None
         self._clone_anchor_target: tuple[int, int] | None = None
         self._clone_anchor_source: tuple[int, int] | None = None
@@ -263,6 +265,8 @@ class PhotoRedactorApp(tk.Tk):
         layer.add_command(label="Add hide-all mask", command=self.add_hide_all_mask)
         layer.add_command(label="Invert mask", command=self.invert_layer_mask)
         layer.add_command(label="Enable/disable mask", command=self.toggle_layer_mask)
+        layer.add_command(label="Mask density", command=self.set_mask_density)
+        layer.add_command(label="Mask feather", command=self.set_mask_feather)
         layer.add_command(label="Apply mask", command=self.apply_layer_mask)
         layer.add_command(label="Delete mask", command=self.delete_layer_mask)
 
@@ -285,6 +289,7 @@ class PhotoRedactorApp(tk.Tk):
         filters.add_separator()
         filters.add_command(label="Content-aware fill", command=self.filter_content_aware_fill)
         filters.add_command(label="Red-eye reduction", command=self.filter_red_eye)
+        filters.add_command(label="Patch selection from source", command=self.filter_patch_selection)
 
         analysis = tk.Menu(menu, tearoff=False)
         menu.add_cascade(label="Analysis", menu=analysis)
@@ -341,6 +346,7 @@ class PhotoRedactorApp(tk.Tk):
             ("Ellipse Sel", "ellipse_select"),
             ("Lasso", "lasso"),
             ("Polygon", "polygon_lasso"),
+            ("Quick Sel", "quick_selection"),
             ("Magic Wand", "magic_wand"),
             ("Color Range", "color_range"),
             ("Crop", "crop"),
@@ -699,6 +705,10 @@ class PhotoRedactorApp(tk.Tk):
         elif tool == "color_range":
             mode = self.selection_mode_from_event(event)
             self.run_selection_command("Color range selection", lambda: self.doc.color_range_selection(self.doc.layer, point[0], point[1], int(self.tolerance.get()), mode))
+        elif tool == "quick_selection":
+            self._quick_points = [point]
+            self._quick_mode = self.selection_mode_from_event(event)
+            self.status_text("Quick selection brush")
         elif tool == "eyedropper":
             self.pick_color_from_document(point)
         elif tool == "text":
@@ -741,6 +751,9 @@ class PhotoRedactorApp(tk.Tk):
         elif tool == "lasso" and self.drag_start:
             self._lasso_points.append(point)
             self.draw_lasso()
+        elif tool == "quick_selection" and self.drag_start:
+            self._quick_points.append(point)
+            self.status_text(f"Quick selection points: {len(self._quick_points)}")
 
     def pointer_up(self, event) -> None:
         if self._panning:
@@ -776,6 +789,13 @@ class PhotoRedactorApp(tk.Tk):
             points = list(self._lasso_points)
             self.run_selection_command("Lasso selection", lambda: self.doc.set_polygon_selection(points, mode))
             self.clear_lasso_overlay()
+        elif tool == "quick_selection" and self._quick_points:
+            points = list(self._quick_points)
+            mode = self._quick_mode
+            radius = max(2, int(self.brush_size.get()))
+            tolerance = int(self.tolerance.get())
+            self.run_selection_command("Quick selection", lambda: self.doc.quick_selection_brush(self.doc.layer, points, radius, tolerance, mode))
+            self._quick_points.clear()
         self.drag_start = None
         self.last_point = None
 
@@ -1407,6 +1427,26 @@ class PhotoRedactorApp(tk.Tk):
         self.run_document_command("Toggle mask", self.doc.toggle_active_mask)
         self.refresh()
 
+    def set_mask_density(self) -> None:
+        layer = self.doc.layer
+        if layer.mask is None:
+            messagebox.showinfo("Mask density", "Active layer has no mask.")
+            return
+        value = simpledialog.askfloat("Mask density", "Density 0..1:", initialvalue=float(layer.mask_density), minvalue=0.0, maxvalue=1.0)
+        if value is not None:
+            self.run_document_command("Mask density", lambda: self.doc.set_active_mask_density(value))
+            self.refresh()
+
+    def set_mask_feather(self) -> None:
+        layer = self.doc.layer
+        if layer.mask is None:
+            messagebox.showinfo("Mask feather", "Active layer has no mask.")
+            return
+        value = simpledialog.askfloat("Mask feather", "Radius px:", initialvalue=float(layer.mask_feather), minvalue=0.0, maxvalue=500.0)
+        if value is not None:
+            self.run_document_command("Mask feather", lambda: self.doc.set_active_mask_feather(value))
+            self.refresh()
+
     def apply_layer_mask(self) -> None:
         self.run_document_command("Apply mask", self.doc.apply_active_mask)
         self.refresh()
@@ -1716,6 +1756,20 @@ class PhotoRedactorApp(tk.Tk):
         strength = simpledialog.askfloat("Red-eye reduction", "Strength 0..1:", initialvalue=0.85, minvalue=0.0, maxvalue=1.0)
         if strength is not None:
             self.apply_to_layer("red-eye reduction", lambda arr: reduce_red_eye(arr, selection_mask, strength))
+
+    def filter_patch_selection(self) -> None:
+        if self.doc.selection_mask is None:
+            messagebox.showinfo("Patch selection", "Create a selection first.")
+            return
+        x = simpledialog.askinteger("Patch selection", "Source X top-left:", initialvalue=0, minvalue=-100000, maxvalue=100000)
+        if x is None:
+            return
+        y = simpledialog.askinteger("Patch selection", "Source Y top-left:", initialvalue=0, minvalue=-100000, maxvalue=100000)
+        if y is None:
+            return
+        heal = messagebox.askyesno("Patch selection", "Blend source color into the destination?")
+        self.run_document_command("Patch selection", lambda: self.doc.patch_active_selection(x, y, heal))
+        self.refresh()
 
     def set_view_channel(self) -> None:
         self.invalidate_view()

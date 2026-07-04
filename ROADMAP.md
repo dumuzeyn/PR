@@ -8,11 +8,11 @@
 - Navigation: zoom, fit to screen, pan with scrollbars.
 - Raster layers: create, duplicate, delete, reorder, visibility, opacity, merge, flatten.
 - Layer compositing: clipping masks, basic layer styles, opacity and blend modes.
-- Raster selections: rectangular, elliptical, freehand lasso, polygon lasso, magic wand, color range, single row/column, opaque pixels, select all, invert, feather, grow, shrink, saved alpha selections.
-- Raster layer masks: reveal all, hide all, from selection, paint on mask, invert, toggle, apply, delete.
+- Raster selections: rectangular, elliptical, freehand lasso, polygon lasso, quick selection brush, magic wand, color range, single row/column, opaque pixels, select all, invert, feather, grow, shrink, saved alpha selections.
+- Raster layer masks: reveal all, hide all, from selection, paint on mask, density, feather, invert, toggle, apply, delete.
 - Blend modes: Normal, Multiply, Screen, Overlay, Soft Light, Darken, Lighten, Difference, Color, Luminosity.
 - Tools: move, brush, eraser, fill, gradient, editable text, rectangular/elliptical/lasso/polygon selection, magic wand, color range, crop.
-- Local retouching: blur, sharpen, dodge, burn, clone stamp, healing brush, red-eye reduction and content-aware fill.
+- Local retouching: blur, sharpen, dodge, burn, clone stamp, healing brush, patch selection, red-eye reduction and content-aware fill.
 - Layer import: place embedded image and load several image files as layers.
 - Shape layers: editable rectangle, ellipse and line layers.
 - View helpers: grid overlay, numeric guides and channel preview for RGB/Red/Green/Blue/Alpha.
@@ -28,13 +28,13 @@
 
 ## Next milestones toward the full list
 
-1. Selection engine: quick selection, magnetic lasso and better edge refinement.
-2. Editable masks: density/feather controls, mask thumbnails and linked/unlinked mask movement.
+1. Selection engine: magnetic lasso, better quick-selection refinement and Refine Edge.
+2. Editable masks: mask thumbnails and linked/unlinked mask movement.
 3. Non-destructive editing: editable filter stack, adjustment-layer UI previews and clipping mask polish.
 4. Free Transform: transform handles, warp, perspective and selected-pixel transforms.
 5. Text engine: paragraph boxes, font picker, alignment, wrapping and text-on-path.
 6. Shapes and paths: Bezier editing, polygon/star/custom shapes and shape boolean operations.
-7. Retouching: patch tool, retouch presets and stronger edge-aware cleanup.
+7. Retouching: interactive patch tool, retouch presets and stronger edge-aware cleanup.
 8. Smart objects: re-editable transforms, embedded payload management and linked file updates.
 9. RAW/color management: ICC profiles, 16/32-bit channels, Lab/CMYK workflows and richer metadata editing.
 10. GPU/tiled rendering: tile cache, dirty-region recomposition, scratch disk, background save.

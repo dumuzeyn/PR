@@ -91,6 +91,7 @@ class Layer:
     mask: np.ndarray | None = None
     mask_enabled: bool = True
     mask_density: float = 1.0
+    mask_feather: float = 0.0
     blend_mode: str = "Normal"
     clipping: bool = False
     effects: dict[str, Any] = field(default_factory=dict)
@@ -112,6 +113,7 @@ class Layer:
             mask=None if self.mask is None else self.mask.copy(),
             mask_enabled=self.mask_enabled,
             mask_density=self.mask_density,
+            mask_feather=self.mask_feather,
             blend_mode=self.blend_mode,
             clipping=self.clipping,
             effects=json.loads(json.dumps(self.effects)),
@@ -190,6 +192,7 @@ class Document:
                     "mask": None if layer.mask is None else layer.mask.copy(),
                     "mask_enabled": layer.mask_enabled,
                     "mask_density": layer.mask_density,
+                    "mask_feather": layer.mask_feather,
                     "blend_mode": layer.blend_mode,
                     "clipping": layer.clipping,
                     "effects": json.loads(json.dumps(layer.effects)),
@@ -230,6 +233,7 @@ class Document:
                     mask=None if raw.get("mask") is None else raw["mask"].copy(),
                     mask_enabled=bool(raw.get("mask_enabled", True)),
                     mask_density=float(raw.get("mask_density", 1.0)),
+                    mask_feather=float(raw.get("mask_feather", 0.0)),
                     blend_mode=raw.get("blend_mode", "Normal"),
                     clipping=bool(raw.get("clipping", False)),
                     effects=raw.get("effects", {}),
@@ -265,6 +269,7 @@ class Document:
                     "mask": None if layer.mask is None else encode_png(np.dstack([layer.mask] * 4)),
                     "mask_enabled": layer.mask_enabled,
                     "mask_density": layer.mask_density,
+                    "mask_feather": layer.mask_feather,
                     "blend_mode": layer.blend_mode,
                     "clipping": layer.clipping,
                     "effects": layer.effects,
@@ -302,6 +307,7 @@ class Document:
                     mask=None if raw.get("mask") is None else decode_png(raw["mask"])[:, :, 0],
                     mask_enabled=bool(raw.get("mask_enabled", True)),
                     mask_density=float(raw.get("mask_density", 1.0)),
+                    mask_feather=float(raw.get("mask_feather", 0.0)),
                     blend_mode=raw.get("blend_mode", "Normal"),
                     clipping=bool(raw.get("clipping", False)),
                     effects=raw.get("effects", {}),
@@ -358,6 +364,7 @@ class Document:
                         "mask": f"masks/{i:04d}.png" if layer.mask is not None else None,
                         "mask_enabled": layer.mask_enabled,
                         "mask_density": layer.mask_density,
+                        "mask_feather": layer.mask_feather,
                         "blend_mode": layer.blend_mode,
                         "clipping": layer.clipping,
                         "effects": layer.effects,
@@ -413,6 +420,7 @@ class Document:
                         mask=None if raw.get("mask") is None else pil_to_rgba_array(Image.open(io.BytesIO(zf.read(raw["mask"]))))[:, :, 0],
                         mask_enabled=bool(raw.get("mask_enabled", True)),
                         mask_density=float(raw.get("mask_density", 1.0)),
+                        mask_feather=float(raw.get("mask_feather", 0.0)),
                         blend_mode=raw.get("blend_mode", "Normal"),
                         clipping=bool(raw.get("clipping", False)),
                         effects=raw.get("effects", {}),
@@ -440,7 +448,7 @@ class Document:
                 if layer.kind == "adjustment" and layer.adjustment is not None:
                     apply_adjustment_layer(out, layer)
                 else:
-                    alpha_mask = layer.mask if layer.mask_enabled else None
+                    alpha_mask = effective_layer_mask(layer) if layer.mask_enabled else None
                     if layer.clipping and previous_alpha is not None:
                         clipping_mask = document_alpha_to_layer_mask(previous_alpha, layer)
                         alpha_mask = clipping_mask if alpha_mask is None else np.minimum(alpha_mask, clipping_mask)
@@ -777,6 +785,35 @@ class Document:
         local = (diff <= int(tolerance)).astype(np.uint8) * 255
         self.apply_selection_mask(self._layer_mask_to_document(layer, local), mode)
 
+    def quick_selection_brush(self, layer: Layer, points: list[tuple[int, int]], radius: int, tolerance: int, mode: str = "replace") -> None:
+        local_union = np.zeros(layer.pixels.shape[:2], dtype=np.uint8)
+        radius = max(1, int(radius))
+        tolerance = max(0, int(tolerance))
+        for x, y in points:
+            lx, ly = int(x) - layer.x, int(y) - layer.y
+            if lx < 0 or ly < 0 or lx >= layer.pixels.shape[1] or ly >= layer.pixels.shape[0]:
+                continue
+            x1, y1 = max(0, lx - radius), max(0, ly - radius)
+            x2, y2 = min(layer.pixels.shape[1], lx + radius + 1), min(layer.pixels.shape[0], ly + radius + 1)
+            sample = layer.pixels[y1:y2, x1:x2]
+            opaque = sample[:, :, 3] > 0
+            if np.any(opaque):
+                seed = sample[:, :, :3][opaque].mean(axis=0)
+            else:
+                seed = layer.pixels[ly, lx, :3].astype(np.float32)
+            diff = np.abs(layer.pixels[:, :, :3].astype(np.float32) - seed).max(axis=2)
+            candidates = ((diff <= tolerance) & (layer.pixels[:, :, 3] > 0)).astype(np.uint8)
+            _, labels, _, _ = cv2.connectedComponentsWithStats(candidates, 4)
+            label = labels[ly, lx]
+            if label == 0 and candidates[ly, lx] == 0:
+                continue
+            component = (labels == label).astype(np.uint8) * 255
+            brush_gate = np.zeros_like(component)
+            cv2.circle(brush_gate, (lx, ly), radius * 3, 255, -1)
+            local_union = np.maximum(local_union, np.where(brush_gate > 0, component, 0).astype(np.uint8))
+        if np.any(local_union):
+            self.apply_selection_mask(self._layer_mask_to_document(layer, local_union), mode)
+
     def select_opaque_pixels(self, layer: Layer, mode: str = "replace") -> None:
         local = (layer.pixels[:, :, 3] > 0).astype(np.uint8) * 255
         self.apply_selection_mask(self._layer_mask_to_document(layer, local), mode)
@@ -899,6 +936,18 @@ class Document:
         if layer.mask is not None:
             layer.mask_enabled = not layer.mask_enabled
 
+    def set_active_mask_density(self, density: float) -> None:
+        layer = self.layer
+        if layer.mask is not None:
+            layer.mask_density = float(np.clip(density, 0.0, 1.0))
+            self.dirty = True
+
+    def set_active_mask_feather(self, radius: float) -> None:
+        layer = self.layer
+        if layer.mask is not None:
+            layer.mask_feather = max(0.0, float(radius))
+            self.dirty = True
+
     def delete_active_mask(self) -> None:
         self.layer.mask = None
 
@@ -906,9 +955,40 @@ class Document:
         layer = self.layer
         if layer.mask is None:
             return
-        alpha = (layer.mask.astype(np.float32) / 255.0 * layer.mask_density).clip(0, 1)
+        mask = effective_layer_mask(layer)
+        density = float(np.clip(layer.mask_density, 0.0, 1.0))
+        alpha = ((1.0 - density) + (mask.astype(np.float32) / 255.0) * density).clip(0, 1)
         layer.pixels[:, :, 3] = np.clip(layer.pixels[:, :, 3].astype(np.float32) * alpha, 0, 255).astype(np.uint8)
         layer.mask = None
+        layer.mask_feather = 0.0
+
+    def patch_active_selection(self, source_x: int, source_y: int, heal: bool = True) -> None:
+        layer = self.layer
+        if layer.locked:
+            return
+        selection = self.layer_selection_mask(layer)
+        if selection is None or not np.any(selection):
+            return
+        ys, xs = np.where(selection > 0)
+        x1, y1, x2, y2 = int(xs.min()), int(ys.min()), int(xs.max() + 1), int(ys.max() + 1)
+        w, h = x2 - x1, y2 - y1
+        sx1 = int(source_x) - layer.x
+        sy1 = int(source_y) - layer.y
+        sx2, sy2 = sx1 + w, sy1 + h
+        if sx1 < 0 or sy1 < 0 or sx2 > layer.pixels.shape[1] or sy2 > layer.pixels.shape[0]:
+            return
+        src = layer.pixels[sy1:sy2, sx1:sx2].astype(np.float32)
+        dst = layer.pixels[y1:y2, x1:x2].astype(np.float32)
+        mask = selection[y1:y2, x1:x2].astype(np.float32) / 255.0
+        edited = src.copy()
+        active = mask > 0
+        if heal and np.any(active):
+            src_mean = src[active, :3].mean(axis=0)
+            dst_mean = dst[active, :3].mean(axis=0)
+            edited[:, :, :3] = np.clip(src[:, :, :3] - src_mean + dst_mean, 0, 255)
+        mixed = edited * mask[:, :, None] + dst * (1.0 - mask[:, :, None])
+        layer.pixels[y1:y2, x1:x2] = np.clip(mixed, 0, 255).astype(np.uint8)
+        self.dirty = True
 
     def transform_active_layer(
         self,
@@ -1006,11 +1086,23 @@ def shifted_mask(mask: np.ndarray, old_width: int, old_height: int, new_width: i
     return out
 
 
+def effective_layer_mask(layer: Layer) -> np.ndarray | None:
+    if layer.mask is None:
+        return None
+    mask = layer.mask
+    radius = float(getattr(layer, "mask_feather", 0.0))
+    if radius <= 0:
+        return mask
+    k = max(3, int(round(radius)) * 2 + 1)
+    return cv2.GaussianBlur(mask, (k, k), radius).astype(np.uint8)
+
+
 def layer_alpha_canvas(document: Document, layer: Layer) -> np.ndarray:
     canvas = np.zeros((document.height, document.width), dtype=np.uint8)
     alpha = layer.pixels[:, :, 3].copy()
     if layer.mask is not None and layer.mask_enabled:
-        mask_alpha = ((1.0 - float(layer.mask_density)) + (layer.mask.astype(np.float32) / 255.0) * float(layer.mask_density)).clip(0, 1)
+        mask = effective_layer_mask(layer)
+        mask_alpha = ((1.0 - float(layer.mask_density)) + (mask.astype(np.float32) / 255.0) * float(layer.mask_density)).clip(0, 1)
         alpha = np.clip(alpha.astype(np.float32) * mask_alpha, 0, 255).astype(np.uint8)
     paste_mask(canvas, alpha, layer.x, layer.y)
     return canvas
@@ -1553,7 +1645,7 @@ def apply_adjustment_layer(out: np.ndarray, layer: Layer) -> None:
     alpha = np.full(out.shape[:2], float(layer.opacity), dtype=np.float32)
     if layer.mask is not None and layer.mask_enabled:
         mask_canvas = np.zeros(out.shape[:2], dtype=np.uint8)
-        paste_mask(mask_canvas, layer.mask, layer.x, layer.y)
+        paste_mask(mask_canvas, effective_layer_mask(layer), layer.x, layer.y)
         mask_alpha = ((1.0 - float(layer.mask_density)) + (mask_canvas.astype(np.float32) / 255.0) * float(layer.mask_density))
         alpha *= mask_alpha
     alpha = alpha[:, :, None].clip(0, 1)
