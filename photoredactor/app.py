@@ -25,6 +25,7 @@ from .core import (
     draw_mask_brush,
     draw_brush,
     flood_fill,
+    image_statistics,
     levels,
     local_retouch,
     rgba_array_to_pil,
@@ -44,7 +45,10 @@ class PhotoRedactorApp(tk.Tk):
         self.doc = Document.new()
         self.history = History()
         self.executor = ThreadPoolExecutor(max_workers=2)
-        self.recovery_path = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "PhotoRedactor" / "recovery.prdx"
+        self.app_data_dir = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "PhotoRedactor"
+        self.recovery_path = self.app_data_dir / "recovery.prdx"
+        self.settings_path = self.app_data_dir / "settings.json"
+        self.recent_files: list[str] = []
         self.action_recording = False
         self.recorded_actions: list[str] = []
         self.tool = tk.StringVar(value="brush")
@@ -88,14 +92,58 @@ class PhotoRedactorApp(tk.Tk):
         self._view_dirty = True
 
         self._build_ui()
+        self.load_settings()
+        self.refresh_recent_menu()
         self.refresh()
         self.after(500, self.check_recovery_file)
         self.schedule_autosave()
 
     def destroy(self) -> None:
         self.autosave_recovery()
+        self.save_settings()
         self.executor.shutdown(wait=False, cancel_futures=True)
         super().destroy()
+
+    def load_settings(self) -> None:
+        try:
+            if self.settings_path.exists():
+                data = json.loads(self.settings_path.read_text(encoding="utf-8"))
+                self.recent_files = [str(path) for path in data.get("recent_files", []) if Path(path).exists()]
+        except Exception:
+            self.recent_files = []
+
+    def save_settings(self) -> None:
+        try:
+            self.app_data_dir.mkdir(parents=True, exist_ok=True)
+            self.settings_path.write_text(json.dumps({"recent_files": self.recent_files[:12]}, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+
+    def add_recent_file(self, path: str) -> None:
+        resolved = str(Path(path))
+        self.recent_files = [item for item in self.recent_files if item.lower() != resolved.lower()]
+        self.recent_files.insert(0, resolved)
+        self.recent_files = self.recent_files[:12]
+        self.save_settings()
+        self.refresh_recent_menu()
+
+    def refresh_recent_menu(self) -> None:
+        if not hasattr(self, "recent_menu"):
+            return
+        self.recent_menu.delete(0, tk.END)
+        if not self.recent_files:
+            self.recent_menu.add_command(label="No recent files", state=tk.DISABLED)
+            return
+        for path in self.recent_files:
+            label = Path(path).name
+            self.recent_menu.add_command(label=label, command=lambda p=path: self.open_path(p))
+        self.recent_menu.add_separator()
+        self.recent_menu.add_command(label="Clear recent", command=self.clear_recent_files)
+
+    def clear_recent_files(self) -> None:
+        self.recent_files.clear()
+        self.save_settings()
+        self.refresh_recent_menu()
 
     def _build_ui(self) -> None:
         self._build_menu()
@@ -132,11 +180,15 @@ class PhotoRedactorApp(tk.Tk):
         file_menu = tk.Menu(menu, tearoff=False)
         menu.add_cascade(label="File", menu=file_menu)
         file_menu.add_command(label="New", command=self.new_document, accelerator="Ctrl+N")
+        file_menu.add_command(label="New from preset", command=self.new_from_preset)
         file_menu.add_command(label="Open image/project", command=self.open_file, accelerator="Ctrl+O")
+        self.recent_menu = tk.Menu(file_menu, tearoff=False)
+        file_menu.add_cascade(label="Open recent", menu=self.recent_menu)
         file_menu.add_separator()
         file_menu.add_command(label="Save project", command=self.save, accelerator="Ctrl+S")
         file_menu.add_command(label="Save project as", command=self.save_as_project)
         file_menu.add_command(label="Export image", command=self.export_image)
+        file_menu.add_command(label="Export layers", command=self.export_layers)
         file_menu.add_separator()
         file_menu.add_command(label="Open recovery", command=self.open_recovery)
         file_menu.add_command(label="Clear recovery", command=self.clear_recovery)
@@ -224,6 +276,12 @@ class PhotoRedactorApp(tk.Tk):
         filters.add_command(label="Sharpen", command=self.filter_sharpen)
         filters.add_command(label="Noise", command=self.filter_noise)
 
+        analysis = tk.Menu(menu, tearoff=False)
+        menu.add_cascade(label="Analysis", menu=analysis)
+        analysis.add_command(label="Image statistics", command=self.show_image_statistics)
+        analysis.add_command(label="Histogram", command=self.show_histogram)
+        analysis.add_command(label="Metadata / EXIF", command=self.show_metadata)
+
         actions = tk.Menu(menu, tearoff=False)
         menu.add_cascade(label="Actions", menu=actions)
         actions.add_command(label="Start recording", command=self.start_action_recording)
@@ -260,6 +318,7 @@ class PhotoRedactorApp(tk.Tk):
             ("Fill", "fill"),
             ("Gradient", "gradient"),
             ("Text", "text"),
+            ("Eyedrop", "eyedropper"),
             ("Rect Shape", "rect_shape"),
             ("Ellipse Shape", "ellipse_shape"),
             ("Line Shape", "line_shape"),
@@ -609,6 +668,8 @@ class PhotoRedactorApp(tk.Tk):
         elif tool == "color_range":
             mode = self.selection_mode_from_event(event)
             self.run_selection_command("Color range selection", lambda: self.doc.color_range_selection(self.doc.layer, point[0], point[1], int(self.tolerance.get()), mode))
+        elif tool == "eyedropper":
+            self.pick_color_from_document(point)
         elif tool == "text":
             text = simpledialog.askstring("Text", "Text:")
             if text:
@@ -985,13 +1046,47 @@ class PhotoRedactorApp(tk.Tk):
         self.selection_box = None
         self.refresh()
 
+    def new_from_preset(self) -> None:
+        presets = {
+            "photo": (1800, 1200, 300, (255, 255, 255, 255)),
+            "web": (1920, 1080, 72, (255, 255, 255, 255)),
+            "4k": (3840, 2160, 72, (0, 0, 0, 255)),
+            "mobile_story": (1080, 1920, 72, (255, 255, 255, 255)),
+            "icon": (1024, 1024, 72, (0, 0, 0, 0)),
+            "print_a4": (2480, 3508, 300, (255, 255, 255, 255)),
+        }
+        names = ", ".join(presets)
+        name = simpledialog.askstring("New preset", f"Preset name:\n{names}", initialvalue="web")
+        if not name:
+            return
+        key = name.strip().lower()
+        if key not in presets:
+            messagebox.showerror("New preset", "Unknown preset.")
+            return
+        width, height, dpi, background = presets[key]
+        self.doc = Document.new(width, height, background)
+        self.doc.dpi = dpi
+        self.doc.metadata = {"source": "preset", "preset": key}
+        self.history.clear()
+        self.selection_box = None
+        self.refresh()
+
     def open_file(self) -> None:
         path = filedialog.askopenfilename(filetypes=[("Supported", "*.prdx *.png *.jpg *.jpeg *.webp *.bmp *.tif *.tiff"), ("All", "*.*")])
         if not path:
             return
+        self.open_path(path)
+
+    def open_path(self, path: str) -> None:
+        if not Path(path).exists():
+            messagebox.showerror("Open", f"File not found:\n{path}")
+            self.recent_files = [item for item in self.recent_files if item.lower() != path.lower()]
+            self.refresh_recent_menu()
+            return
         self.doc = Document.open_project(path) if path.lower().endswith(".prdx") else Document.from_image(path)
         self.history.clear()
         self.selection_box = self.doc.selection_bounds()
+        self.add_recent_file(path)
         self.refresh()
 
     def save(self) -> None:
@@ -1015,6 +1110,7 @@ class PhotoRedactorApp(tk.Tk):
         def done(saved_path):
             self.doc.path = saved_path
             self.doc.dirty = False
+            self.add_recent_file(saved_path)
 
         self.run_background("Save project", worker, done)
 
@@ -1042,6 +1138,77 @@ class PhotoRedactorApp(tk.Tk):
         color = colorchooser.askcolor(title="Background")[0]
         if color:
             self.background = tuple(map(int, color)) + (255,)
+
+    def pick_color_from_document(self, point: tuple[int, int]) -> None:
+        x, y = point
+        if x < 0 or y < 0 or x >= self.doc.width or y >= self.doc.height:
+            return
+        rgba = self.doc.composite(False)[y, x]
+        self.foreground = tuple(int(v) for v in rgba)
+        self.status_text(f"Picked RGBA: {self.foreground}")
+
+    def show_image_statistics(self) -> None:
+        stats = image_statistics(self.doc.composite(False))
+        text = [
+            f"Size: {stats['width']} x {stats['height']}",
+            f"Opaque pixels: {stats['opaque_pixels']}",
+            f"Transparent pixels: {stats['transparent_pixels']}",
+            "",
+        ]
+        for name, values in stats["channels"].items():
+            text.append(f"{name}: min {values['min']:.2f}, max {values['max']:.2f}, mean {values['mean']:.2f}, std {values['std']:.2f}")
+        messagebox.showinfo("Image statistics", "\n".join(text))
+
+    def show_histogram(self) -> None:
+        stats = image_statistics(self.doc.composite(False))
+        lines = []
+        for channel, values in stats["histogram"].items():
+            lines.append(channel.upper())
+            peak = max(values) or 1
+            for i, value in enumerate(values):
+                start = i * 16
+                end = start + 15
+                bar = "#" * max(1, round(value / peak * 32)) if value else ""
+                lines.append(f"{start:03d}-{end:03d}: {bar} {value}")
+            lines.append("")
+        self.show_text_window("Histogram", "\n".join(lines))
+
+    def show_metadata(self) -> None:
+        text = json.dumps(self.doc.metadata or {}, ensure_ascii=False, indent=2)
+        self.show_text_window("Metadata / EXIF", text if text != "{}" else "No metadata.")
+
+    def show_text_window(self, title: str, text: str) -> None:
+        window = tk.Toplevel(self)
+        window.title(title)
+        window.geometry("720x520")
+        frame = ttk.Frame(window)
+        frame.pack(fill=tk.BOTH, expand=True)
+        area = tk.Text(frame, wrap=tk.WORD)
+        scroll = ttk.Scrollbar(frame, command=area.yview)
+        area.configure(yscrollcommand=scroll.set)
+        area.insert("1.0", text)
+        area.configure(state=tk.DISABLED)
+        area.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scroll.pack(side=tk.RIGHT, fill=tk.Y)
+
+    def export_layers(self) -> None:
+        dst = filedialog.askdirectory(title="Export layers folder")
+        if not dst:
+            return
+        snapshot = self.document_copy()
+
+        def worker():
+            out_dir = Path(dst)
+            out_dir.mkdir(parents=True, exist_ok=True)
+            count = 0
+            for i, layer in enumerate(snapshot.layers):
+                safe = "".join(ch if ch.isalnum() or ch in " ._-" else "_" for ch in layer.name).strip() or "Layer"
+                path = out_dir / f"{i:03d}_{safe}.png"
+                rgba_array_to_pil(layer.pixels).save(path)
+                count += 1
+            return count
+
+        self.run_background("Export layers", worker, lambda count: messagebox.showinfo("Export layers", f"Exported {count} layers."))
 
     def new_layer(self) -> None:
         self.run_document_command("New layer", lambda: self.doc.add_layer(f"Layer {len(self.doc.layers) + 1}"))

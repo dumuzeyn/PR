@@ -11,7 +11,7 @@ import zipfile
 
 import cv2
 import numpy as np
-from PIL import Image, ImageDraw, ImageFont
+from PIL import ExifTags, Image, ImageDraw, ImageFont
 
 
 _checker_cache: dict[tuple[int, int, int], np.ndarray] = {}
@@ -52,6 +52,31 @@ def encode_png(arr: np.ndarray) -> str:
 
 def decode_png(text: str) -> np.ndarray:
     return pil_to_rgba_array(Image.open(io.BytesIO(base64.b64decode(text))))
+
+
+def image_metadata(image: Image.Image, path: str | Path) -> dict[str, Any]:
+    metadata: dict[str, Any] = {
+        "source_path": str(path),
+        "format": image.format or Path(path).suffix.lstrip(".").upper(),
+        "mode": image.mode,
+        "size": [image.width, image.height],
+    }
+    if image.info.get("dpi"):
+        metadata["dpi"] = list(image.info["dpi"])
+    try:
+        exif = image.getexif()
+        if exif:
+            metadata["exif"] = {}
+            for key, value in exif.items():
+                name = ExifTags.TAGS.get(key, str(key))
+                if isinstance(value, bytes):
+                    value = value[:128].hex()
+                elif not isinstance(value, (str, int, float, bool, list, tuple)):
+                    value = str(value)
+                metadata["exif"][name] = value
+    except Exception:
+        metadata["exif_error"] = "Could not read EXIF"
+    return metadata
 
 
 @dataclass
@@ -111,10 +136,11 @@ class Document:
     dirty: bool = False
     selection_mask: np.ndarray | None = None
     saved_selections: dict[str, np.ndarray] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def new(cls, width: int = 1280, height: int = 900, background=(255, 255, 255, 255)) -> "Document":
-        doc = cls(width=width, height=height, background=background)
+        doc = cls(width=width, height=height, background=background, metadata={"source": "new document"})
         doc.layers.append(Layer("Background", blank_rgba(width, height, background)))
         return doc
 
@@ -123,7 +149,8 @@ class Document:
         image = Image.open(path)
         arr = pil_to_rgba_array(image)
         h, w = arr.shape[:2]
-        doc = cls(width=w, height=h, dpi=image.info.get("dpi", (300, 300))[0] if image.info.get("dpi") else 300)
+        dpi = image.info.get("dpi", (300, 300))[0] if image.info.get("dpi") else 300
+        doc = cls(width=w, height=h, dpi=dpi, metadata=image_metadata(image, path))
         doc.layers.append(Layer(Path(path).stem, arr))
         doc.path = str(path)
         return doc
@@ -150,6 +177,7 @@ class Document:
             "path": self.path,
             "selection_mask": None if self.selection_mask is None else self.selection_mask.copy(),
             "saved_selections": {name: mask.copy() for name, mask in self.saved_selections.items()},
+            "metadata": json.loads(json.dumps(self.metadata, ensure_ascii=False)),
             "layers": [
                 {
                     "id": layer.id,
@@ -184,6 +212,7 @@ class Document:
         self.background = tuple(data.get("background", (255, 255, 255, 255)))
         self.active_layer = int(data.get("active_layer", 0))
         self.path = data.get("path")
+        self.metadata = data.get("metadata", {})
         selection = data.get("selection_mask")
         self.selection_mask = None if selection is None else selection.copy()
         self.saved_selections = {name: mask.copy() for name, mask in data.get("saved_selections", {}).items()}
@@ -224,6 +253,7 @@ class Document:
             "active_layer": self.active_layer,
             "selection": None if self.selection_mask is None else encode_png(np.dstack([self.selection_mask] * 4)),
             "saved_selections": {name: encode_png(np.dstack([mask] * 4)) for name, mask in self.saved_selections.items()},
+            "metadata": self.metadata,
             "layers": [
                 {
                     "name": layer.name,
@@ -286,6 +316,7 @@ class Document:
         if data.get("selection"):
             doc.selection_mask = decode_png(data["selection"])[:, :, 0]
         doc.saved_selections = {name: decode_png(mask)[:, :, 0] for name, mask in data.get("saved_selections", {}).items()}
+        doc.metadata = data.get("metadata", {})
         return doc
 
     def save_project(self, path: str | Path) -> None:
@@ -299,6 +330,7 @@ class Document:
             "active_layer": self.active_layer,
             "selection": "selection.png" if self.selection_mask is not None else None,
             "saved_selections": {},
+            "metadata": self.metadata,
             "layers": [],
         }
         with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
@@ -364,6 +396,7 @@ class Document:
                 color_model=manifest.get("color_model", "RGBA"),
                 bit_depth=int(manifest.get("bit_depth", 8)),
                 background=tuple(manifest.get("background", [255, 255, 255, 255])),
+                metadata=manifest.get("metadata", {}),
             )
             doc.layers = []
             for raw in manifest["layers"]:
@@ -1376,6 +1409,36 @@ def add_noise(arr: np.ndarray, amount: float) -> np.ndarray:
     noise = np.random.normal(0, amount * 255, out[:, :, :3].shape)
     out[:, :, :3] = np.clip(out[:, :, :3] + noise, 0, 255)
     return out.astype(np.uint8)
+
+
+def image_statistics(arr: np.ndarray) -> dict[str, Any]:
+    rgb = arr[:, :, :3].astype(np.float32)
+    alpha = arr[:, :, 3]
+    stats: dict[str, Any] = {
+        "width": int(arr.shape[1]),
+        "height": int(arr.shape[0]),
+        "opaque_pixels": int(np.count_nonzero(alpha)),
+        "transparent_pixels": int(alpha.size - np.count_nonzero(alpha)),
+        "channels": {},
+        "histogram": {},
+    }
+    for index, name in enumerate(["red", "green", "blue"]):
+        channel = rgb[:, :, index]
+        stats["channels"][name] = {
+            "min": float(channel.min()),
+            "max": float(channel.max()),
+            "mean": float(channel.mean()),
+            "std": float(channel.std()),
+        }
+        hist, _ = np.histogram(channel, bins=16, range=(0, 255))
+        stats["histogram"][name] = [int(v) for v in hist]
+    stats["channels"]["alpha"] = {
+        "min": int(alpha.min()),
+        "max": int(alpha.max()),
+        "mean": float(alpha.mean()),
+        "std": float(alpha.std()),
+    }
+    return stats
 
 
 def apply_adjustment_layer(out: np.ndarray, layer: Layer) -> None:

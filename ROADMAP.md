@@ -3,6 +3,7 @@
 ## Implemented in this foundation
 
 - Local documents: new, open, save, save as, export.
+- Workflow: document presets, recent files, layer export and project metadata.
 - Document geometry: resize image, resize canvas, rotate, flip, crop.
 - Navigation: zoom, fit to screen, pan with scrollbars.
 - Raster layers: create, duplicate, delete, reorder, visibility, opacity, merge, flatten.
@@ -14,6 +15,7 @@
 - Local retouching: blur, sharpen, dodge, burn, clone stamp and healing brush.
 - Shape layers: editable rectangle, ellipse and line layers.
 - View helpers: grid overlay and numeric guides.
+- Analysis: eyedropper, metadata/EXIF viewer, histogram and image statistics.
 - Recovery and automation: autosave recovery file, manual recovery opening and action recording to JSON logs.
 - Adjustments: destructive brightness, contrast, saturation, levels, curves, grayscale, invert plus non-destructive adjustment layers for the same core set.
 - Filters: Gaussian blur, sharpen, noise.
@@ -33,7 +35,7 @@
 6. Shapes and paths: Bezier editing, polygon/star/custom shapes and shape boolean operations.
 7. Retouching: patch, red-eye, content-aware fill and source-management presets.
 8. Smart objects: embedded image payloads, re-editable transforms, linked file updates.
-9. RAW/color management: ICC profiles, 16/32-bit channels, Lab/CMYK workflows.
+9. RAW/color management: ICC profiles, 16/32-bit channels, Lab/CMYK workflows and richer metadata editing.
 10. GPU/tiled rendering: tile cache, dirty-region recomposition, scratch disk, background save.
 11. Plugin API and actions: replayable command actions, batch execution, external filters.
 12. Advanced AI/generative tools: subject/sky selection, content-aware fill, generative expand.
