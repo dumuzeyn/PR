@@ -91,6 +91,7 @@ class Layer:
     locked: bool = False
     mask: np.ndarray | None = None
     mask_enabled: bool = True
+    mask_linked: bool = True
     mask_density: float = 1.0
     mask_feather: float = 0.0
     blend_mode: str = "Normal"
@@ -115,6 +116,7 @@ class Layer:
             locked=self.locked,
             mask=None if self.mask is None else self.mask.copy(),
             mask_enabled=self.mask_enabled,
+            mask_linked=self.mask_linked,
             mask_density=self.mask_density,
             mask_feather=self.mask_feather,
             blend_mode=self.blend_mode,
@@ -196,6 +198,7 @@ class Document:
                     "locked": layer.locked,
                     "mask": None if layer.mask is None else layer.mask.copy(),
                     "mask_enabled": layer.mask_enabled,
+                    "mask_linked": layer.mask_linked,
                     "mask_density": layer.mask_density,
                     "mask_feather": layer.mask_feather,
                     "blend_mode": layer.blend_mode,
@@ -239,6 +242,7 @@ class Document:
                     locked=bool(raw.get("locked", False)),
                     mask=None if raw.get("mask") is None else raw["mask"].copy(),
                     mask_enabled=bool(raw.get("mask_enabled", True)),
+                    mask_linked=bool(raw.get("mask_linked", True)),
                     mask_density=float(raw.get("mask_density", 1.0)),
                     mask_feather=float(raw.get("mask_feather", 0.0)),
                     blend_mode=raw.get("blend_mode", "Normal"),
@@ -277,6 +281,7 @@ class Document:
                     "locked": layer.locked,
                     "mask": None if layer.mask is None else encode_png(np.dstack([layer.mask] * 4)),
                     "mask_enabled": layer.mask_enabled,
+                    "mask_linked": layer.mask_linked,
                     "mask_density": layer.mask_density,
                     "mask_feather": layer.mask_feather,
                     "blend_mode": layer.blend_mode,
@@ -317,6 +322,7 @@ class Document:
                     locked=bool(raw.get("locked", False)),
                     mask=None if raw.get("mask") is None else decode_png(raw["mask"])[:, :, 0],
                     mask_enabled=bool(raw.get("mask_enabled", True)),
+                    mask_linked=bool(raw.get("mask_linked", True)),
                     mask_density=float(raw.get("mask_density", 1.0)),
                     mask_feather=float(raw.get("mask_feather", 0.0)),
                     blend_mode=raw.get("blend_mode", "Normal"),
@@ -376,6 +382,7 @@ class Document:
                         "locked": layer.locked,
                         "mask": f"masks/{i:04d}.png" if layer.mask is not None else None,
                         "mask_enabled": layer.mask_enabled,
+                        "mask_linked": layer.mask_linked,
                         "mask_density": layer.mask_density,
                         "mask_feather": layer.mask_feather,
                         "blend_mode": layer.blend_mode,
@@ -434,6 +441,7 @@ class Document:
                         locked=bool(raw.get("locked", False)),
                         mask=None if raw.get("mask") is None else pil_to_rgba_array(Image.open(io.BytesIO(zf.read(raw["mask"]))))[:, :, 0],
                         mask_enabled=bool(raw.get("mask_enabled", True)),
+                        mask_linked=bool(raw.get("mask_linked", True)),
                         mask_density=float(raw.get("mask_density", 1.0)),
                         mask_feather=float(raw.get("mask_feather", 0.0)),
                         blend_mode=raw.get("blend_mode", "Normal"),
@@ -713,6 +721,20 @@ class Document:
     def duplicate_active_layer(self) -> None:
         self.layers.insert(self.active_layer + 1, self.layer.clone())
         self.active_layer += 1
+        self.dirty = True
+
+    def move_active_layer(self, dx: int, dy: int) -> None:
+        layer = self.layer
+        if layer.locked:
+            return
+        dx, dy = int(dx), int(dy)
+        if dx == 0 and dy == 0:
+            return
+        layer.x += dx
+        layer.y += dy
+        if layer.mask is not None and not layer.mask_linked:
+            h, w = layer.mask.shape[:2]
+            layer.mask = shifted_mask(layer.mask, w, h, w, h, -dx, -dy)
         self.dirty = True
 
     def merge_down(self) -> None:
@@ -1107,11 +1129,13 @@ class Document:
         layer = self.layer
         layer.mask = np.full(layer.pixels.shape[:2], 255, dtype=np.uint8)
         layer.mask_enabled = True
+        layer.mask_linked = True
 
     def add_hide_all_mask(self) -> None:
         layer = self.layer
         layer.mask = np.zeros(layer.pixels.shape[:2], dtype=np.uint8)
         layer.mask_enabled = True
+        layer.mask_linked = True
 
     def add_mask_from_selection(self) -> None:
         layer = self.layer
@@ -1121,6 +1145,7 @@ class Document:
         else:
             layer.mask = mask
             layer.mask_enabled = True
+            layer.mask_linked = True
 
     def invert_active_mask(self) -> None:
         layer = self.layer
@@ -1131,6 +1156,12 @@ class Document:
         layer = self.layer
         if layer.mask is not None:
             layer.mask_enabled = not layer.mask_enabled
+
+    def toggle_active_mask_link(self) -> None:
+        layer = self.layer
+        if layer.mask is not None:
+            layer.mask_linked = not layer.mask_linked
+            self.dirty = True
 
     def set_active_mask_density(self, density: float) -> None:
         layer = self.layer
@@ -1146,6 +1177,7 @@ class Document:
 
     def delete_active_mask(self) -> None:
         self.layer.mask = None
+        self.layer.mask_linked = True
 
     def apply_active_mask(self) -> None:
         layer = self.layer

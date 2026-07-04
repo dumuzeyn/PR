@@ -88,21 +88,29 @@ class LayerMoveCommand:
     layer_id: str
     before: tuple[int, int]
     after: tuple[int, int]
+    before_mask: np.ndarray | None = None
+    after_mask: np.ndarray | None = None
 
     @property
     def memory_bytes(self) -> int:
-        return 64
+        before_bytes = 0 if self.before_mask is None else int(self.before_mask.nbytes)
+        after_bytes = 0 if self.after_mask is None else int(self.after_mask.nbytes)
+        return 64 + before_bytes + after_bytes
 
     def undo(self, document: Document) -> None:
         layer = document.get_layer(self.layer_id)
         if layer is not None:
             layer.x, layer.y = self.before
+            if self.before_mask is not None:
+                layer.mask = self.before_mask.copy()
             document.dirty = True
 
     def redo(self, document: Document) -> None:
         layer = document.get_layer(self.layer_id)
         if layer is not None:
             layer.x, layer.y = self.after
+            if self.after_mask is not None:
+                layer.mask = self.after_mask.copy()
             document.dirty = True
 
 

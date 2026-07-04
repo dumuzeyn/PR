@@ -150,6 +150,7 @@ class PhotoRedactorApp(tk.Tk):
         self.last_point: tuple[int, int] | None = None
         self._move_layer_id: str | None = None
         self._move_start: tuple[int, int] | None = None
+        self._move_start_mask: np.ndarray | None = None
         self._stroke_layer_id: str | None = None
         self._stroke_kind = "pixels"
         self._stroke_rect: tuple[int, int, int, int] | None = None
@@ -357,6 +358,7 @@ class PhotoRedactorApp(tk.Tk):
         layer.add_command(label="Добавить черную маску", command=self.add_hide_all_mask)
         layer.add_command(label="Инвертировать маску", command=self.invert_layer_mask)
         layer.add_command(label="Включить/выключить маску", command=self.toggle_layer_mask)
+        layer.add_command(label="Связать/отвязать маску", command=self.toggle_layer_mask_link)
         layer.add_command(label="Плотность маски", command=self.set_mask_density)
         layer.add_command(label="Растушевка маски", command=self.set_mask_feather)
         layer.add_command(label="Применить маску", command=self.apply_layer_mask)
@@ -666,7 +668,7 @@ class PhotoRedactorApp(tk.Tk):
         self.layer_list.delete(0, tk.END)
         for i, layer in enumerate(reversed(self.doc.layers)):
             marker = "*" if layer.visible else "-"
-            mask_marker = "M" if layer.mask is not None and layer.mask_enabled else "m" if layer.mask is not None else " "
+            mask_marker = "U" if layer.mask is not None and not layer.mask_linked else "M" if layer.mask is not None and layer.mask_enabled else "m" if layer.mask is not None else " "
             lock_marker = "L" if layer.locked else " "
             kind_marker = "T" if layer.kind == "text" else "A" if layer.kind == "adjustment" else "S" if layer.kind == "shape" else "L" if layer.kind == "linked" else "E" if layer.kind == "embedded" else " "
             clip_marker = "C" if layer.clipping else " "
@@ -808,6 +810,7 @@ class PhotoRedactorApp(tk.Tk):
                 return
             self._move_layer_id = self.doc.layer.id
             self._move_start = (self.doc.layer.x, self.doc.layer.y)
+            self._move_start_mask = None if self.doc.layer.mask is None else self.doc.layer.mask.copy()
         elif tool == "polygon_lasso":
             self._polygon_points.append(point)
             self.draw_polygon_lasso()
@@ -830,10 +833,8 @@ class PhotoRedactorApp(tk.Tk):
             self.last_point = point
         elif tool == "move" and self.drag_start:
             dx, dy = point[0] - self.drag_start[0], point[1] - self.drag_start[1]
-            self.doc.layer.x += dx
-            self.doc.layer.y += dy
+            self.doc.move_active_layer(dx, dy)
             self.drag_start = point
-            self.doc.dirty = True
             self.request_canvas_refresh()
         elif tool in ["select", "ellipse_select", "crop", "gradient", "rect_shape", "ellipse_shape", "line_shape", "polygon_shape", "star_shape"]:
             self.draw_selection(self.drag_start, point)
@@ -975,9 +976,11 @@ class PhotoRedactorApp(tk.Tk):
             if layer is not None:
                 end = (layer.x, layer.y)
                 if end != self._move_start:
-                    self.push_command(LayerMoveCommand("Move layer", self._move_layer_id, self._move_start, end))
+                    after_mask = None if layer.mask is None else layer.mask.copy()
+                    self.push_command(LayerMoveCommand("Move layer", self._move_layer_id, self._move_start, end, self._move_start_mask, after_mask))
         self._move_layer_id = None
         self._move_start = None
+        self._move_start_mask = None
 
     def paint_at(self, point: tuple[int, int]) -> None:
         self.capture_stroke_before(self.brush_local_rect(point))
@@ -1772,6 +1775,13 @@ class PhotoRedactorApp(tk.Tk):
 
     def toggle_layer_mask(self) -> None:
         self.run_document_command("Toggle mask", self.doc.toggle_active_mask)
+        self.refresh()
+
+    def toggle_layer_mask_link(self) -> None:
+        if self.doc.layer.mask is None:
+            messagebox.showinfo("Маска слоя", "У активного слоя нет маски.")
+            return
+        self.run_document_command("Toggle mask link", self.doc.toggle_active_mask_link)
         self.refresh()
 
     def set_mask_density(self) -> None:
