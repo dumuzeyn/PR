@@ -10,7 +10,7 @@ This repository starts with a real working editor and an architecture intended t
 - document presets, recent files, embedded and linked image placement, linked layer update/relink, loading several files as layers and layer export
 - brush, eraser, fill, gradient, editable paragraph text layers, crop, rectangular/elliptical/freehand/magnetic/polygon selection, quick selection brush, magic wand, color range, move
 - layer opacity, visibility, duplication, merge, flatten
-- layer locks, raster layer masks, linked/unlinked mask movement, mask painting, mask density/feather controls and blend modes
+- layer locks, raster layer masks, mask thumbnails, linked/unlinked mask movement, mask painting, mask density/feather controls and blend modes
 - clipping masks and basic layer styles: stroke, drop shadow and outer glow
 - non-destructive per-layer filter stack with blur, sharpen, noise, median, edge and emboss filters
 - real selection mask with select all, invert, feather, smooth, grow, shrink, border/refine, opaque-pixel selection, single row/column selection, magnetic edge snapping and saved alpha selections

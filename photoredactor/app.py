@@ -173,6 +173,8 @@ class PhotoRedactorApp(tk.Tk):
         self._guide_doc_lines: list[tuple[str, int]] = []
         self._overlay_ids: list[int] = []
         self._preview_image: ImageTk.PhotoImage | None = None
+        self._layer_thumb_image: ImageTk.PhotoImage | None = None
+        self._mask_thumb_image: ImageTk.PhotoImage | None = None
         self._canvas_image_id: int | None = None
         self._render_after_id: str | None = None
         self._last_render_time = 0.0
@@ -494,6 +496,18 @@ class PhotoRedactorApp(tk.Tk):
         ttk.Button(parent, text="Показать / скрыть", command=self.toggle_layer_visible).pack(fill=tk.X, padx=8, pady=(6, 2))
         ttk.Button(parent, text="Блокировка", command=self.toggle_layer_lock).pack(fill=tk.X, padx=8, pady=(0, 6))
         ttk.Separator(parent).pack(fill=tk.X, pady=8)
+        ttk.Label(parent, text="Миниатюры").pack(anchor=tk.W, padx=8, pady=(0, 4))
+        thumbs = ttk.Frame(parent)
+        thumbs.pack(fill=tk.X, padx=8, pady=(0, 8))
+        ttk.Label(thumbs, text="Слой").grid(row=0, column=0, sticky=tk.W)
+        ttk.Label(thumbs, text="Маска").grid(row=0, column=1, sticky=tk.W, padx=(10, 0))
+        self.layer_thumb = ttk.Label(thumbs)
+        self.layer_thumb.grid(row=1, column=0, sticky=tk.W)
+        self.mask_thumb = ttk.Label(thumbs)
+        self.mask_thumb.grid(row=1, column=1, sticky=tk.W, padx=(10, 0))
+        ToolTip(self.layer_thumb, "Миниатюра пикселей активного слоя.")
+        ToolTip(self.mask_thumb, "Миниатюра маски активного слоя. Белое показывает видимые области, черное скрытые.")
+        ttk.Separator(parent).pack(fill=tk.X, pady=8)
         self.info = ttk.Label(parent, text="", justify=tk.LEFT)
         self.info.pack(anchor=tk.W, padx=8)
 
@@ -679,6 +693,34 @@ class PhotoRedactorApp(tk.Tk):
         self.layer_list.selection_set(len(self.doc.layers) - 1 - self.doc.active_layer)
         self.layer_opacity.set(self.doc.layer.opacity)
         self.blend_mode.set(self.doc.layer.blend_mode)
+        self.refresh_layer_previews()
+
+    def refresh_layer_previews(self) -> None:
+        layer = self.doc.layer
+        self._layer_thumb_image = ImageTk.PhotoImage(self.make_layer_thumbnail(layer.pixels))
+        self.layer_thumb.configure(image=self._layer_thumb_image)
+        self._mask_thumb_image = ImageTk.PhotoImage(self.make_mask_thumbnail(layer.mask))
+        self.mask_thumb.configure(image=self._mask_thumb_image)
+
+    def make_layer_thumbnail(self, pixels: np.ndarray, size: int = 64) -> Image.Image:
+        image = rgba_array_to_pil(pixels)
+        image.thumbnail((size, size), Image.Resampling.LANCZOS)
+        canvas = Image.new("RGBA", (size, size), (44, 46, 52, 255))
+        x = (size - image.width) // 2
+        y = (size - image.height) // 2
+        canvas.alpha_composite(image, (x, y))
+        return canvas
+
+    def make_mask_thumbnail(self, mask: np.ndarray | None, size: int = 64) -> Image.Image:
+        if mask is None:
+            return Image.new("RGBA", (size, size), (72, 74, 82, 255))
+        image = Image.fromarray(mask.astype(np.uint8), "L")
+        image.thumbnail((size, size), Image.Resampling.NEAREST)
+        canvas = Image.new("L", (size, size), 72)
+        x = (size - image.width) // 2
+        y = (size - image.height) // 2
+        canvas.paste(image, (x, y))
+        return Image.merge("RGBA", (canvas, canvas, canvas, Image.new("L", (size, size), 255)))
 
     def status_text(self, text: str) -> None:
         if hasattr(self, "status"):
