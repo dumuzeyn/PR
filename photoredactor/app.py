@@ -28,8 +28,10 @@ from .core import (
     draw_brush,
     flood_fill,
     image_statistics,
+    effective_layer_mask,
     levels,
     local_retouch,
+    paste_mask,
     rgba_array_to_pil,
     reduce_red_eye,
     union_rect,
@@ -145,6 +147,7 @@ class PhotoRedactorApp(tk.Tk):
         self.grid_visible = tk.BooleanVar(value=False)
         self.grid_spacing = tk.IntVar(value=64)
         self.view_channel = tk.StringVar(value="RGB")
+        self.mask_preview = tk.StringVar(value="Обычный")
         self.foreground = (30, 120, 255, 255)
         self.background = (255, 255, 255, 255)
         self.drag_start: tuple[int, int] | None = None
@@ -413,6 +416,10 @@ class PhotoRedactorApp(tk.Tk):
         view.add_cascade(label="Канал", menu=channel)
         for label, name in [("RGB", "RGB"), ("Красный", "Red"), ("Зеленый", "Green"), ("Синий", "Blue"), ("Альфа", "Alpha")]:
             channel.add_radiobutton(label=label, value=name, variable=self.view_channel, command=self.set_view_channel)
+        mask_view = tk.Menu(view, tearoff=False)
+        view.add_cascade(label="Просмотр маски", menu=mask_view)
+        for label in ["Обычный", "Красное перекрытие", "Черно-белая маска"]:
+            mask_view.add_radiobutton(label=label, value=label, variable=self.mask_preview, command=self.set_mask_preview)
         view.add_separator()
         view.add_checkbutton(label="Сетка", variable=self.grid_visible, command=self.refresh_canvas)
         view.add_command(label="Шаг сетки", command=self.set_grid_spacing)
@@ -509,6 +516,11 @@ class PhotoRedactorApp(tk.Tk):
         self.mask_thumb.grid(row=1, column=1, sticky=tk.W, padx=(10, 0))
         ToolTip(self.layer_thumb, "Миниатюра пикселей активного слоя.")
         ToolTip(self.mask_thumb, "Миниатюра маски активного слоя. Белое показывает видимые области, черное скрытые.")
+        ttk.Label(parent, text="Просмотр маски").pack(anchor=tk.W, padx=8)
+        self.mask_preview_box = ttk.Combobox(parent, textvariable=self.mask_preview, values=["Обычный", "Красное перекрытие", "Черно-белая маска"], state="readonly")
+        self.mask_preview_box.pack(fill=tk.X, padx=8, pady=(0, 6))
+        self.mask_preview_box.bind("<<ComboboxSelected>>", lambda _event: self.set_mask_preview())
+        ToolTip(self.mask_preview_box, "Показывает активную маску поверх холста или как черно-белый канал без изменения документа.")
         ttk.Separator(parent).pack(fill=tk.X, pady=8)
         self.info = ttk.Label(parent, text="", justify=tk.LEFT)
         self.info.pack(anchor=tk.W, padx=8)
@@ -627,6 +639,7 @@ class PhotoRedactorApp(tk.Tk):
             self._composite_cache = self.doc.composite(checker=True)
             self._composite_dirty = False
         display = self._channel_display(self._composite_cache)
+        display = self._mask_preview_display(display)
         image = rgba_array_to_pil(display)
         scale = self.zoom.get()
         if scale != 1.0:
@@ -658,6 +671,37 @@ class PhotoRedactorApp(tk.Tk):
             gray = source[:, :, index]
         out[:, :, :3] = gray[:, :, None]
         return out
+
+    def _mask_preview_display(self, display: np.ndarray) -> np.ndarray:
+        mode = self.mask_preview.get() if hasattr(self, "mask_preview") else "Обычный"
+        if mode == "Обычный":
+            return display
+        layer = self.doc.layer
+        if layer.mask is None:
+            return display
+        mask_canvas = np.zeros((self.doc.height, self.doc.width), dtype=np.uint8)
+        active_canvas = np.zeros((self.doc.height, self.doc.width), dtype=np.uint8)
+        effective = effective_layer_mask(layer) if layer.mask_enabled else layer.mask
+        paste_mask(mask_canvas, effective, layer.x, layer.y)
+        paste_mask(active_canvas, np.full(layer.mask.shape, 255, dtype=np.uint8), layer.x, layer.y)
+        if mode == "Черно-белая маска":
+            gray = np.where(active_canvas > 0, mask_canvas, 72).astype(np.uint8)
+            out = np.zeros((self.doc.height, self.doc.width, 4), dtype=np.uint8)
+            out[:, :, :3] = gray[:, :, None]
+            out[:, :, 3] = 255
+            return out
+        if mode == "Красное перекрытие":
+            out = display.copy()
+            hidden = ((255 - mask_canvas).astype(np.float32) / 255.0) * (active_canvas > 0)
+            alpha = (hidden * 0.58)[:, :, None]
+            red = np.zeros_like(out[:, :, :3])
+            red[:, :, 0] = 255
+            red[:, :, 1] = 36
+            red[:, :, 2] = 68
+            out[:, :, :3] = np.clip(out[:, :, :3].astype(np.float32) * (1.0 - alpha) + red.astype(np.float32) * alpha, 0, 255).astype(np.uint8)
+            out[:, :, 3] = 255
+            return out
+        return display
 
     def request_canvas_refresh(self) -> None:
         self.invalidate_pixels()
@@ -2240,6 +2284,10 @@ class PhotoRedactorApp(tk.Tk):
         self.refresh()
 
     def set_view_channel(self) -> None:
+        self.invalidate_view()
+        self.refresh_canvas()
+
+    def set_mask_preview(self) -> None:
         self.invalidate_view()
         self.refresh_canvas()
 
