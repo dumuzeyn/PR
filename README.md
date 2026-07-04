@@ -7,7 +7,7 @@ This repository starts with a real working editor and an architecture intended t
 - multi-layer raster documents
 - custom project format (`.prdx`)
 - PNG/JPEG/WebP/BMP/TIFF import and export
-- document presets, recent files, embedded image placement, loading several files as layers and layer export
+- document presets, recent files, embedded and linked image placement, linked layer update/relink, loading several files as layers and layer export
 - brush, eraser, fill, gradient, editable paragraph text layers, crop, rectangular/elliptical/freehand/polygon selection, quick selection brush, magic wand, color range, move
 - layer opacity, visibility, duplication, merge, flatten
 - layer locks, raster layer masks, mask painting, mask density/feather controls and blend modes

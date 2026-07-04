@@ -101,6 +101,7 @@ class Layer:
     text_data: dict[str, Any] | None = None
     shape_data: dict[str, Any] | None = None
     adjustment: dict[str, Any] | None = None
+    smart_data: dict[str, Any] | None = None
     id: str = field(default_factory=lambda: uuid.uuid4().hex)
 
     def clone(self) -> "Layer":
@@ -124,6 +125,7 @@ class Layer:
             text_data=None if self.text_data is None else dict(self.text_data),
             shape_data=None if self.shape_data is None else dict(self.shape_data),
             adjustment=None if self.adjustment is None else dict(self.adjustment),
+            smart_data=None if self.smart_data is None else json.loads(json.dumps(self.smart_data, ensure_ascii=False)),
         )
 
 
@@ -204,6 +206,7 @@ class Document:
                     "text_data": None if layer.text_data is None else dict(layer.text_data),
                     "shape_data": None if layer.shape_data is None else dict(layer.shape_data),
                     "adjustment": None if layer.adjustment is None else dict(layer.adjustment),
+                    "smart_data": None if layer.smart_data is None else json.loads(json.dumps(layer.smart_data, ensure_ascii=False)),
                     "pixels": layer.pixels.copy(),
                 }
                 for layer in self.layers
@@ -246,6 +249,7 @@ class Document:
                     text_data=raw.get("text_data"),
                     shape_data=raw.get("shape_data"),
                     adjustment=raw.get("adjustment"),
+                    smart_data=raw.get("smart_data"),
                     id=raw.get("id", uuid.uuid4().hex),
                 )
             )
@@ -283,6 +287,7 @@ class Document:
                     "text_data": layer.text_data,
                     "shape_data": layer.shape_data,
                     "adjustment": layer.adjustment,
+                    "smart_data": layer.smart_data,
                     "pixels": encode_png(layer.pixels),
                 }
                 for layer in self.layers
@@ -322,6 +327,7 @@ class Document:
                     text_data=raw.get("text_data"),
                     shape_data=raw.get("shape_data"),
                     adjustment=raw.get("adjustment"),
+                    smart_data=raw.get("smart_data"),
                     id=raw.get("id", uuid.uuid4().hex),
                 )
             )
@@ -380,6 +386,7 @@ class Document:
                         "text_data": layer.text_data,
                         "shape_data": layer.shape_data,
                         "adjustment": layer.adjustment,
+                        "smart_data": layer.smart_data,
                         "pixels": layer_path,
                     }
                 )
@@ -437,6 +444,7 @@ class Document:
                         text_data=raw.get("text_data"),
                         shape_data=raw.get("shape_data"),
                         adjustment=raw.get("adjustment"),
+                        smart_data=raw.get("smart_data"),
                         id=raw.get("id", uuid.uuid4().hex),
                     )
                 )
@@ -486,23 +494,64 @@ class Document:
         self.active_layer = len(self.layers) - 1
         self.dirty = True
 
-    def place_image(self, path: str | Path) -> None:
+    def place_image(self, path: str | Path, linked: bool = False) -> None:
         image = Image.open(path)
         pixels = pil_to_rgba_array(image)
         h, w = pixels.shape[:2]
+        source_path = str(Path(path).resolve())
         layer = Layer(
             Path(path).stem,
             pixels,
             x=(self.width - w) // 2,
             y=(self.height - h) // 2,
-            kind="embedded",
+            kind="linked" if linked else "embedded",
+            smart_data={
+                "linked": bool(linked),
+                "source_path": source_path,
+                "original_size": [w, h],
+            },
         )
         self.layers.append(layer)
         self.active_layer = len(self.layers) - 1
         embedded = list(self.metadata.get("embedded_images", []))
-        embedded.append({"name": layer.name, "source_path": str(path), "size": [w, h]})
+        embedded.append({"name": layer.name, "source_path": source_path, "size": [w, h], "linked": bool(linked)})
         self.metadata["embedded_images"] = embedded
         self.dirty = True
+
+    def update_linked_layer(self) -> bool:
+        layer = self.layer
+        smart_data = layer.smart_data or {}
+        source_path = smart_data.get("source_path")
+        if not source_path or not Path(source_path).exists():
+            return False
+        image = Image.open(source_path)
+        pixels = pil_to_rgba_array(image)
+        source_h, source_w = pixels.shape[:2]
+        target_h, target_w = layer.pixels.shape[:2]
+        if (source_w, source_h) != (target_w, target_h):
+            pixels = cv2.resize(pixels, (target_w, target_h), interpolation=cv2.INTER_CUBIC)
+        layer.pixels = pixels
+        layer.kind = "linked"
+        layer.smart_data = {
+            **smart_data,
+            "linked": True,
+            "source_path": str(Path(source_path).resolve()),
+            "original_size": [source_w, source_h],
+        }
+        self.dirty = True
+        return True
+
+    def relink_active_layer(self, path: str | Path) -> bool:
+        if not Path(path).exists():
+            return False
+        layer = self.layer
+        layer.kind = "linked"
+        layer.smart_data = {
+            **(layer.smart_data or {}),
+            "linked": True,
+            "source_path": str(Path(path).resolve()),
+        }
+        return self.update_linked_layer()
 
     def add_text_layer(
         self,

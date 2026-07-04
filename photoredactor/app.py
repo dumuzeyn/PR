@@ -191,6 +191,7 @@ class PhotoRedactorApp(tk.Tk):
         self.recent_menu = tk.Menu(file_menu, tearoff=False)
         file_menu.add_cascade(label="Open recent", menu=self.recent_menu)
         file_menu.add_command(label="Place embedded", command=self.place_embedded)
+        file_menu.add_command(label="Place linked", command=self.place_linked)
         file_menu.add_command(label="Load files as layers", command=self.load_files_as_layers)
         file_menu.add_separator()
         file_menu.add_command(label="Save project", command=self.save, accelerator="Ctrl+S")
@@ -259,6 +260,8 @@ class PhotoRedactorApp(tk.Tk):
         layer.add_command(label="Move up", command=lambda: self.move_layer(1))
         layer.add_command(label="Move down", command=lambda: self.move_layer(-1))
         layer.add_command(label="Free transform", command=self.free_transform_layer)
+        layer.add_command(label="Update linked layer", command=self.update_linked_layer)
+        layer.add_command(label="Relink layer", command=self.relink_layer)
         layer.add_command(label="Toggle clipping mask", command=self.toggle_clipping_mask)
         layer.add_command(label="Layer styles", command=self.edit_layer_styles)
         layer.add_command(label="Layer filters", command=self.edit_layer_filters)
@@ -605,7 +608,7 @@ class PhotoRedactorApp(tk.Tk):
             marker = "*" if layer.visible else "-"
             mask_marker = "M" if layer.mask is not None and layer.mask_enabled else "m" if layer.mask is not None else " "
             lock_marker = "L" if layer.locked else " "
-            kind_marker = "T" if layer.kind == "text" else "A" if layer.kind == "adjustment" else "S" if layer.kind == "shape" else "E" if layer.kind == "embedded" else " "
+            kind_marker = "T" if layer.kind == "text" else "A" if layer.kind == "adjustment" else "S" if layer.kind == "shape" else "L" if layer.kind == "linked" else "E" if layer.kind == "embedded" else " "
             clip_marker = "C" if layer.clipping else " "
             fx_marker = "F" if layer.effects else " "
             filter_marker = "P" if layer.filters else " "
@@ -1222,6 +1225,34 @@ class PhotoRedactorApp(tk.Tk):
         if not path:
             return
         self.run_document_command("Place embedded", lambda: self.doc.place_image(path))
+        self.add_recent_file(path)
+        self.refresh()
+
+    def place_linked(self) -> None:
+        path = filedialog.askopenfilename(filetypes=[("Images", "*.png *.jpg *.jpeg *.webp *.bmp *.tif *.tiff"), ("All", "*.*")])
+        if not path:
+            return
+        self.run_document_command("Place linked", lambda: self.doc.place_image(path, linked=True))
+        self.add_recent_file(path)
+        self.refresh()
+
+    def update_linked_layer(self) -> None:
+        layer = self.doc.layer
+        source_path = (layer.smart_data or {}).get("source_path")
+        if layer.kind != "linked" or not source_path:
+            messagebox.showinfo("Linked layer", "The active layer is not linked to an external file.")
+            return
+        if not Path(source_path).exists():
+            messagebox.showerror("Linked layer", f"Linked source file not found:\n{source_path}")
+            return
+        self.run_document_command("Update linked layer", self.doc.update_linked_layer)
+        self.refresh()
+
+    def relink_layer(self) -> None:
+        path = filedialog.askopenfilename(filetypes=[("Images", "*.png *.jpg *.jpeg *.webp *.bmp *.tif *.tiff"), ("All", "*.*")])
+        if not path:
+            return
+        self.run_document_command("Relink layer", lambda: self.doc.relink_active_layer(path))
         self.add_recent_file(path)
         self.refresh()
 
