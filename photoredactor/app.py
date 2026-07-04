@@ -38,10 +38,91 @@ from .core import (
 from .history import DocumentStateCommand, History, LayerBlendModeCommand, LayerMoveCommand, LayerOpacityCommand, MaskPatchCommand, PixelPatchCommand, SelectionMaskCommand
 
 
+class ToolTip:
+    def __init__(self, widget: tk.Widget, text: str, delay: int = 450) -> None:
+        self.widget = widget
+        self.text = text
+        self.delay = delay
+        self._after_id: str | None = None
+        self._tip: tk.Toplevel | None = None
+        widget.bind("<Enter>", self.schedule, add="+")
+        widget.bind("<Leave>", self.hide, add="+")
+        widget.bind("<ButtonPress>", self.hide, add="+")
+
+    def schedule(self, _event=None) -> None:
+        self.cancel()
+        self._after_id = self.widget.after(self.delay, self.show)
+
+    def cancel(self) -> None:
+        if self._after_id is not None:
+            self.widget.after_cancel(self._after_id)
+            self._after_id = None
+
+    def show(self) -> None:
+        if self._tip is not None:
+            return
+        x = self.widget.winfo_rootx() + self.widget.winfo_width() + 10
+        y = self.widget.winfo_rooty()
+        self._tip = tk.Toplevel(self.widget)
+        self._tip.wm_overrideredirect(True)
+        self._tip.wm_geometry(f"+{x}+{y}")
+        label = tk.Label(
+            self._tip,
+            text=self.text,
+            justify=tk.LEFT,
+            background="#fff7d6",
+            foreground="#1f2328",
+            relief=tk.SOLID,
+            borderwidth=1,
+            padx=8,
+            pady=5,
+            wraplength=280,
+        )
+        label.pack()
+
+    def hide(self, _event=None) -> None:
+        self.cancel()
+        if self._tip is not None:
+            self._tip.destroy()
+            self._tip = None
+
+
+TOOL_DEFINITIONS = [
+    ("Рука", "hand", "Перемещает холст по экрану без изменения изображения."),
+    ("Перемещение", "move", "Двигает активный слой мышью."),
+    ("Кисть", "brush", "Рисует выбранным передним цветом по пикселям или маске."),
+    ("Ластик", "eraser", "Стирает пиксели слоя или закрашивает маску черным."),
+    ("Размытие", "blur_tool", "Локально смягчает участок активного слоя."),
+    ("Резкость", "sharpen_tool", "Локально усиливает контраст деталей."),
+    ("Осветлитель", "dodge", "Осветляет область под кистью."),
+    ("Затемнитель", "burn", "Затемняет область под кистью."),
+    ("Штамп", "clone", "Копирует пиксели из источника. Alt+клик задает источник."),
+    ("Лечение", "healing", "Копирует источник и подгоняет цвет под место назначения."),
+    ("Заливка", "fill", "Заполняет связанную область выбранным цветом."),
+    ("Градиент", "gradient", "Растягивает переход от переднего цвета к фоновому."),
+    ("Текст", "text", "Создает редактируемый текстовый слой."),
+    ("Пипетка", "eyedropper", "Берет цвет из изображения в передний цвет."),
+    ("Прямоуг. фигура", "rect_shape", "Создает редактируемый прямоугольник."),
+    ("Эллипс", "ellipse_shape", "Создает редактируемый эллипс."),
+    ("Линия", "line_shape", "Создает редактируемую линию."),
+    ("Многоугольник", "polygon_shape", "Создает редактируемый многоугольник."),
+    ("Звезда", "star_shape", "Создает редактируемую звезду."),
+    ("Прямоуг. выделение", "select", "Выделяет прямоугольную область."),
+    ("Эллипс выделение", "ellipse_select", "Выделяет овальную область."),
+    ("Лассо", "lasso", "Рисует свободный контур выделения от руки."),
+    ("Магнитное лассо", "magnetic_lasso", "Привязывает контур выделения к ближайшим сильным краям."),
+    ("Полигон", "polygon_lasso", "Строит выделение кликами по вершинам. Двойной клик завершает."),
+    ("Быстрое выделение", "quick_selection", "Добавляет похожие соседние области кистью."),
+    ("Волшебная палочка", "magic_wand", "Выделяет связанную область похожего цвета."),
+    ("Цветовой диапазон", "color_range", "Выделяет похожий цвет по всему активному слою."),
+    ("Кадрирование", "crop", "Задает область обрезки документа."),
+]
+
+
 class PhotoRedactorApp(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
-        self.title("PhotoRedactor")
+        self.title("PhotoRedactor - редактор изображений")
         self.geometry("1440x920")
         self.minsize(1000, 640)
 
@@ -139,13 +220,13 @@ class PhotoRedactorApp(tk.Tk):
             return
         self.recent_menu.delete(0, tk.END)
         if not self.recent_files:
-            self.recent_menu.add_command(label="No recent files", state=tk.DISABLED)
+            self.recent_menu.add_command(label="Нет недавних файлов", state=tk.DISABLED)
             return
         for path in self.recent_files:
             label = Path(path).name
             self.recent_menu.add_command(label=label, command=lambda p=path: self.open_path(p))
         self.recent_menu.add_separator()
-        self.recent_menu.add_command(label="Clear recent", command=self.clear_recent_files)
+        self.recent_menu.add_command(label="Очистить список", command=self.clear_recent_files)
 
     def clear_recent_files(self) -> None:
         self.recent_files.clear()
@@ -185,198 +266,174 @@ class PhotoRedactorApp(tk.Tk):
         self.config(menu=menu)
 
         file_menu = tk.Menu(menu, tearoff=False)
-        menu.add_cascade(label="File", menu=file_menu)
-        file_menu.add_command(label="New", command=self.new_document, accelerator="Ctrl+N")
-        file_menu.add_command(label="New from preset", command=self.new_from_preset)
-        file_menu.add_command(label="Open image/project", command=self.open_file, accelerator="Ctrl+O")
+        menu.add_cascade(label="Файл", menu=file_menu)
+        file_menu.add_command(label="Новый", command=self.new_document, accelerator="Ctrl+N")
+        file_menu.add_command(label="Новый из пресета", command=self.new_from_preset)
+        file_menu.add_command(label="Открыть изображение/проект", command=self.open_file, accelerator="Ctrl+O")
         self.recent_menu = tk.Menu(file_menu, tearoff=False)
-        file_menu.add_cascade(label="Open recent", menu=self.recent_menu)
-        file_menu.add_command(label="Place embedded", command=self.place_embedded)
-        file_menu.add_command(label="Place linked", command=self.place_linked)
-        file_menu.add_command(label="Load files as layers", command=self.load_files_as_layers)
+        file_menu.add_cascade(label="Недавние файлы", menu=self.recent_menu)
+        file_menu.add_command(label="Поместить встроенное", command=self.place_embedded)
+        file_menu.add_command(label="Поместить связанное", command=self.place_linked)
+        file_menu.add_command(label="Загрузить файлы как слои", command=self.load_files_as_layers)
         file_menu.add_separator()
-        file_menu.add_command(label="Save project", command=self.save, accelerator="Ctrl+S")
-        file_menu.add_command(label="Save project as", command=self.save_as_project)
-        file_menu.add_command(label="Export image", command=self.export_image)
-        file_menu.add_command(label="Export layers", command=self.export_layers)
+        file_menu.add_command(label="Сохранить проект", command=self.save, accelerator="Ctrl+S")
+        file_menu.add_command(label="Сохранить проект как", command=self.save_as_project)
+        file_menu.add_command(label="Экспорт изображения", command=self.export_image)
+        file_menu.add_command(label="Экспорт слоев", command=self.export_layers)
         file_menu.add_separator()
-        file_menu.add_command(label="Open recovery", command=self.open_recovery)
-        file_menu.add_command(label="Clear recovery", command=self.clear_recovery)
+        file_menu.add_command(label="Открыть восстановление", command=self.open_recovery)
+        file_menu.add_command(label="Очистить восстановление", command=self.clear_recovery)
         file_menu.add_separator()
-        file_menu.add_command(label="Batch resize/convert", command=self.batch_process)
+        file_menu.add_command(label="Пакетный размер/конвертация", command=self.batch_process)
         file_menu.add_separator()
-        file_menu.add_command(label="Exit", command=self.destroy)
+        file_menu.add_command(label="Выход", command=self.destroy)
 
         edit = tk.Menu(menu, tearoff=False)
-        menu.add_cascade(label="Edit", menu=edit)
-        edit.add_command(label="Undo", command=self.undo, accelerator="Ctrl+Z")
-        edit.add_command(label="Redo", command=self.redo, accelerator="Ctrl+Y")
+        menu.add_cascade(label="Правка", menu=edit)
+        edit.add_command(label="Отменить", command=self.undo, accelerator="Ctrl+Z")
+        edit.add_command(label="Повторить", command=self.redo, accelerator="Ctrl+Y")
         edit.add_separator()
-        edit.add_command(label="Clear selection", command=self.clear_selection)
+        edit.add_command(label="Снять выделение", command=self.clear_selection)
 
         select = tk.Menu(menu, tearoff=False)
-        menu.add_cascade(label="Select", menu=select)
-        select.add_command(label="Select All", command=self.select_all)
-        select.add_command(label="Invert Selection", command=self.invert_selection)
-        select.add_command(label="Clear Selection", command=self.clear_selection)
+        menu.add_cascade(label="Выделение", menu=select)
+        select.add_command(label="Выделить все", command=self.select_all)
+        select.add_command(label="Инвертировать выделение", command=self.invert_selection)
+        select.add_command(label="Снять выделение", command=self.clear_selection)
         select.add_separator()
-        select.add_command(label="Select opaque pixels", command=self.select_opaque_pixels)
-        select.add_command(label="Single row", command=self.single_row_selection)
-        select.add_command(label="Single column", command=self.single_column_selection)
+        select.add_command(label="Выделить непрозрачные пиксели", command=self.select_opaque_pixels)
+        select.add_command(label="Одна строка", command=self.single_row_selection)
+        select.add_command(label="Один столбец", command=self.single_column_selection)
         select.add_separator()
-        select.add_command(label="Feather", command=self.feather_selection)
-        select.add_command(label="Smooth", command=self.smooth_selection)
-        select.add_command(label="Grow", command=self.grow_selection)
-        select.add_command(label="Shrink", command=self.shrink_selection)
-        select.add_command(label="Border", command=self.border_selection)
-        select.add_command(label="Refine selection", command=self.refine_selection)
+        select.add_command(label="Растушевка", command=self.feather_selection)
+        select.add_command(label="Сгладить", command=self.smooth_selection)
+        select.add_command(label="Расширить", command=self.grow_selection)
+        select.add_command(label="Сжать", command=self.shrink_selection)
+        select.add_command(label="Граница", command=self.border_selection)
+        select.add_command(label="Уточнить край", command=self.refine_selection)
         select.add_separator()
-        select.add_command(label="Save selection", command=self.save_selection)
-        select.add_command(label="Load selection", command=self.load_selection)
-        select.add_command(label="Delete saved selection", command=self.delete_saved_selection)
+        select.add_command(label="Сохранить выделение", command=self.save_selection)
+        select.add_command(label="Загрузить выделение", command=self.load_selection)
+        select.add_command(label="Удалить сохраненное выделение", command=self.delete_saved_selection)
 
         image = tk.Menu(menu, tearoff=False)
-        menu.add_cascade(label="Image", menu=image)
-        image.add_command(label="Resize image", command=self.resize_image)
-        image.add_command(label="Resize canvas", command=self.resize_canvas)
-        image.add_command(label="Crop to selection", command=self.crop_to_selection)
-        image.add_command(label="Trim transparent pixels", command=self.trim_transparent)
-        image.add_command(label="Reveal all layers", command=self.reveal_all)
+        menu.add_cascade(label="Изображение", menu=image)
+        image.add_command(label="Размер изображения", command=self.resize_image)
+        image.add_command(label="Размер холста", command=self.resize_canvas)
+        image.add_command(label="Обрезать по выделению", command=self.crop_to_selection)
+        image.add_command(label="Обрезать прозрачные пиксели", command=self.trim_transparent)
+        image.add_command(label="Показать все слои", command=self.reveal_all)
         image.add_separator()
-        image.add_command(label="Rotate 90 CW", command=lambda: self.rotate(90))
-        image.add_command(label="Rotate 180", command=lambda: self.rotate(180))
-        image.add_command(label="Flip horizontal", command=lambda: self.flip(horizontal=True))
-        image.add_command(label="Flip vertical", command=lambda: self.flip(horizontal=False))
+        image.add_command(label="Повернуть на 90 по часовой", command=lambda: self.rotate(90))
+        image.add_command(label="Повернуть на 180", command=lambda: self.rotate(180))
+        image.add_command(label="Отразить горизонтально", command=lambda: self.flip(horizontal=True))
+        image.add_command(label="Отразить вертикально", command=lambda: self.flip(horizontal=False))
 
         layer = tk.Menu(menu, tearoff=False)
-        menu.add_cascade(label="Layer", menu=layer)
-        layer.add_command(label="New layer", command=self.new_layer)
-        layer.add_command(label="Duplicate layer", command=self.duplicate_layer)
-        layer.add_command(label="Delete layer", command=self.delete_layer)
-        layer.add_command(label="Rename layer", command=self.rename_layer)
-        layer.add_command(label="Lock/unlock layer", command=self.toggle_layer_lock)
-        layer.add_command(label="Edit text layer", command=self.edit_text_layer)
-        layer.add_command(label="Edit shape layer", command=self.edit_shape_layer)
+        menu.add_cascade(label="Слой", menu=layer)
+        layer.add_command(label="Новый слой", command=self.new_layer)
+        layer.add_command(label="Дублировать слой", command=self.duplicate_layer)
+        layer.add_command(label="Удалить слой", command=self.delete_layer)
+        layer.add_command(label="Переименовать слой", command=self.rename_layer)
+        layer.add_command(label="Заблокировать/разблокировать", command=self.toggle_layer_lock)
+        layer.add_command(label="Редактировать текстовый слой", command=self.edit_text_layer)
+        layer.add_command(label="Редактировать фигуру", command=self.edit_shape_layer)
         layer.add_separator()
-        layer.add_command(label="Move up", command=lambda: self.move_layer(1))
-        layer.add_command(label="Move down", command=lambda: self.move_layer(-1))
-        layer.add_command(label="Free transform", command=self.free_transform_layer)
-        layer.add_command(label="Perspective transform", command=self.perspective_transform_layer)
-        layer.add_command(label="Update linked layer", command=self.update_linked_layer)
-        layer.add_command(label="Relink layer", command=self.relink_layer)
-        layer.add_command(label="Toggle clipping mask", command=self.toggle_clipping_mask)
-        layer.add_command(label="Layer styles", command=self.edit_layer_styles)
-        layer.add_command(label="Layer filters", command=self.edit_layer_filters)
-        layer.add_command(label="Clear layer filters", command=self.clear_layer_filters)
-        layer.add_command(label="Merge down", command=self.merge_down)
-        layer.add_command(label="Flatten image", command=self.flatten)
+        layer.add_command(label="Поднять выше", command=lambda: self.move_layer(1))
+        layer.add_command(label="Опустить ниже", command=lambda: self.move_layer(-1))
+        layer.add_command(label="Свободная трансформация", command=self.free_transform_layer)
+        layer.add_command(label="Перспективная трансформация", command=self.perspective_transform_layer)
+        layer.add_command(label="Обновить связанный слой", command=self.update_linked_layer)
+        layer.add_command(label="Перелинковать слой", command=self.relink_layer)
+        layer.add_command(label="Переключить обтравочную маску", command=self.toggle_clipping_mask)
+        layer.add_command(label="Стили слоя", command=self.edit_layer_styles)
+        layer.add_command(label="Фильтры слоя", command=self.edit_layer_filters)
+        layer.add_command(label="Очистить фильтры слоя", command=self.clear_layer_filters)
+        layer.add_command(label="Объединить с нижним", command=self.merge_down)
+        layer.add_command(label="Свести изображение", command=self.flatten)
         layer.add_separator()
-        layer.add_command(label="Add mask from selection", command=self.add_mask_from_selection)
-        layer.add_command(label="Add reveal-all mask", command=self.add_reveal_all_mask)
-        layer.add_command(label="Add hide-all mask", command=self.add_hide_all_mask)
-        layer.add_command(label="Invert mask", command=self.invert_layer_mask)
-        layer.add_command(label="Enable/disable mask", command=self.toggle_layer_mask)
-        layer.add_command(label="Mask density", command=self.set_mask_density)
-        layer.add_command(label="Mask feather", command=self.set_mask_feather)
-        layer.add_command(label="Apply mask", command=self.apply_layer_mask)
-        layer.add_command(label="Delete mask", command=self.delete_layer_mask)
+        layer.add_command(label="Добавить маску из выделения", command=self.add_mask_from_selection)
+        layer.add_command(label="Добавить белую маску", command=self.add_reveal_all_mask)
+        layer.add_command(label="Добавить черную маску", command=self.add_hide_all_mask)
+        layer.add_command(label="Инвертировать маску", command=self.invert_layer_mask)
+        layer.add_command(label="Включить/выключить маску", command=self.toggle_layer_mask)
+        layer.add_command(label="Плотность маски", command=self.set_mask_density)
+        layer.add_command(label="Растушевка маски", command=self.set_mask_feather)
+        layer.add_command(label="Применить маску", command=self.apply_layer_mask)
+        layer.add_command(label="Удалить маску", command=self.delete_layer_mask)
 
         adj = tk.Menu(menu, tearoff=False)
-        menu.add_cascade(label="Adjust", menu=adj)
-        adj.add_command(label="Brightness/Contrast", command=self.adjust_brightness_contrast)
-        adj.add_command(label="Saturation", command=self.adjust_saturation)
-        adj.add_command(label="Levels", command=self.adjust_levels)
-        adj.add_command(label="Curves", command=self.adjust_curves)
-        adj.add_command(label="Invert", command=self.adjust_invert)
-        adj.add_command(label="Grayscale", command=self.adjust_grayscale)
+        menu.add_cascade(label="Коррекция", menu=adj)
+        adj.add_command(label="Яркость/контраст", command=self.adjust_brightness_contrast)
+        adj.add_command(label="Насыщенность", command=self.adjust_saturation)
+        adj.add_command(label="Уровни", command=self.adjust_levels)
+        adj.add_command(label="Кривые", command=self.adjust_curves)
+        adj.add_command(label="Инверсия", command=self.adjust_invert)
+        adj.add_command(label="Черно-белое", command=self.adjust_grayscale)
         adj.add_separator()
-        adj.add_command(label="Add adjustment layer", command=self.add_adjustment_layer)
+        adj.add_command(label="Добавить корректирующий слой", command=self.add_adjustment_layer)
 
         filters = tk.Menu(menu, tearoff=False)
-        menu.add_cascade(label="Filter", menu=filters)
-        filters.add_command(label="Gaussian blur", command=self.filter_blur)
-        filters.add_command(label="Sharpen", command=self.filter_sharpen)
-        filters.add_command(label="Noise", command=self.filter_noise)
+        menu.add_cascade(label="Фильтр", menu=filters)
+        filters.add_command(label="Размытие по Гауссу", command=self.filter_blur)
+        filters.add_command(label="Резкость", command=self.filter_sharpen)
+        filters.add_command(label="Шум", command=self.filter_noise)
         filters.add_separator()
-        filters.add_command(label="Content-aware fill", command=self.filter_content_aware_fill)
-        filters.add_command(label="Red-eye reduction", command=self.filter_red_eye)
-        filters.add_command(label="Patch selection from source", command=self.filter_patch_selection)
+        filters.add_command(label="Заливка с учетом содержимого", command=self.filter_content_aware_fill)
+        filters.add_command(label="Удаление красных глаз", command=self.filter_red_eye)
+        filters.add_command(label="Заплатка из источника", command=self.filter_patch_selection)
 
         analysis = tk.Menu(menu, tearoff=False)
-        menu.add_cascade(label="Analysis", menu=analysis)
-        analysis.add_command(label="Image statistics", command=self.show_image_statistics)
-        analysis.add_command(label="Histogram", command=self.show_histogram)
-        analysis.add_command(label="Metadata / EXIF", command=self.show_metadata)
+        menu.add_cascade(label="Анализ", menu=analysis)
+        analysis.add_command(label="Статистика изображения", command=self.show_image_statistics)
+        analysis.add_command(label="Гистограмма", command=self.show_histogram)
+        analysis.add_command(label="Метаданные / EXIF", command=self.show_metadata)
 
         actions = tk.Menu(menu, tearoff=False)
-        menu.add_cascade(label="Actions", menu=actions)
-        actions.add_command(label="Start recording", command=self.start_action_recording)
-        actions.add_command(label="Stop recording", command=self.stop_action_recording)
-        actions.add_command(label="Save recording", command=self.save_action_recording)
-        actions.add_command(label="Clear recording", command=self.clear_action_recording)
+        menu.add_cascade(label="Действия", menu=actions)
+        actions.add_command(label="Начать запись", command=self.start_action_recording)
+        actions.add_command(label="Остановить запись", command=self.stop_action_recording)
+        actions.add_command(label="Сохранить запись", command=self.save_action_recording)
+        actions.add_command(label="Очистить запись", command=self.clear_action_recording)
 
         view = tk.Menu(menu, tearoff=False)
-        menu.add_cascade(label="View", menu=view)
-        view.add_command(label="Zoom in", command=lambda: self.set_zoom(self.zoom.get() * 1.25))
-        view.add_command(label="Zoom out", command=lambda: self.set_zoom(self.zoom.get() / 1.25))
+        menu.add_cascade(label="Вид", menu=view)
+        view.add_command(label="Увеличить", command=lambda: self.set_zoom(self.zoom.get() * 1.25))
+        view.add_command(label="Уменьшить", command=lambda: self.set_zoom(self.zoom.get() / 1.25))
         view.add_command(label="100%", command=lambda: self.set_zoom(1.0))
-        view.add_command(label="Fit", command=self.fit_to_screen)
+        view.add_command(label="По размеру окна", command=self.fit_to_screen)
         view.add_separator()
         channel = tk.Menu(view, tearoff=False)
-        view.add_cascade(label="Channel", menu=channel)
-        for name in ["RGB", "Red", "Green", "Blue", "Alpha"]:
-            channel.add_radiobutton(label=name, value=name, variable=self.view_channel, command=self.set_view_channel)
+        view.add_cascade(label="Канал", menu=channel)
+        for label, name in [("RGB", "RGB"), ("Красный", "Red"), ("Зеленый", "Green"), ("Синий", "Blue"), ("Альфа", "Alpha")]:
+            channel.add_radiobutton(label=label, value=name, variable=self.view_channel, command=self.set_view_channel)
         view.add_separator()
-        view.add_checkbutton(label="Grid", variable=self.grid_visible, command=self.refresh_canvas)
-        view.add_command(label="Grid spacing", command=self.set_grid_spacing)
-        view.add_command(label="Add horizontal guide", command=self.add_horizontal_guide)
-        view.add_command(label="Add vertical guide", command=self.add_vertical_guide)
-        view.add_command(label="Clear guides", command=self.clear_guides)
+        view.add_checkbutton(label="Сетка", variable=self.grid_visible, command=self.refresh_canvas)
+        view.add_command(label="Шаг сетки", command=self.set_grid_spacing)
+        view.add_command(label="Добавить горизонтальную направляющую", command=self.add_horizontal_guide)
+        view.add_command(label="Добавить вертикальную направляющую", command=self.add_vertical_guide)
+        view.add_command(label="Очистить направляющие", command=self.clear_guides)
 
     def _build_tools(self, parent: ttk.Frame) -> None:
-        ttk.Label(parent, text="Tools").pack(pady=(8, 4))
-        tools = [
-            ("Hand", "hand"),
-            ("Move", "move"),
-            ("Brush", "brush"),
-            ("Eraser", "eraser"),
-            ("Blur", "blur_tool"),
-            ("Sharpen", "sharpen_tool"),
-            ("Dodge", "dodge"),
-            ("Burn", "burn"),
-            ("Clone", "clone"),
-            ("Healing", "healing"),
-            ("Fill", "fill"),
-            ("Gradient", "gradient"),
-            ("Text", "text"),
-            ("Eyedrop", "eyedropper"),
-            ("Rect Shape", "rect_shape"),
-            ("Ellipse Shape", "ellipse_shape"),
-            ("Line Shape", "line_shape"),
-            ("Polygon Shape", "polygon_shape"),
-            ("Star Shape", "star_shape"),
-            ("Rect Sel", "select"),
-            ("Ellipse Sel", "ellipse_select"),
-            ("Lasso", "lasso"),
-            ("Magnetic", "magnetic_lasso"),
-            ("Polygon", "polygon_lasso"),
-            ("Quick Sel", "quick_selection"),
-            ("Magic Wand", "magic_wand"),
-            ("Color Range", "color_range"),
-            ("Crop", "crop"),
-        ]
-        for text, value in tools:
-            ttk.Radiobutton(parent, text=text, value=value, variable=self.tool).pack(fill=tk.X, padx=8, pady=2)
+        ttk.Label(parent, text="Инструменты").pack(pady=(8, 4))
+        for text, value, description in TOOL_DEFINITIONS:
+            button = ttk.Radiobutton(parent, text=text, value=value, variable=self.tool)
+            button.pack(fill=tk.X, padx=8, pady=2)
+            ToolTip(button, description)
         ttk.Separator(parent).pack(fill=tk.X, pady=8)
-        ttk.Button(parent, text="FG", command=self.pick_foreground).pack(fill=tk.X, padx=8, pady=2)
-        ttk.Button(parent, text="BG", command=self.pick_background).pack(fill=tk.X, padx=8, pady=2)
-        ttk.Label(parent, text="Size").pack()
+        fg_button = ttk.Button(parent, text="Передний цвет", command=self.pick_foreground)
+        fg_button.pack(fill=tk.X, padx=8, pady=2)
+        ToolTip(fg_button, "Цвет, которым рисуют кисть, заливка и фигуры.")
+        bg_button = ttk.Button(parent, text="Фон", command=self.pick_background)
+        bg_button.pack(fill=tk.X, padx=8, pady=2)
+        ToolTip(bg_button, "Второй цвет для градиента и фоновых операций.")
+        ttk.Label(parent, text="Размер").pack()
         ttk.Scale(parent, from_=1, to=220, variable=self.brush_size, orient=tk.HORIZONTAL).pack(fill=tk.X, padx=8)
-        ttk.Label(parent, text="Opacity").pack()
+        ttk.Label(parent, text="Непрозрачность").pack()
         ttk.Scale(parent, from_=0.01, to=1.0, variable=self.opacity, orient=tk.HORIZONTAL).pack(fill=tk.X, padx=8)
-        ttk.Label(parent, text="Paint target").pack()
+        ttk.Label(parent, text="Куда рисовать").pack()
         ttk.Combobox(parent, textvariable=self.paint_target, values=["pixels", "mask"], state="readonly").pack(fill=tk.X, padx=8)
-        ttk.Label(parent, text="Tolerance").pack()
+        ttk.Label(parent, text="Допуск").pack()
         ttk.Scale(parent, from_=0, to=128, variable=self.tolerance, orient=tk.HORIZONTAL).pack(fill=tk.X, padx=8)
 
     def _build_canvas(self, parent: ttk.Frame) -> None:
@@ -385,7 +442,7 @@ class PhotoRedactorApp(tk.Tk):
         ttk.Button(toolbar, text="-", command=lambda: self.set_zoom(self.zoom.get() / 1.25), width=3).pack(side=tk.LEFT, padx=2)
         ttk.Button(toolbar, text="+", command=lambda: self.set_zoom(self.zoom.get() * 1.25), width=3).pack(side=tk.LEFT, padx=2)
         ttk.Button(toolbar, text="100%", command=lambda: self.set_zoom(1.0)).pack(side=tk.LEFT, padx=2)
-        ttk.Button(toolbar, text="Fit", command=self.fit_to_screen).pack(side=tk.LEFT, padx=2)
+        ttk.Button(toolbar, text="Вписать", command=self.fit_to_screen).pack(side=tk.LEFT, padx=2)
         self.zoom_label = ttk.Label(toolbar, text="100%")
         self.zoom_label.pack(side=tk.LEFT, padx=10)
 
@@ -410,7 +467,7 @@ class PhotoRedactorApp(tk.Tk):
         self.canvas.bind("<MouseWheel>", self.mouse_wheel)
 
     def _build_panels(self, parent: ttk.Frame) -> None:
-        ttk.Label(parent, text="Layers").pack(anchor=tk.W, padx=8, pady=(8, 4))
+        ttk.Label(parent, text="Слои").pack(anchor=tk.W, padx=8, pady=(8, 4))
         self.layer_list = tk.Listbox(parent, height=16, exportselection=False)
         self.layer_list.pack(fill=tk.BOTH, expand=False, padx=8)
         self.layer_list.bind("<<ListboxSelect>>", self.layer_selected)
@@ -418,22 +475,22 @@ class PhotoRedactorApp(tk.Tk):
         buttons.pack(fill=tk.X, padx=8, pady=6)
         ttk.Button(buttons, text="+", width=3, command=self.new_layer).pack(side=tk.LEFT)
         ttk.Button(buttons, text="x", width=3, command=self.delete_layer).pack(side=tk.LEFT)
-        ttk.Button(buttons, text="Dup", command=self.duplicate_layer).pack(side=tk.LEFT)
-        ttk.Button(buttons, text="Up", command=lambda: self.move_layer(1)).pack(side=tk.LEFT)
-        ttk.Button(buttons, text="Dn", command=lambda: self.move_layer(-1)).pack(side=tk.LEFT)
-        ttk.Label(parent, text="Layer opacity").pack(anchor=tk.W, padx=8)
+        ttk.Button(buttons, text="Дубль", command=self.duplicate_layer).pack(side=tk.LEFT)
+        ttk.Button(buttons, text="Вверх", command=lambda: self.move_layer(1)).pack(side=tk.LEFT)
+        ttk.Button(buttons, text="Вниз", command=lambda: self.move_layer(-1)).pack(side=tk.LEFT)
+        ttk.Label(parent, text="Непрозрачность слоя").pack(anchor=tk.W, padx=8)
         self.layer_opacity = tk.DoubleVar(value=1.0)
         self.layer_opacity_scale = ttk.Scale(parent, from_=0.0, to=1.0, variable=self.layer_opacity, command=self.change_layer_opacity)
         self.layer_opacity_scale.pack(fill=tk.X, padx=8)
         self.layer_opacity_scale.bind("<ButtonPress-1>", self.begin_layer_opacity_change)
         self.layer_opacity_scale.bind("<ButtonRelease-1>", self.end_layer_opacity_change)
-        ttk.Label(parent, text="Blend mode").pack(anchor=tk.W, padx=8, pady=(6, 0))
+        ttk.Label(parent, text="Режим наложения").pack(anchor=tk.W, padx=8, pady=(6, 0))
         self.blend_mode = tk.StringVar(value="Normal")
         self.blend_mode_box = ttk.Combobox(parent, textvariable=self.blend_mode, values=BLEND_MODES, state="readonly")
         self.blend_mode_box.pack(fill=tk.X, padx=8)
         self.blend_mode_box.bind("<<ComboboxSelected>>", self.change_blend_mode)
-        ttk.Button(parent, text="Toggle visible", command=self.toggle_layer_visible).pack(fill=tk.X, padx=8, pady=(6, 2))
-        ttk.Button(parent, text="Lock / unlock", command=self.toggle_layer_lock).pack(fill=tk.X, padx=8, pady=(0, 6))
+        ttk.Button(parent, text="Показать / скрыть", command=self.toggle_layer_visible).pack(fill=tk.X, padx=8, pady=(6, 2))
+        ttk.Button(parent, text="Блокировка", command=self.toggle_layer_lock).pack(fill=tk.X, padx=8, pady=(0, 6))
         ttk.Separator(parent).pack(fill=tk.X, pady=8)
         self.info = ttk.Label(parent, text="", justify=tk.LEFT)
         self.info.pack(anchor=tk.W, padx=8)
@@ -603,7 +660,7 @@ class PhotoRedactorApp(tk.Tk):
             self._render_after_id = None
         self.refresh_canvas()
         self.refresh_layers()
-        self.info.configure(text=f"{self.doc.width} x {self.doc.height}px\n{len(self.doc.layers)} layers\nActive: {self.doc.layer.name}")
+        self.info.configure(text=f"{self.doc.width} x {self.doc.height}px\nСлоев: {len(self.doc.layers)}\nАктивный: {self.doc.layer.name}")
 
     def refresh_layers(self) -> None:
         self.layer_list.delete(0, tk.END)
@@ -698,11 +755,11 @@ class PhotoRedactorApp(tk.Tk):
             if tool in ["clone", "healing"]:
                 if event.state & 0x0008:
                     self._clone_source = point
-                    self.status_text(f"Clone source: {point[0]}, {point[1]}")
+                    self.status_text(f"Источник штампа: {point[0]}, {point[1]}")
                     self.drag_start = None
                     return
                 if self._clone_source is None:
-                    self.status_text("Alt-click to set clone source first")
+                    self.status_text("Сначала Alt+клик задает источник штампа")
                     self.drag_start = None
                     return
                 self._clone_anchor_target = point
@@ -723,7 +780,7 @@ class PhotoRedactorApp(tk.Tk):
         elif tool == "quick_selection":
             self._quick_points = [point]
             self._quick_mode = self.selection_mode_from_event(event)
-            self.status_text("Quick selection brush")
+            self.status_text("Кисть быстрого выделения")
         elif tool == "eyedropper":
             self.pick_color_from_document(point)
         elif tool == "text":
@@ -747,7 +804,7 @@ class PhotoRedactorApp(tk.Tk):
                 self.refresh()
         elif tool == "move":
             if self.doc.layer.locked:
-                self.status_text("Layer is locked")
+                self.status_text("Слой заблокирован")
                 return
             self._move_layer_id = self.doc.layer.id
             self._move_start = (self.doc.layer.x, self.doc.layer.y)
@@ -760,7 +817,7 @@ class PhotoRedactorApp(tk.Tk):
             self._magnetic_edges = self.doc.magnetic_edge_map()
             snapped = self.doc.snap_point_to_edge(point, self._magnetic_edges, max(8, int(self.tolerance.get())))
             self._lasso_points = [snapped]
-            self.status_text(f"Magnetic lasso: {snapped[0]}, {snapped[1]}")
+            self.status_text(f"Магнитное лассо: {snapped[0]}, {snapped[1]}")
 
     def pointer_drag(self, event) -> None:
         if self._panning:
@@ -790,7 +847,7 @@ class PhotoRedactorApp(tk.Tk):
                 self.draw_lasso()
         elif tool == "quick_selection" and self.drag_start:
             self._quick_points.append(point)
-            self.status_text(f"Quick selection points: {len(self._quick_points)}")
+            self.status_text(f"Точек быстрого выделения: {len(self._quick_points)}")
 
     def pointer_up(self, event) -> None:
         if self._panning:
@@ -1522,7 +1579,7 @@ class PhotoRedactorApp(tk.Tk):
     def free_transform_layer(self) -> None:
         layer = self.doc.layer
         if layer.locked:
-            self.status_text("Layer is locked")
+            self.status_text("Слой заблокирован")
             return
         initial = f"{layer.x},{layer.y},{layer.pixels.shape[1]},{layer.pixels.shape[0]},0,false,false"
         raw = simpledialog.askstring("Free transform", "x,y,width,height,rotation,flipH,flipV:", initialvalue=initial)
@@ -1545,7 +1602,7 @@ class PhotoRedactorApp(tk.Tk):
     def perspective_transform_layer(self) -> None:
         layer = self.doc.layer
         if layer.locked:
-            self.status_text("Layer is locked")
+            self.status_text("Слой заблокирован")
             return
         w, h = layer.pixels.shape[1], layer.pixels.shape[0]
         initial = f"{layer.x},{layer.y},{layer.x + w},{layer.y},{layer.x + w},{layer.y + h},{layer.x},{layer.y + h}"
@@ -1937,7 +1994,7 @@ class PhotoRedactorApp(tk.Tk):
     def apply_to_layer(self, label: str, fn) -> None:
         layer = self.doc.layer
         if layer.locked:
-            self.status_text("Layer is locked")
+            self.status_text("Слой заблокирован")
             return
         layer_id = layer.id
         before = layer.pixels.copy()

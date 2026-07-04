@@ -18,6 +18,7 @@
 - Layer import: place embedded images, place linked images, update/relink linked layers and load several image files as layers.
 - Shape layers: editable rectangle, ellipse, line, polygon and star layers.
 - View helpers: grid overlay, numeric guides and channel preview for RGB/Red/Green/Blue/Alpha.
+- UI: Russian main menu/tool labels and hover explanations for tools.
 - Analysis: eyedropper, metadata/EXIF viewer, histogram and image statistics.
 - Recovery and automation: autosave recovery file, manual recovery opening and action recording to JSON logs.
 - Adjustments: destructive brightness, contrast, saturation, levels, curves, grayscale, invert plus non-destructive adjustment layers for the same core set.
