@@ -260,6 +260,7 @@ class PhotoRedactorApp(tk.Tk):
         layer.add_command(label="Move up", command=lambda: self.move_layer(1))
         layer.add_command(label="Move down", command=lambda: self.move_layer(-1))
         layer.add_command(label="Free transform", command=self.free_transform_layer)
+        layer.add_command(label="Perspective transform", command=self.perspective_transform_layer)
         layer.add_command(label="Update linked layer", command=self.update_linked_layer)
         layer.add_command(label="Relink layer", command=self.relink_layer)
         layer.add_command(label="Toggle clipping mask", command=self.toggle_clipping_mask)
@@ -1512,6 +1513,31 @@ class PhotoRedactorApp(tk.Tk):
             messagebox.showerror("Free transform", "Use: x,y,width,height,rotation,flipH,flipV")
             return
         self.run_document_command("Free transform", lambda: self.doc.transform_active_layer(x, y, width, height, angle, flip_h, flip_v))
+        self.refresh()
+
+    def perspective_transform_layer(self) -> None:
+        layer = self.doc.layer
+        if layer.locked:
+            self.status_text("Layer is locked")
+            return
+        w, h = layer.pixels.shape[1], layer.pixels.shape[0]
+        initial = f"{layer.x},{layer.y},{layer.x + w},{layer.y},{layer.x + w},{layer.y + h},{layer.x},{layer.y + h}"
+        raw = simpledialog.askstring(
+            "Perspective transform",
+            "TLx,TLy,TRx,TRy,BRx,BRy,BLx,BLy:",
+            initialvalue=initial,
+        )
+        if not raw:
+            return
+        try:
+            values = [float(part.strip()) for part in raw.split(",")]
+            if len(values) != 8:
+                raise ValueError
+            corners = [(values[i], values[i + 1]) for i in range(0, 8, 2)]
+        except ValueError:
+            messagebox.showerror("Perspective transform", "Use: TLx,TLy,TRx,TRy,BRx,BRy,BLx,BLy")
+            return
+        self.run_document_command("Perspective transform", lambda: self.doc.perspective_transform_active_layer(corners))
         self.refresh()
 
     def toggle_clipping_mask(self) -> None:

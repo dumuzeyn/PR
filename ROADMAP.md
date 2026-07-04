@@ -24,7 +24,7 @@
 - Filters: Gaussian blur, sharpen, noise, median, edge detect, emboss, content-aware fill and red-eye reduction.
 - History: undo and redo snapshots.
 - Automation: simple batch resize/convert.
-- Transform: numeric Free Transform for scale, rotate, position and flips.
+- Transform: numeric Free Transform for scale, rotate, position, flips and perspective corner transforms.
 - Performance baseline: numpy arrays, OpenCV filters, cached composite preview.
 - Export: PNG, JPEG, WebP, BMP, TIFF, plus `.prdx` project files.
 
@@ -33,7 +33,7 @@
 1. Selection engine: magnetic lasso, better quick-selection refinement and full Select and Mask workspace.
 2. Editable masks: mask thumbnails and linked/unlinked mask movement.
 3. Non-destructive editing: richer smart-filter UI, adjustment-layer previews and clipping mask polish.
-4. Free Transform: transform handles, warp, perspective and selected-pixel transforms.
+4. Free Transform: transform handles, warp and selected-pixel transforms.
 5. Text engine: text-on-path, richer typography controls and editable transform handles for text boxes.
 6. Shapes and paths: Bezier editing, custom shapes and shape boolean operations.
 7. Retouching: interactive patch tool, retouch presets and stronger edge-aware cleanup.

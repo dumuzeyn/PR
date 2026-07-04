@@ -14,7 +14,7 @@ This repository starts with a real working editor and an architecture intended t
 - clipping masks and basic layer styles: stroke, drop shadow and outer glow
 - non-destructive per-layer filter stack with blur, sharpen, noise, median, edge and emboss filters
 - real selection mask with select all, invert, feather, smooth, grow, shrink, border/refine, opaque-pixel selection, single row/column selection and saved alpha selections
-- numeric Free Transform for active layers
+- numeric Free Transform and perspective transform for active layers
 - local retouch tools: blur, sharpen, dodge, burn, clone stamp and healing brush
 - content-aware fill for selected areas, patch selection and red-eye reduction
 - editable shape layers for rectangles, ellipses, lines, polygons and stars

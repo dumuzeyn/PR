@@ -1193,6 +1193,44 @@ class Document:
             layer.y = round(center_y - layer.pixels.shape[0] / 2.0)
         self.dirty = True
 
+    def perspective_transform_active_layer(self, corners: list[tuple[float, float]] | tuple[tuple[float, float], ...]) -> None:
+        layer = self.layer
+        if layer.locked:
+            return
+        if len(corners) != 4:
+            raise ValueError("Perspective transform needs four destination corners.")
+        h, w = layer.pixels.shape[:2]
+        dst_doc = np.array(corners, dtype=np.float32)
+        min_x = math.floor(float(dst_doc[:, 0].min()))
+        min_y = math.floor(float(dst_doc[:, 1].min()))
+        max_x = math.ceil(float(dst_doc[:, 0].max()))
+        max_y = math.ceil(float(dst_doc[:, 1].max()))
+        out_w = max(1, max_x - min_x)
+        out_h = max(1, max_y - min_y)
+        src = np.array([[0, 0], [w, 0], [w, h], [0, h]], dtype=np.float32)
+        dst = dst_doc - np.array([min_x, min_y], dtype=np.float32)
+        matrix = cv2.getPerspectiveTransform(src, dst)
+        layer.pixels = cv2.warpPerspective(
+            layer.pixels,
+            matrix,
+            (out_w, out_h),
+            flags=cv2.INTER_CUBIC,
+            borderMode=cv2.BORDER_CONSTANT,
+            borderValue=(0, 0, 0, 0),
+        )
+        if layer.mask is not None:
+            layer.mask = cv2.warpPerspective(
+                layer.mask,
+                matrix,
+                (out_w, out_h),
+                flags=cv2.INTER_NEAREST,
+                borderMode=cv2.BORDER_CONSTANT,
+                borderValue=0,
+            )
+        layer.x = min_x
+        layer.y = min_y
+        self.dirty = True
+
 
 def normalized_box(box: tuple[int, int, int, int]) -> tuple[int, int, int, int]:
     x1, y1, x2, y2 = box
