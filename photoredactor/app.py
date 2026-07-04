@@ -20,6 +20,7 @@ from .core import (
     adjust_brightness_contrast,
     adjust_saturation,
     apply_gradient,
+    apply_filter_stack,
     blur,
     curves,
     content_aware_fill,
@@ -127,6 +128,16 @@ MASK_PREVIEW_OVERLAY = "Красное перекрытие"
 MASK_PREVIEW_CHANNEL = "Черно-белая маска"
 MASK_PREVIEW_MODES = [MASK_PREVIEW_NORMAL, MASK_PREVIEW_OVERLAY, MASK_PREVIEW_CHANNEL]
 
+FILTER_TYPES = ["blur", "sharpen", "noise", "median", "edge", "emboss"]
+FILTER_LABELS = {
+    "blur": "Размытие",
+    "sharpen": "Резкость",
+    "noise": "Шум",
+    "median": "Медиана",
+    "edge": "Края",
+    "emboss": "Тиснение",
+}
+
 
 class PhotoRedactorApp(tk.Tk):
     def __init__(self) -> None:
@@ -186,6 +197,7 @@ class PhotoRedactorApp(tk.Tk):
         self._layer_thumb_image: ImageTk.PhotoImage | None = None
         self._mask_thumb_image: ImageTk.PhotoImage | None = None
         self._select_mask_preview_image: ImageTk.PhotoImage | None = None
+        self._filter_stack_preview_image: ImageTk.PhotoImage | None = None
         self._canvas_image_id: int | None = None
         self._render_after_id: str | None = None
         self._last_render_time = 0.0
@@ -1895,18 +1907,8 @@ class PhotoRedactorApp(tk.Tk):
 
     def edit_layer_filters(self) -> None:
         layer = self.doc.layer
-        initial = self.filters_to_text(layer.filters)
-        raw = simpledialog.askstring(
-            "Layer filters",
-            "Use semicolon-separated filters:\nblur,radius\nsharpen,amount\nnoise,amount\nmedian,size\nedge,strength\nemboss,strength\nempty clears filters",
-            initialvalue=initial,
-        )
-        if raw is None:
-            return
-        try:
-            filters = self.parse_filters(raw)
-        except ValueError:
-            messagebox.showerror("Layer filters", "Invalid filter string.")
+        filters = self.layer_filters_dialog(layer.filters, layer.pixels)
+        if filters is None:
             return
         self.run_document_command("Layer filters", lambda: self.doc.set_active_layer_filters(filters))
         self.refresh()
@@ -1914,6 +1916,205 @@ class PhotoRedactorApp(tk.Tk):
     def clear_layer_filters(self) -> None:
         self.run_document_command("Clear layer filters", self.doc.clear_active_layer_filters)
         self.refresh()
+
+    def layer_filters_dialog(self, initial_filters: list[dict], pixels: np.ndarray) -> list[dict] | None:
+        filters = []
+        for item in initial_filters:
+            normalized = self.normalize_filter_item(item)
+            if normalized is not None:
+                filters.append(normalized)
+        result: list[dict] | None = None
+        updating_controls = False
+        dialog = tk.Toplevel(self)
+        dialog.title("Фильтры слоя")
+        dialog.transient(self)
+        dialog.resizable(False, False)
+        dialog.grab_set()
+
+        preview = ttk.Label(dialog)
+        preview.grid(row=0, column=0, rowspan=8, padx=12, pady=12, sticky="n")
+        listbox = tk.Listbox(dialog, height=8, width=26, exportselection=False)
+        listbox.grid(row=0, column=1, rowspan=6, padx=(0, 8), pady=12, sticky="ns")
+
+        controls = ttk.Frame(dialog)
+        controls.grid(row=0, column=2, padx=(0, 12), pady=12, sticky="new")
+        ttk.Label(controls, text="Тип").grid(row=0, column=0, sticky="w")
+        filter_type = tk.StringVar(value=FILTER_TYPES[0])
+        type_box = ttk.Combobox(controls, textvariable=filter_type, values=FILTER_TYPES, state="readonly", width=14)
+        type_box.grid(row=0, column=1, sticky="ew", pady=(0, 6))
+        ttk.Label(controls, text="Параметр").grid(row=1, column=0, sticky="w")
+        value_var = tk.DoubleVar(value=3.0)
+        value_spin = ttk.Spinbox(controls, textvariable=value_var, from_=0.0, to=500.0, increment=1.0, width=12)
+        value_spin.grid(row=1, column=1, sticky="ew", pady=(0, 8))
+        hint = ttk.Label(controls, text="", wraplength=190, justify=tk.LEFT)
+        hint.grid(row=2, column=0, columnspan=2, sticky="w", pady=(0, 8))
+
+        buttons = ttk.Frame(dialog)
+        buttons.grid(row=6, column=1, columnspan=2, sticky="ew", padx=(0, 12), pady=(0, 8))
+        bottom = ttk.Frame(dialog)
+        bottom.grid(row=7, column=1, columnspan=2, sticky="e", padx=(0, 12), pady=(0, 12))
+
+        def selected_index() -> int | None:
+            selection = listbox.curselection()
+            return None if not selection else int(selection[0])
+
+        def item_text(item: dict) -> str:
+            kind = str(item.get("type", "")).lower()
+            label = FILTER_LABELS.get(kind, kind)
+            value = self.filter_primary_value(item)
+            return f"{label}: {value:g}"
+
+        def refresh_list(select_index: int | None = None) -> None:
+            listbox.delete(0, tk.END)
+            for item in filters:
+                listbox.insert(tk.END, item_text(item))
+            if filters:
+                index = 0 if select_index is None else max(0, min(select_index, len(filters) - 1))
+                listbox.selection_set(index)
+                load_selected()
+            update_preview()
+
+        def update_value_controls(kind: str) -> None:
+            if kind == "blur":
+                value_spin.configure(from_=1, to=500, increment=1)
+                hint.configure(text="Радиус размытия в пикселях.")
+            elif kind == "sharpen":
+                value_spin.configure(from_=0, to=10, increment=0.1)
+                hint.configure(text="Сила повышения резкости.")
+            elif kind == "noise":
+                value_spin.configure(from_=0, to=1, increment=0.01)
+                hint.configure(text="Количество детерминированного шума 0..1.")
+            elif kind == "median":
+                value_spin.configure(from_=3, to=101, increment=2)
+                hint.configure(text="Нечетный размер медианного окна.")
+            else:
+                value_spin.configure(from_=0, to=1, increment=0.05)
+                hint.configure(text="Сила смешивания эффекта 0..1.")
+
+        def load_selected(_event=None) -> None:
+            nonlocal updating_controls
+            index = selected_index()
+            if index is None:
+                update_value_controls(filter_type.get())
+                return
+            updating_controls = True
+            item = filters[index]
+            kind = str(item.get("type", "blur")).lower()
+            filter_type.set(kind if kind in FILTER_TYPES else "blur")
+            update_value_controls(filter_type.get())
+            value_var.set(self.filter_primary_value(item))
+            updating_controls = False
+
+        def current_item() -> dict:
+            return self.make_filter_item(filter_type.get(), value_var.get())
+
+        def apply_current(_event=None) -> None:
+            if updating_controls:
+                return
+            index = selected_index()
+            if index is None:
+                return
+            filters[index] = current_item()
+            refresh_list(index)
+
+        def add_filter() -> None:
+            filters.append(current_item())
+            refresh_list(len(filters) - 1)
+
+        def remove_filter() -> None:
+            index = selected_index()
+            if index is None:
+                return
+            del filters[index]
+            refresh_list(min(index, len(filters) - 1) if filters else None)
+
+        def move_filter(delta: int) -> None:
+            index = selected_index()
+            if index is None:
+                return
+            target = index + delta
+            if target < 0 or target >= len(filters):
+                return
+            filters[index], filters[target] = filters[target], filters[index]
+            refresh_list(target)
+
+        def update_preview() -> None:
+            source = rgba_array_to_pil(pixels)
+            source.thumbnail((180, 180), Image.Resampling.LANCZOS)
+            thumb = np.array(source.convert("RGBA"), dtype=np.uint8)
+            shown = apply_filter_stack(thumb, filters) if filters else thumb
+            image = rgba_array_to_pil(shown)
+            canvas = Image.new("RGBA", (180, 180), (44, 46, 52, 255))
+            canvas.alpha_composite(image, ((180 - image.width) // 2, (180 - image.height) // 2))
+            self._filter_stack_preview_image = ImageTk.PhotoImage(canvas)
+            preview.configure(image=self._filter_stack_preview_image)
+
+        def accept() -> None:
+            nonlocal result
+            apply_current()
+            result = []
+            for item in filters:
+                normalized = self.normalize_filter_item(item)
+                if normalized is not None:
+                    result.append(normalized)
+            dialog.destroy()
+
+        def cancel() -> None:
+            dialog.destroy()
+
+        ttk.Button(buttons, text="Добавить", command=add_filter).pack(side=tk.LEFT, padx=(0, 4))
+        ttk.Button(buttons, text="Удалить", command=remove_filter).pack(side=tk.LEFT, padx=(0, 4))
+        ttk.Button(buttons, text="Вверх", command=lambda: move_filter(-1)).pack(side=tk.LEFT, padx=(0, 4))
+        ttk.Button(buttons, text="Вниз", command=lambda: move_filter(1)).pack(side=tk.LEFT)
+        ttk.Button(bottom, text="ОК", command=accept).pack(side=tk.RIGHT, padx=(6, 0))
+        ttk.Button(bottom, text="Отмена", command=cancel).pack(side=tk.RIGHT)
+        listbox.bind("<<ListboxSelect>>", load_selected)
+        type_box.bind("<<ComboboxSelected>>", lambda _event: (update_value_controls(filter_type.get()), apply_current()))
+        value_spin.bind("<KeyRelease>", apply_current)
+        value_spin.bind("<FocusOut>", apply_current)
+        value_var.trace_add("write", lambda *_args: apply_current())
+        dialog.protocol("WM_DELETE_WINDOW", cancel)
+        refresh_list(0 if filters else None)
+        if not filters:
+            update_value_controls(filter_type.get())
+            update_preview()
+        dialog.wait_window()
+        return result
+
+    def normalize_filter_item(self, item: dict) -> dict | None:
+        kind = str(item.get("type", "")).lower()
+        if kind not in FILTER_TYPES:
+            return None
+        return self.make_filter_item(kind, self.filter_primary_value(item), item)
+
+    def make_filter_item(self, kind: str, value: float, original: dict | None = None) -> dict:
+        if kind == "blur":
+            return {"type": "blur", "radius": max(1, int(float(value)))}
+        if kind == "sharpen":
+            return {"type": "sharpen", "amount": max(0.0, float(value))}
+        if kind == "noise":
+            seed = int((original or {}).get("seed", 12345))
+            return {"type": "noise", "amount": max(0.0, min(1.0, float(value))), "seed": seed}
+        if kind == "median":
+            return {"type": "median", "size": max(3, int(float(value)) | 1)}
+        if kind == "edge":
+            return {"type": "edge", "strength": max(0.0, min(1.0, float(value)))}
+        return {"type": "emboss", "strength": max(0.0, min(1.0, float(value)))}
+
+    @staticmethod
+    def filter_primary_value(item: dict) -> float:
+        kind = str(item.get("type", "")).lower()
+        if kind == "blur":
+            return float(item.get("radius", 3))
+        if kind == "sharpen":
+            return float(item.get("amount", 1.0))
+        if kind == "noise":
+            return float(item.get("amount", 0.03))
+        if kind == "median":
+            return float(item.get("size", 3))
+        if kind in {"edge", "emboss"}:
+            return float(item.get("strength", 1.0))
+        return 1.0
 
     def effects_to_text(self, effects: dict) -> str:
         parts = []
