@@ -13,7 +13,7 @@ This repository starts with a real working editor and an architecture intended t
 - layer locks, raster layer masks, mask thumbnails, thumbnail-click mask channel editing, red-overlay/black-white mask preview, linked/unlinked mask movement, mask painting, mask density/feather controls and blend modes
 - clipping masks and basic layer styles: stroke, drop shadow and outer glow
 - non-destructive per-layer filter stack with blur, sharpen, noise, median, edge and emboss filters
-- real selection mask with select all, invert, feather, smooth, grow, shrink, border/refine, opaque-pixel selection, single row/column selection, magnetic edge snapping and saved alpha selections
+- real selection mask with select all, invert, feather, smooth, grow, shrink, border/refine, Select and Mask output, opaque-pixel selection, single row/column selection, magnetic edge snapping and saved alpha selections
 - numeric Free Transform, selected-pixel transform and perspective transform
 - local retouch tools: blur, sharpen, dodge, burn, clone stamp and healing brush
 - content-aware fill for selected areas, patch selection and red-eye reduction

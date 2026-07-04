@@ -32,6 +32,7 @@ from .core import (
     levels,
     local_retouch,
     paste_mask,
+    refine_selection_mask,
     rgba_array_to_pil,
     reduce_red_eye,
     union_rect,
@@ -184,6 +185,7 @@ class PhotoRedactorApp(tk.Tk):
         self._preview_image: ImageTk.PhotoImage | None = None
         self._layer_thumb_image: ImageTk.PhotoImage | None = None
         self._mask_thumb_image: ImageTk.PhotoImage | None = None
+        self._select_mask_preview_image: ImageTk.PhotoImage | None = None
         self._canvas_image_id: int | None = None
         self._render_after_id: str | None = None
         self._last_render_time = 0.0
@@ -323,6 +325,7 @@ class PhotoRedactorApp(tk.Tk):
         select.add_command(label="Сжать", command=self.shrink_selection)
         select.add_command(label="Граница", command=self.border_selection)
         select.add_command(label="Уточнить край", command=self.refine_selection)
+        select.add_command(label="Выделить и маска", command=self.select_and_mask_workspace)
         select.add_separator()
         select.add_command(label="Сохранить выделение", command=self.save_selection)
         select.add_command(label="Загрузить выделение", command=self.load_selection)
@@ -1310,6 +1313,111 @@ class PhotoRedactorApp(tk.Tk):
             messagebox.showerror("Refine selection", "Use: smooth,feather,contrast,shift")
             return
         self.run_selection_command("Refine selection", lambda: self.doc.refine_selection(smooth, feather, contrast, shift))
+
+    def select_and_mask_workspace(self) -> None:
+        if self.doc.selection_mask is None:
+            messagebox.showinfo("Выделить и маска", "Сначала создайте выделение.")
+            return
+        data = self.select_and_mask_dialog()
+        if data is None:
+            return
+        smooth = data["smooth"]
+        feather = data["feather"]
+        contrast = data["contrast"]
+        shift = data["shift"]
+        output = data["output"]
+        if output == "Маска слоя":
+            def edit() -> None:
+                self.doc.refine_selection(smooth, feather, contrast, shift)
+                self.doc.add_mask_from_selection()
+
+            self.run_document_command("Select and Mask to layer mask", edit)
+            self.paint_target.set("mask")
+            self.mask_preview.set(MASK_PREVIEW_CHANNEL)
+            self.selection_box = self.doc.selection_bounds()
+            self.refresh()
+            self.status_text("Select and Mask: маска слоя")
+        else:
+            self.run_selection_command("Select and Mask", lambda: self.doc.refine_selection(smooth, feather, contrast, shift))
+            self.refresh_canvas()
+
+    def select_and_mask_dialog(self) -> dict[str, object] | None:
+        source = self.doc.selection_mask.copy()
+        dialog = tk.Toplevel(self)
+        dialog.title("Выделить и маска")
+        dialog.transient(self)
+        dialog.resizable(False, False)
+        dialog.grab_set()
+
+        smooth = tk.IntVar(value=2)
+        feather = tk.IntVar(value=2)
+        contrast = tk.DoubleVar(value=1.25)
+        shift = tk.IntVar(value=0)
+        output = tk.StringVar(value="Выделение")
+        result: dict[str, object] | None = None
+
+        preview = ttk.Label(dialog)
+        preview.grid(row=0, column=0, rowspan=7, padx=12, pady=12, sticky="n")
+        stats = ttk.Label(dialog, text="", justify=tk.LEFT)
+        stats.grid(row=7, column=0, padx=12, pady=(0, 12), sticky="w")
+
+        def current_mask() -> np.ndarray:
+            return refine_selection_mask(source, int(smooth.get()), int(feather.get()), float(contrast.get()), int(shift.get()))
+
+        def update_preview(*_args) -> None:
+            mask = current_mask()
+            image = Image.fromarray(mask.astype(np.uint8), "L")
+            image.thumbnail((160, 160), Image.Resampling.NEAREST)
+            canvas = Image.new("RGBA", (160, 160), (44, 46, 52, 255))
+            gray = Image.new("L", (160, 160), 72)
+            x = (160 - image.width) // 2
+            y = (160 - image.height) // 2
+            gray.paste(image, (x, y))
+            rgba = Image.merge("RGBA", (gray, gray, gray, Image.new("L", (160, 160), 255)))
+            canvas.alpha_composite(rgba)
+            self._select_mask_preview_image = ImageTk.PhotoImage(canvas)
+            preview.configure(image=self._select_mask_preview_image)
+            selected = int(np.count_nonzero(mask))
+            stats.configure(text=f"Активных пикселей: {selected}\nГраницы: {self.doc.selection_bounds() or '-'}")
+
+        def add_spin(row: int, label: str, variable, from_: float, to: float, increment: float = 1.0) -> None:
+            ttk.Label(dialog, text=label).grid(row=row, column=1, sticky="w", padx=(0, 12), pady=(8, 0))
+            spin = ttk.Spinbox(dialog, textvariable=variable, from_=from_, to=to, increment=increment, width=10, command=update_preview)
+            spin.grid(row=row, column=2, sticky="ew", padx=(0, 12), pady=(8, 0))
+
+        add_spin(0, "Сглаживание", smooth, 0, 100)
+        add_spin(1, "Растушевка", feather, 0, 500)
+        add_spin(2, "Контраст", contrast, 0.0, 5.0, 0.05)
+        add_spin(3, "Сдвиг края", shift, -500, 500)
+        ttk.Label(dialog, text="Результат").grid(row=4, column=1, sticky="w", padx=(0, 12), pady=(8, 0))
+        output_box = ttk.Combobox(dialog, textvariable=output, values=["Выделение", "Маска слоя"], state="readonly", width=14)
+        output_box.grid(row=4, column=2, sticky="ew", padx=(0, 12), pady=(8, 0))
+
+        buttons = ttk.Frame(dialog)
+        buttons.grid(row=6, column=1, columnspan=2, sticky="e", padx=12, pady=12)
+
+        def accept() -> None:
+            nonlocal result
+            result = {
+                "smooth": max(0, int(smooth.get())),
+                "feather": max(0, int(feather.get())),
+                "contrast": max(0.0, float(contrast.get())),
+                "shift": int(shift.get()),
+                "output": output.get(),
+            }
+            dialog.destroy()
+
+        def cancel() -> None:
+            dialog.destroy()
+
+        ttk.Button(buttons, text="ОК", command=accept).pack(side=tk.RIGHT, padx=(6, 0))
+        ttk.Button(buttons, text="Отмена", command=cancel).pack(side=tk.RIGHT)
+        for variable in [smooth, feather, contrast, shift]:
+            variable.trace_add("write", update_preview)
+        dialog.protocol("WM_DELETE_WINDOW", cancel)
+        update_preview()
+        dialog.wait_window()
+        return result
 
     def select_opaque_pixels(self) -> None:
         self.run_selection_command("Select opaque pixels", lambda: self.doc.select_opaque_pixels(self.doc.layer))

@@ -1093,25 +1093,7 @@ class Document:
     def refine_selection(self, smooth: int = 0, feather: int = 0, contrast: float = 1.0, shift: int = 0) -> None:
         if self.selection_mask is None:
             return
-        mask = self.selection_mask.copy()
-        if shift > 0:
-            kernel = np.ones((shift * 2 + 1, shift * 2 + 1), dtype=np.uint8)
-            mask = cv2.dilate(mask, kernel)
-        elif shift < 0:
-            amount = abs(int(shift))
-            kernel = np.ones((amount * 2 + 1, amount * 2 + 1), dtype=np.uint8)
-            mask = cv2.erode(mask, kernel)
-        if smooth > 0:
-            k = int(smooth) * 2 + 1
-            mask = cv2.GaussianBlur(mask, (k, k), smooth)
-            mask = np.where(mask >= 128, 255, 0).astype(np.uint8)
-        if feather > 0:
-            k = int(feather) * 2 + 1
-            mask = cv2.GaussianBlur(mask, (k, k), feather)
-        if abs(float(contrast) - 1.0) > 0.001:
-            work = mask.astype(np.float32)
-            work = (work - 127.5) * max(0.0, float(contrast)) + 127.5
-            mask = np.clip(work, 0, 255).astype(np.uint8)
+        mask = refine_selection_mask(self.selection_mask, smooth, feather, contrast, shift)
         self.selection_mask = mask if np.any(mask) else None
         self.dirty = True
 
@@ -1426,6 +1408,31 @@ def shifted_mask(mask: np.ndarray, old_width: int, old_height: int, new_width: i
         return out
     sx1, sy1 = x1 - dx, y1 - dy
     out[y1:y2, x1:x2] = mask[sy1 : sy1 + (y2 - y1), sx1 : sx1 + (x2 - x1)]
+    return out
+
+
+def refine_selection_mask(mask: np.ndarray, smooth: int = 0, feather: int = 0, contrast: float = 1.0, shift: int = 0) -> np.ndarray:
+    out = mask.copy()
+    if shift > 0:
+        kernel = np.ones((int(shift) * 2 + 1, int(shift) * 2 + 1), dtype=np.uint8)
+        out = cv2.dilate(out, kernel)
+    elif shift < 0:
+        amount = abs(int(shift))
+        kernel = np.ones((amount * 2 + 1, amount * 2 + 1), dtype=np.uint8)
+        out = cv2.erode(out, kernel)
+    if smooth > 0:
+        radius = int(smooth)
+        k = radius * 2 + 1
+        out = cv2.GaussianBlur(out, (k, k), radius)
+        out = np.where(out >= 128, 255, 0).astype(np.uint8)
+    if feather > 0:
+        radius = int(feather)
+        k = radius * 2 + 1
+        out = cv2.GaussianBlur(out, (k, k), radius)
+    if abs(float(contrast) - 1.0) > 0.001:
+        work = out.astype(np.float32)
+        work = (work - 127.5) * max(0.0, float(contrast)) + 127.5
+        out = np.clip(work, 0, 255).astype(np.uint8)
     return out
 
 
