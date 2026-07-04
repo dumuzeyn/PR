@@ -1259,6 +1259,74 @@ class Document:
             layer.y = round(center_y - layer.pixels.shape[0] / 2.0)
         self.dirty = True
 
+    def transform_selected_pixels(
+        self,
+        x: int | None = None,
+        y: int | None = None,
+        width: int | None = None,
+        height: int | None = None,
+        angle: float = 0.0,
+        flip_horizontal: bool = False,
+        flip_vertical: bool = False,
+    ) -> bool:
+        layer = self.layer
+        if layer.locked:
+            return False
+        selection = self.layer_selection_mask(layer)
+        if selection is None or not np.any(selection):
+            return False
+        ys, xs = np.where(selection > 0)
+        lx1, ly1, lx2, ly2 = int(xs.min()), int(ys.min()), int(xs.max() + 1), int(ys.max() + 1)
+        patch = layer.pixels[ly1:ly2, lx1:lx2].copy()
+        patch_mask = selection[ly1:ly2, lx1:lx2].astype(np.float32) / 255.0
+        patch[:, :, 3] = np.clip(patch[:, :, 3].astype(np.float32) * patch_mask, 0, 255).astype(np.uint8)
+
+        original_region = layer.pixels[ly1:ly2, lx1:lx2]
+        keep_alpha = 1.0 - patch_mask
+        original_region[:, :, 3] = np.clip(original_region[:, :, 3].astype(np.float32) * keep_alpha, 0, 255).astype(np.uint8)
+
+        dest_x = int(x if x is not None else layer.x + lx1)
+        dest_y = int(y if y is not None else layer.y + ly1)
+        target_w = max(1, int(width or patch.shape[1]))
+        target_h = max(1, int(height or patch.shape[0]))
+        if (target_w, target_h) != (patch.shape[1], patch.shape[0]):
+            patch = cv2.resize(patch, (target_w, target_h), interpolation=cv2.INTER_CUBIC)
+        if flip_horizontal:
+            patch = cv2.flip(patch, 1)
+        if flip_vertical:
+            patch = cv2.flip(patch, 0)
+        if abs(float(angle)) > 0.001:
+            center_x = dest_x + patch.shape[1] / 2.0
+            center_y = dest_y + patch.shape[0] / 2.0
+            patch = rotate_bound(patch, float(angle), cv2.INTER_CUBIC)
+            dest_x = round(center_x - patch.shape[1] / 2.0)
+            dest_y = round(center_y - patch.shape[0] / 2.0)
+
+        old_x, old_y = layer.x, layer.y
+        old_h, old_w = layer.pixels.shape[:2]
+        new_x = min(old_x, dest_x)
+        new_y = min(old_y, dest_y)
+        new_right = max(old_x + old_w, dest_x + patch.shape[1])
+        new_bottom = max(old_y + old_h, dest_y + patch.shape[0])
+        new_pixels = blank_rgba(new_right - new_x, new_bottom - new_y, (0, 0, 0, 0))
+        new_pixels[old_y - new_y : old_y - new_y + old_h, old_x - new_x : old_x - new_x + old_w] = layer.pixels
+        alpha_blend_inplace(new_pixels, patch, dest_x - new_x, dest_y - new_y, 1.0)
+
+        if layer.mask is not None:
+            new_mask = np.zeros(new_pixels.shape[:2], dtype=np.uint8)
+            paste_mask(new_mask, layer.mask, old_x - new_x, old_y - new_y)
+            layer.mask = new_mask
+
+        new_selection = np.zeros((self.height, self.width), dtype=np.uint8)
+        transformed_alpha = np.where(patch[:, :, 3] > 0, 255, 0).astype(np.uint8)
+        paste_mask(new_selection, transformed_alpha, dest_x, dest_y)
+        self.selection_mask = new_selection if np.any(new_selection) else None
+        layer.pixels = new_pixels
+        layer.x = new_x
+        layer.y = new_y
+        self.dirty = True
+        return True
+
     def perspective_transform_active_layer(self, corners: list[tuple[float, float]] | tuple[tuple[float, float], ...]) -> None:
         layer = self.layer
         if layer.locked:

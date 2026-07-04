@@ -345,6 +345,7 @@ class PhotoRedactorApp(tk.Tk):
         layer.add_command(label="Поднять выше", command=lambda: self.move_layer(1))
         layer.add_command(label="Опустить ниже", command=lambda: self.move_layer(-1))
         layer.add_command(label="Свободная трансформация", command=self.free_transform_layer)
+        layer.add_command(label="Трансформировать выделенные пиксели", command=self.transform_selected_pixels)
         layer.add_command(label="Перспективная трансформация", command=self.perspective_transform_layer)
         layer.add_command(label="Обновить связанный слой", command=self.update_linked_layer)
         layer.add_command(label="Перелинковать слой", command=self.relink_layer)
@@ -1642,6 +1643,38 @@ class PhotoRedactorApp(tk.Tk):
             messagebox.showerror("Free transform", "Use: x,y,width,height,rotation,flipH,flipV")
             return
         self.run_document_command("Free transform", lambda: self.doc.transform_active_layer(x, y, width, height, angle, flip_h, flip_v))
+        self.refresh()
+
+    def transform_selected_pixels(self) -> None:
+        layer = self.doc.layer
+        if layer.locked:
+            self.status_text("Слой заблокирован")
+            return
+        selection = self.doc.layer_selection_mask(layer)
+        if selection is None or not np.any(selection):
+            messagebox.showinfo("Трансформация", "Сначала создайте выделение на активном слое.")
+            return
+        ys, xs = np.where(selection > 0)
+        lx1, ly1, lx2, ly2 = int(xs.min()), int(ys.min()), int(xs.max() + 1), int(ys.max() + 1)
+        initial = f"{layer.x + lx1},{layer.y + ly1},{lx2 - lx1},{ly2 - ly1},0,false,false"
+        raw = simpledialog.askstring("Трансформация выделенных пикселей", "x,y,width,height,rotation,flipH,flipV:", initialvalue=initial)
+        if not raw:
+            return
+        try:
+            parts = [part.strip() for part in raw.split(",")]
+            if len(parts) != 7:
+                raise ValueError
+            x, y, width, height = [int(float(value)) for value in parts[:4]]
+            angle = float(parts[4])
+            flip_h = parts[5].lower() in {"1", "true", "yes", "y", "да", "д"}
+            flip_v = parts[6].lower() in {"1", "true", "yes", "y", "да", "д"}
+        except ValueError:
+            messagebox.showerror("Трансформация выделенных пикселей", "Используйте: x,y,width,height,rotation,flipH,flipV")
+            return
+        self.run_document_command(
+            "Transform selected pixels",
+            lambda: self.doc.transform_selected_pixels(x, y, width, height, angle, flip_h, flip_v),
+        )
         self.refresh()
 
     def perspective_transform_layer(self) -> None:
