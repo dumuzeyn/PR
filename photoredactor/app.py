@@ -21,6 +21,7 @@ from .core import (
     apply_gradient,
     blur,
     curves,
+    content_aware_fill,
     clone_or_heal,
     draw_mask_brush,
     draw_brush,
@@ -29,6 +30,7 @@ from .core import (
     levels,
     local_retouch,
     rgba_array_to_pil,
+    reduce_red_eye,
     union_rect,
     sharpen,
 )
@@ -59,6 +61,7 @@ class PhotoRedactorApp(tk.Tk):
         self.tolerance = tk.IntVar(value=24)
         self.grid_visible = tk.BooleanVar(value=False)
         self.grid_spacing = tk.IntVar(value=64)
+        self.view_channel = tk.StringVar(value="RGB")
         self.foreground = (30, 120, 255, 255)
         self.background = (255, 255, 255, 255)
         self.drag_start: tuple[int, int] | None = None
@@ -184,6 +187,8 @@ class PhotoRedactorApp(tk.Tk):
         file_menu.add_command(label="Open image/project", command=self.open_file, accelerator="Ctrl+O")
         self.recent_menu = tk.Menu(file_menu, tearoff=False)
         file_menu.add_cascade(label="Open recent", menu=self.recent_menu)
+        file_menu.add_command(label="Place embedded", command=self.place_embedded)
+        file_menu.add_command(label="Load files as layers", command=self.load_files_as_layers)
         file_menu.add_separator()
         file_menu.add_command(label="Save project", command=self.save, accelerator="Ctrl+S")
         file_menu.add_command(label="Save project as", command=self.save_as_project)
@@ -227,6 +232,8 @@ class PhotoRedactorApp(tk.Tk):
         image.add_command(label="Resize image", command=self.resize_image)
         image.add_command(label="Resize canvas", command=self.resize_canvas)
         image.add_command(label="Crop to selection", command=self.crop_to_selection)
+        image.add_command(label="Trim transparent pixels", command=self.trim_transparent)
+        image.add_command(label="Reveal all layers", command=self.reveal_all)
         image.add_separator()
         image.add_command(label="Rotate 90 CW", command=lambda: self.rotate(90))
         image.add_command(label="Rotate 180", command=lambda: self.rotate(180))
@@ -275,6 +282,9 @@ class PhotoRedactorApp(tk.Tk):
         filters.add_command(label="Gaussian blur", command=self.filter_blur)
         filters.add_command(label="Sharpen", command=self.filter_sharpen)
         filters.add_command(label="Noise", command=self.filter_noise)
+        filters.add_separator()
+        filters.add_command(label="Content-aware fill", command=self.filter_content_aware_fill)
+        filters.add_command(label="Red-eye reduction", command=self.filter_red_eye)
 
         analysis = tk.Menu(menu, tearoff=False)
         menu.add_cascade(label="Analysis", menu=analysis)
@@ -295,6 +305,11 @@ class PhotoRedactorApp(tk.Tk):
         view.add_command(label="Zoom out", command=lambda: self.set_zoom(self.zoom.get() / 1.25))
         view.add_command(label="100%", command=lambda: self.set_zoom(1.0))
         view.add_command(label="Fit", command=self.fit_to_screen)
+        view.add_separator()
+        channel = tk.Menu(view, tearoff=False)
+        view.add_cascade(label="Channel", menu=channel)
+        for name in ["RGB", "Red", "Green", "Blue", "Alpha"]:
+            channel.add_radiobutton(label=name, value=name, variable=self.view_channel, command=self.set_view_channel)
         view.add_separator()
         view.add_checkbutton(label="Grid", variable=self.grid_visible, command=self.refresh_canvas)
         view.add_command(label="Grid spacing", command=self.set_grid_spacing)
@@ -516,7 +531,8 @@ class PhotoRedactorApp(tk.Tk):
         if self._composite_dirty or self._composite_cache is None:
             self._composite_cache = self.doc.composite(checker=True)
             self._composite_dirty = False
-        image = rgba_array_to_pil(self._composite_cache)
+        display = self._channel_display(self._composite_cache)
+        image = rgba_array_to_pil(display)
         scale = self.zoom.get()
         if scale != 1.0:
             resample = Image.Resampling.NEAREST if scale >= 4 else Image.Resampling.BILINEAR
@@ -532,6 +548,21 @@ class PhotoRedactorApp(tk.Tk):
         self._view_dirty = False
         self.update_selection_overlay()
         self.update_grid_and_guides()
+
+    def _channel_display(self, composite: np.ndarray) -> np.ndarray:
+        channel = self.view_channel.get() if hasattr(self, "view_channel") else "RGB"
+        if channel == "RGB":
+            return composite
+        source = self.doc.composite(checker=False)
+        out = np.zeros_like(source)
+        out[:, :, 3] = 255
+        if channel == "Alpha":
+            gray = source[:, :, 3]
+        else:
+            index = {"Red": 0, "Green": 1, "Blue": 2}.get(channel, 0)
+            gray = source[:, :, index]
+        out[:, :, :3] = gray[:, :, None]
+        return out
 
     def request_canvas_refresh(self) -> None:
         self.invalidate_pixels()
@@ -560,7 +591,7 @@ class PhotoRedactorApp(tk.Tk):
             marker = "*" if layer.visible else "-"
             mask_marker = "M" if layer.mask is not None and layer.mask_enabled else "m" if layer.mask is not None else " "
             lock_marker = "L" if layer.locked else " "
-            kind_marker = "T" if layer.kind == "text" else "A" if layer.kind == "adjustment" else "S" if layer.kind == "shape" else " "
+            kind_marker = "T" if layer.kind == "text" else "A" if layer.kind == "adjustment" else "S" if layer.kind == "shape" else "E" if layer.kind == "embedded" else " "
             clip_marker = "C" if layer.clipping else " "
             fx_marker = "F" if layer.effects else " "
             self.layer_list.insert(tk.END, f"{marker}{mask_marker}{lock_marker}{kind_marker}{clip_marker}{fx_marker} {layer.name}  {round(layer.opacity * 100)}%")
@@ -1089,6 +1120,28 @@ class PhotoRedactorApp(tk.Tk):
         self.add_recent_file(path)
         self.refresh()
 
+    def place_embedded(self) -> None:
+        path = filedialog.askopenfilename(filetypes=[("Images", "*.png *.jpg *.jpeg *.webp *.bmp *.tif *.tiff"), ("All", "*.*")])
+        if not path:
+            return
+        self.run_document_command("Place embedded", lambda: self.doc.place_image(path))
+        self.add_recent_file(path)
+        self.refresh()
+
+    def load_files_as_layers(self) -> None:
+        paths = filedialog.askopenfilenames(filetypes=[("Images", "*.png *.jpg *.jpeg *.webp *.bmp *.tif *.tiff"), ("All", "*.*")])
+        if not paths:
+            return
+
+        def edit():
+            for path in paths:
+                self.doc.place_image(path)
+
+        self.run_document_command("Load files as layers", edit)
+        for path in paths:
+            self.add_recent_file(path)
+        self.refresh()
+
     def save(self) -> None:
         if self.doc.path and self.doc.path.lower().endswith(".prdx"):
             self.save_project_async(self.doc.path)
@@ -1462,6 +1515,16 @@ class PhotoRedactorApp(tk.Tk):
         self.update_selection_overlay()
         self.refresh()
 
+    def trim_transparent(self) -> None:
+        self.run_document_command("Trim transparent pixels", self.doc.trim_transparent)
+        self.selection_box = self.doc.selection_bounds()
+        self.refresh()
+
+    def reveal_all(self) -> None:
+        self.run_document_command("Reveal all layers", self.doc.reveal_all)
+        self.selection_box = self.doc.selection_bounds()
+        self.refresh()
+
     def rotate(self, angle: int) -> None:
         def edit():
             old_w, old_h = self.doc.width, self.doc.height
@@ -1637,6 +1700,26 @@ class PhotoRedactorApp(tk.Tk):
         a = simpledialog.askfloat("Noise", "Amount 0..1:", initialvalue=0.04, minvalue=0.0, maxvalue=1.0)
         if a is not None:
             self.apply_to_layer("noise", lambda arr: add_noise(arr, a))
+
+    def filter_content_aware_fill(self) -> None:
+        layer = self.doc.layer
+        selection_mask = self.doc.layer_selection_mask(layer)
+        if selection_mask is None or not np.any(selection_mask):
+            messagebox.showinfo("Content-aware fill", "Create a selection on the active layer first.")
+            return
+        radius = simpledialog.askinteger("Content-aware fill", "Search radius:", initialvalue=3, minvalue=1, maxvalue=30)
+        if radius:
+            self.apply_to_layer("content-aware fill", lambda arr: content_aware_fill(arr, selection_mask, radius))
+
+    def filter_red_eye(self) -> None:
+        selection_mask = self.doc.layer_selection_mask(self.doc.layer)
+        strength = simpledialog.askfloat("Red-eye reduction", "Strength 0..1:", initialvalue=0.85, minvalue=0.0, maxvalue=1.0)
+        if strength is not None:
+            self.apply_to_layer("red-eye reduction", lambda arr: reduce_red_eye(arr, selection_mask, strength))
+
+    def set_view_channel(self) -> None:
+        self.invalidate_view()
+        self.refresh_canvas()
 
     def set_zoom(self, value: float) -> None:
         self.zoom.set(max(0.05, min(16.0, value)))

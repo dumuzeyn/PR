@@ -4,7 +4,7 @@
 
 - Local documents: new, open, save, save as, export.
 - Workflow: document presets, recent files, layer export and project metadata.
-- Document geometry: resize image, resize canvas, rotate, flip, crop.
+- Document geometry: resize image, resize canvas, trim transparent pixels, reveal all layers, rotate, flip, crop.
 - Navigation: zoom, fit to screen, pan with scrollbars.
 - Raster layers: create, duplicate, delete, reorder, visibility, opacity, merge, flatten.
 - Layer compositing: clipping masks, basic layer styles, opacity and blend modes.
@@ -12,13 +12,14 @@
 - Raster layer masks: reveal all, hide all, from selection, paint on mask, invert, toggle, apply, delete.
 - Blend modes: Normal, Multiply, Screen, Overlay, Soft Light, Darken, Lighten, Difference, Color, Luminosity.
 - Tools: move, brush, eraser, fill, gradient, editable text, rectangular/elliptical/lasso/polygon selection, magic wand, color range, crop.
-- Local retouching: blur, sharpen, dodge, burn, clone stamp and healing brush.
+- Local retouching: blur, sharpen, dodge, burn, clone stamp, healing brush, red-eye reduction and content-aware fill.
+- Layer import: place embedded image and load several image files as layers.
 - Shape layers: editable rectangle, ellipse and line layers.
-- View helpers: grid overlay and numeric guides.
+- View helpers: grid overlay, numeric guides and channel preview for RGB/Red/Green/Blue/Alpha.
 - Analysis: eyedropper, metadata/EXIF viewer, histogram and image statistics.
 - Recovery and automation: autosave recovery file, manual recovery opening and action recording to JSON logs.
 - Adjustments: destructive brightness, contrast, saturation, levels, curves, grayscale, invert plus non-destructive adjustment layers for the same core set.
-- Filters: Gaussian blur, sharpen, noise.
+- Filters: Gaussian blur, sharpen, noise, content-aware fill and red-eye reduction.
 - History: undo and redo snapshots.
 - Automation: simple batch resize/convert.
 - Transform: numeric Free Transform for scale, rotate, position and flips.
@@ -33,8 +34,8 @@
 4. Free Transform: transform handles, warp, perspective and selected-pixel transforms.
 5. Text engine: paragraph boxes, font picker, alignment, wrapping and text-on-path.
 6. Shapes and paths: Bezier editing, polygon/star/custom shapes and shape boolean operations.
-7. Retouching: patch, red-eye, content-aware fill and source-management presets.
-8. Smart objects: embedded image payloads, re-editable transforms, linked file updates.
+7. Retouching: patch tool, retouch presets and stronger edge-aware cleanup.
+8. Smart objects: re-editable transforms, embedded payload management and linked file updates.
 9. RAW/color management: ICC profiles, 16/32-bit channels, Lab/CMYK workflows and richer metadata editing.
 10. GPU/tiled rendering: tile cache, dirty-region recomposition, scratch disk, background save.
 11. Plugin API and actions: replayable command actions, batch execution, external filters.

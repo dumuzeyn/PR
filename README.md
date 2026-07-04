@@ -7,7 +7,7 @@ This repository starts with a real working editor and an architecture intended t
 - multi-layer raster documents
 - custom project format (`.prdx`)
 - PNG/JPEG/WebP/BMP/TIFF import and export
-- document presets, recent files and layer export
+- document presets, recent files, embedded image placement, loading several files as layers and layer export
 - brush, eraser, fill, gradient, editable text layers, crop, rectangular/elliptical/freehand/polygon selection, magic wand, color range, move
 - layer opacity, visibility, duplication, merge, flatten
 - layer locks, raster layer masks, mask painting and blend modes
@@ -15,8 +15,9 @@ This repository starts with a real working editor and an architecture intended t
 - real selection mask with select all, invert, feather, grow, shrink, opaque-pixel selection, single row/column selection and saved alpha selections
 - numeric Free Transform for active layers
 - local retouch tools: blur, sharpen, dodge, burn, clone stamp and healing brush
+- content-aware fill for selected areas and red-eye reduction
 - editable shape layers for rectangles, ellipses and lines
-- grid and guide overlays
+- grid and guide overlays plus RGB/Red/Green/Blue/Alpha channel preview
 - recovery autosave and manual recovery opening
 - simple action recording to JSON logs
 - metadata/EXIF view, histogram, image statistics and eyedropper
@@ -24,7 +25,7 @@ This repository starts with a real working editor and an architecture intended t
 - undo/redo
 - command-based undo for strokes, moves and layer edits
 - `.prdx` projects with `manifest.json` and separate layer PNG files, without Base64-packed layers
-- resize, canvas resize, rotate, flip
+- resize, canvas resize, trim transparent pixels, reveal all layers, rotate, flip
 - brightness, contrast, saturation, levels, curves, blur, sharpen, noise, grayscale, invert
 - batch processing for folders
 - executable packaging with PyInstaller

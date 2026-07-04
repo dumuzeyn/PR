@@ -468,6 +468,24 @@ class Document:
         self.active_layer = len(self.layers) - 1
         self.dirty = True
 
+    def place_image(self, path: str | Path) -> None:
+        image = Image.open(path)
+        pixels = pil_to_rgba_array(image)
+        h, w = pixels.shape[:2]
+        layer = Layer(
+            Path(path).stem,
+            pixels,
+            x=(self.width - w) // 2,
+            y=(self.height - h) // 2,
+            kind="embedded",
+        )
+        self.layers.append(layer)
+        self.active_layer = len(self.layers) - 1
+        embedded = list(self.metadata.get("embedded_images", []))
+        embedded.append({"name": layer.name, "source_path": str(path), "size": [w, h]})
+        self.metadata["embedded_images"] = embedded
+        self.dirty = True
+
     def add_text_layer(self, text: str, x: int, y: int, color: tuple[int, int, int, int], size: int, font_family: str = "arial.ttf") -> None:
         layer = Layer(
             name=f"Text: {text[:24]}",
@@ -666,6 +684,37 @@ class Document:
             self.selection_mask = self.selection_mask[y1:y2, x1:x2].copy()
         for name, mask in list(self.saved_selections.items()):
             self.saved_selections[name] = mask[y1:y2, x1:x2].copy()
+        self.dirty = True
+
+    def trim_transparent(self) -> None:
+        alpha = self.composite(False)[:, :, 3]
+        if not np.any(alpha):
+            return
+        ys, xs = np.where(alpha > 0)
+        self.crop((int(xs.min()), int(ys.min()), int(xs.max() + 1), int(ys.max() + 1)))
+
+    def reveal_all(self) -> None:
+        min_x, min_y = 0, 0
+        max_x, max_y = self.width, self.height
+        for layer in self.layers:
+            h, w = layer.pixels.shape[:2]
+            min_x = min(min_x, layer.x)
+            min_y = min(min_y, layer.y)
+            max_x = max(max_x, layer.x + w)
+            max_y = max(max_y, layer.y + h)
+        if min_x == 0 and min_y == 0 and max_x == self.width and max_y == self.height:
+            return
+        dx, dy = -min_x, -min_y
+        old_w, old_h = self.width, self.height
+        new_w, new_h = max(1, max_x - min_x), max(1, max_y - min_y)
+        for layer in self.layers:
+            layer.x += dx
+            layer.y += dy
+        if self.selection_mask is not None:
+            self.selection_mask = shifted_mask(self.selection_mask, old_w, old_h, new_w, new_h, dx, dy)
+        for name, mask in list(self.saved_selections.items()):
+            self.saved_selections[name] = shifted_mask(mask, old_w, old_h, new_w, new_h, dx, dy)
+        self.width, self.height = new_w, new_h
         self.dirty = True
 
     def set_rect_selection(self, box: tuple[int, int, int, int], mode: str = "replace") -> None:
@@ -944,6 +993,17 @@ def paste_mask(dst: np.ndarray, src: np.ndarray, x: int, y: int) -> None:
         return
     sx1, sy1 = x1 - x, y1 - y
     dst[y1:y2, x1:x2] = src[sy1 : sy1 + (y2 - y1), sx1 : sx1 + (x2 - x1)]
+
+
+def shifted_mask(mask: np.ndarray, old_width: int, old_height: int, new_width: int, new_height: int, dx: int, dy: int) -> np.ndarray:
+    out = np.zeros((new_height, new_width), dtype=np.uint8)
+    x1, y1 = max(0, dx), max(0, dy)
+    x2, y2 = min(new_width, dx + old_width), min(new_height, dy + old_height)
+    if x1 >= x2 or y1 >= y2:
+        return out
+    sx1, sy1 = x1 - dx, y1 - dy
+    out[y1:y2, x1:x2] = mask[sy1 : sy1 + (y2 - y1), sx1 : sx1 + (x2 - x1)]
+    return out
 
 
 def layer_alpha_canvas(document: Document, layer: Layer) -> np.ndarray:
@@ -1409,6 +1469,34 @@ def add_noise(arr: np.ndarray, amount: float) -> np.ndarray:
     noise = np.random.normal(0, amount * 255, out[:, :, :3].shape)
     out[:, :, :3] = np.clip(out[:, :, :3] + noise, 0, 255)
     return out.astype(np.uint8)
+
+
+def content_aware_fill(arr: np.ndarray, selection_mask: np.ndarray | None, radius: int = 3) -> np.ndarray:
+    if selection_mask is None or not np.any(selection_mask):
+        return arr.copy()
+    mask = (selection_mask > 0).astype(np.uint8) * 255
+    out = arr.copy()
+    radius = max(1, int(radius))
+    rgb = cv2.inpaint(out[:, :, :3], mask, radius, cv2.INPAINT_TELEA)
+    alpha = cv2.inpaint(out[:, :, 3], mask, radius, cv2.INPAINT_TELEA)
+    out[:, :, :3] = rgb
+    out[:, :, 3] = np.where(mask > 0, np.maximum(alpha, out[:, :, 3]), out[:, :, 3]).astype(np.uint8)
+    return out
+
+
+def reduce_red_eye(arr: np.ndarray, selection_mask: np.ndarray | None = None, strength: float = 0.85) -> np.ndarray:
+    out = arr.copy().astype(np.float32)
+    rgb = out[:, :, :3]
+    r, g, b = rgb[:, :, 0], rgb[:, :, 1], rgb[:, :, 2]
+    red_mask = (r > 90) & (r > g * 1.35) & (r > b * 1.35) & (arr[:, :, 3] > 0)
+    if selection_mask is not None:
+        red_mask &= selection_mask > 0
+    if not np.any(red_mask):
+        return arr.copy()
+    replacement = (g[red_mask] + b[red_mask]) * 0.5
+    mix = np.clip(float(strength), 0, 1)
+    r[red_mask] = r[red_mask] * (1.0 - mix) + replacement * mix
+    return np.clip(out, 0, 255).astype(np.uint8)
 
 
 def image_statistics(arr: np.ndarray) -> dict[str, Any]:
