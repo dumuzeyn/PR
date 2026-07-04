@@ -121,6 +121,11 @@ TOOL_DEFINITIONS = [
     ("Кадрирование", "crop", "Задает область обрезки документа."),
 ]
 
+MASK_PREVIEW_NORMAL = "Обычный"
+MASK_PREVIEW_OVERLAY = "Красное перекрытие"
+MASK_PREVIEW_CHANNEL = "Черно-белая маска"
+MASK_PREVIEW_MODES = [MASK_PREVIEW_NORMAL, MASK_PREVIEW_OVERLAY, MASK_PREVIEW_CHANNEL]
+
 
 class PhotoRedactorApp(tk.Tk):
     def __init__(self) -> None:
@@ -147,7 +152,7 @@ class PhotoRedactorApp(tk.Tk):
         self.grid_visible = tk.BooleanVar(value=False)
         self.grid_spacing = tk.IntVar(value=64)
         self.view_channel = tk.StringVar(value="RGB")
-        self.mask_preview = tk.StringVar(value="Обычный")
+        self.mask_preview = tk.StringVar(value=MASK_PREVIEW_NORMAL)
         self.foreground = (30, 120, 255, 255)
         self.background = (255, 255, 255, 255)
         self.drag_start: tuple[int, int] | None = None
@@ -360,6 +365,7 @@ class PhotoRedactorApp(tk.Tk):
         layer.add_command(label="Объединить с нижним", command=self.merge_down)
         layer.add_command(label="Свести изображение", command=self.flatten)
         layer.add_separator()
+        layer.add_command(label="Редактировать маску как канал", command=self.edit_active_mask_channel)
         layer.add_command(label="Добавить маску из выделения", command=self.add_mask_from_selection)
         layer.add_command(label="Добавить белую маску", command=self.add_reveal_all_mask)
         layer.add_command(label="Добавить черную маску", command=self.add_hide_all_mask)
@@ -418,7 +424,7 @@ class PhotoRedactorApp(tk.Tk):
             channel.add_radiobutton(label=label, value=name, variable=self.view_channel, command=self.set_view_channel)
         mask_view = tk.Menu(view, tearoff=False)
         view.add_cascade(label="Просмотр маски", menu=mask_view)
-        for label in ["Обычный", "Красное перекрытие", "Черно-белая маска"]:
+        for label in MASK_PREVIEW_MODES:
             mask_view.add_radiobutton(label=label, value=label, variable=self.mask_preview, command=self.set_mask_preview)
         view.add_separator()
         view.add_checkbutton(label="Сетка", variable=self.grid_visible, command=self.refresh_canvas)
@@ -445,7 +451,10 @@ class PhotoRedactorApp(tk.Tk):
         ttk.Label(parent, text="Непрозрачность").pack()
         ttk.Scale(parent, from_=0.01, to=1.0, variable=self.opacity, orient=tk.HORIZONTAL).pack(fill=tk.X, padx=8)
         ttk.Label(parent, text="Куда рисовать").pack()
-        ttk.Combobox(parent, textvariable=self.paint_target, values=["pixels", "mask"], state="readonly").pack(fill=tk.X, padx=8)
+        self.paint_target_box = ttk.Combobox(parent, textvariable=self.paint_target, values=["pixels", "mask"], state="readonly")
+        self.paint_target_box.pack(fill=tk.X, padx=8)
+        self.paint_target_box.bind("<<ComboboxSelected>>", lambda _event: self.set_paint_target())
+        ToolTip(self.paint_target_box, "pixels рисует по слою, mask рисует по маске активного слоя.")
         ttk.Label(parent, text="Допуск").pack()
         ttk.Scale(parent, from_=0, to=128, variable=self.tolerance, orient=tk.HORIZONTAL).pack(fill=tk.X, padx=8)
 
@@ -514,10 +523,12 @@ class PhotoRedactorApp(tk.Tk):
         self.layer_thumb.grid(row=1, column=0, sticky=tk.W)
         self.mask_thumb = ttk.Label(thumbs)
         self.mask_thumb.grid(row=1, column=1, sticky=tk.W, padx=(10, 0))
-        ToolTip(self.layer_thumb, "Миниатюра пикселей активного слоя.")
-        ToolTip(self.mask_thumb, "Миниатюра маски активного слоя. Белое показывает видимые области, черное скрытые.")
+        self.layer_thumb.bind("<Button-1>", self.edit_pixels_channel)
+        self.mask_thumb.bind("<Button-1>", self.edit_mask_channel)
+        ToolTip(self.layer_thumb, "Миниатюра пикселей активного слоя. Клик переключает кисть обратно на пиксели.")
+        ToolTip(self.mask_thumb, "Миниатюра маски активного слоя. Клик включает рисование по маске и черно-белый просмотр канала.")
         ttk.Label(parent, text="Просмотр маски").pack(anchor=tk.W, padx=8)
-        self.mask_preview_box = ttk.Combobox(parent, textvariable=self.mask_preview, values=["Обычный", "Красное перекрытие", "Черно-белая маска"], state="readonly")
+        self.mask_preview_box = ttk.Combobox(parent, textvariable=self.mask_preview, values=MASK_PREVIEW_MODES, state="readonly")
         self.mask_preview_box.pack(fill=tk.X, padx=8, pady=(0, 6))
         self.mask_preview_box.bind("<<ComboboxSelected>>", lambda _event: self.set_mask_preview())
         ToolTip(self.mask_preview_box, "Показывает активную маску поверх холста или как черно-белый канал без изменения документа.")
@@ -673,8 +684,8 @@ class PhotoRedactorApp(tk.Tk):
         return out
 
     def _mask_preview_display(self, display: np.ndarray) -> np.ndarray:
-        mode = self.mask_preview.get() if hasattr(self, "mask_preview") else "Обычный"
-        if mode == "Обычный":
+        mode = self.mask_preview.get() if hasattr(self, "mask_preview") else MASK_PREVIEW_NORMAL
+        if mode == MASK_PREVIEW_NORMAL:
             return display
         layer = self.doc.layer
         if layer.mask is None:
@@ -684,13 +695,13 @@ class PhotoRedactorApp(tk.Tk):
         effective = effective_layer_mask(layer) if layer.mask_enabled else layer.mask
         paste_mask(mask_canvas, effective, layer.x, layer.y)
         paste_mask(active_canvas, np.full(layer.mask.shape, 255, dtype=np.uint8), layer.x, layer.y)
-        if mode == "Черно-белая маска":
+        if mode == MASK_PREVIEW_CHANNEL:
             gray = np.where(active_canvas > 0, mask_canvas, 72).astype(np.uint8)
             out = np.zeros((self.doc.height, self.doc.width, 4), dtype=np.uint8)
             out[:, :, :3] = gray[:, :, None]
             out[:, :, 3] = 255
             return out
-        if mode == "Красное перекрытие":
+        if mode == MASK_PREVIEW_OVERLAY:
             out = display.copy()
             hidden = ((255 - mask_canvas).astype(np.float32) / 255.0) * (active_canvas > 0)
             alpha = (hidden * 0.58)[:, :, None]
@@ -2290,6 +2301,40 @@ class PhotoRedactorApp(tk.Tk):
     def set_mask_preview(self) -> None:
         self.invalidate_view()
         self.refresh_canvas()
+
+    def set_paint_target(self) -> None:
+        if self.paint_target.get() == "mask":
+            self.prepare_mask_editing(create_if_missing=True)
+        else:
+            self.mask_preview.set(MASK_PREVIEW_NORMAL)
+            self.set_mask_preview()
+            self.status_text("Рисование по пикселям активного слоя")
+
+    def edit_pixels_channel(self, _event=None) -> None:
+        self.paint_target.set("pixels")
+        self.mask_preview.set(MASK_PREVIEW_NORMAL)
+        self.set_mask_preview()
+        self.status_text("Рисование по пикселям активного слоя")
+
+    def edit_mask_channel(self, _event=None) -> None:
+        self.prepare_mask_editing(create_if_missing=True)
+
+    def edit_active_mask_channel(self) -> None:
+        self.prepare_mask_editing(create_if_missing=True)
+
+    def prepare_mask_editing(self, create_if_missing: bool) -> None:
+        layer = self.doc.layer
+        if layer.mask is None:
+            if not create_if_missing:
+                self.mask_preview.set(MASK_PREVIEW_NORMAL)
+                self.set_mask_preview()
+                self.status_text("У активного слоя нет маски")
+                return
+            self.run_document_command("Add reveal-all mask", self.doc.add_reveal_all_mask)
+        self.paint_target.set("mask")
+        self.mask_preview.set(MASK_PREVIEW_CHANNEL)
+        self.refresh()
+        self.status_text("Рисование по маске активного слоя")
 
     def set_zoom(self, value: float) -> None:
         self.zoom.set(max(0.05, min(16.0, value)))
