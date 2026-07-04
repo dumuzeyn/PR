@@ -926,6 +926,40 @@ class Document:
         if np.any(local_union):
             self.apply_selection_mask(self._layer_mask_to_document(layer, local_union), mode)
 
+    def magnetic_edge_map(self) -> np.ndarray:
+        composite = self.composite(False)
+        gray = cv2.cvtColor(composite[:, :, :3], cv2.COLOR_RGB2GRAY)
+        gray = np.where(composite[:, :, 3] > 0, gray, 0).astype(np.uint8)
+        blurred = cv2.GaussianBlur(gray, (3, 3), 0)
+        edges = cv2.Canny(blurred, 50, 140)
+        grad_x = cv2.Sobel(blurred, cv2.CV_32F, 1, 0, ksize=3)
+        grad_y = cv2.Sobel(blurred, cv2.CV_32F, 0, 1, ksize=3)
+        magnitude = cv2.magnitude(grad_x, grad_y)
+        if float(magnitude.max()) > 0.0:
+            magnitude = (magnitude / magnitude.max() * 255.0).astype(np.uint8)
+        else:
+            magnitude = np.zeros_like(edges)
+        return np.maximum(edges, magnitude)
+
+    def snap_point_to_edge(self, point: tuple[int, int], edge_map: np.ndarray, radius: int = 14) -> tuple[int, int]:
+        x = max(0, min(self.width - 1, int(point[0])))
+        y = max(0, min(self.height - 1, int(point[1])))
+        radius = max(1, int(radius))
+        x1, y1 = max(0, x - radius), max(0, y - radius)
+        x2, y2 = min(self.width, x + radius + 1), min(self.height, y + radius + 1)
+        local = edge_map[y1:y2, x1:x2]
+        if local.size == 0 or int(local.max()) <= 0:
+            return x, y
+        ys, xs = np.where(local > 0)
+        if len(xs) == 0:
+            return x, y
+        doc_x = xs + x1
+        doc_y = ys + y1
+        distance = np.sqrt((doc_x - x) ** 2 + (doc_y - y) ** 2)
+        score = local[ys, xs].astype(np.float32) - distance.astype(np.float32) * 4.0
+        best = int(np.argmax(score))
+        return int(doc_x[best]), int(doc_y[best])
+
     def select_opaque_pixels(self, layer: Layer, mode: str = "replace") -> None:
         local = (layer.pixels[:, :, 3] > 0).astype(np.uint8) * 255
         self.apply_selection_mask(self._layer_mask_to_document(layer, local), mode)

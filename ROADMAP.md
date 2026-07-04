@@ -9,10 +9,10 @@
 - Raster layers: create, duplicate, delete, reorder, visibility, opacity, merge, flatten.
 - Layer compositing: clipping masks, basic layer styles, opacity and blend modes.
 - Non-destructive filters: per-layer editable filter stack for blur, sharpen, noise, median, edge detect and emboss.
-- Raster selections: rectangular, elliptical, freehand lasso, polygon lasso, quick selection brush, magic wand, color range, single row/column, opaque pixels, select all, invert, feather, smooth, grow, shrink, border/refine, saved alpha selections.
+- Raster selections: rectangular, elliptical, freehand lasso, magnetic lasso, polygon lasso, quick selection brush, magic wand, color range, single row/column, opaque pixels, select all, invert, feather, smooth, grow, shrink, border/refine, saved alpha selections.
 - Raster layer masks: reveal all, hide all, from selection, paint on mask, density, feather, invert, toggle, apply, delete.
 - Blend modes: Normal, Multiply, Screen, Overlay, Soft Light, Darken, Lighten, Difference, Color, Luminosity.
-- Tools: move, brush, eraser, fill, gradient, editable text, rectangular/elliptical/lasso/polygon selection, magic wand, color range, crop.
+- Tools: move, brush, eraser, fill, gradient, editable text, rectangular/elliptical/lasso/magnetic/polygon selection, magic wand, color range, crop.
 - Text layers: font selection, multiline editing, paragraph width, word wrapping, alignment and line spacing.
 - Local retouching: blur, sharpen, dodge, burn, clone stamp, healing brush, patch selection, red-eye reduction and content-aware fill.
 - Layer import: place embedded images, place linked images, update/relink linked layers and load several image files as layers.
@@ -30,7 +30,7 @@
 
 ## Next milestones toward the full list
 
-1. Selection engine: magnetic lasso, better quick-selection refinement and full Select and Mask workspace.
+1. Selection engine: better quick-selection refinement and full Select and Mask workspace.
 2. Editable masks: mask thumbnails and linked/unlinked mask movement.
 3. Non-destructive editing: richer smart-filter UI, adjustment-layer previews and clipping mask polish.
 4. Free Transform: transform handles, warp and selected-pixel transforms.

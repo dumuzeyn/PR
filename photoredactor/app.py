@@ -82,6 +82,7 @@ class PhotoRedactorApp(tk.Tk):
         self._lasso_points: list[tuple[int, int]] = []
         self._polygon_points: list[tuple[int, int]] = []
         self._polygon_ids: list[int] = []
+        self._magnetic_edges: np.ndarray | None = None
         self._quick_points: list[tuple[int, int]] = []
         self._quick_mode = "replace"
         self._clone_source: tuple[int, int] | None = None
@@ -357,6 +358,7 @@ class PhotoRedactorApp(tk.Tk):
             ("Rect Sel", "select"),
             ("Ellipse Sel", "ellipse_select"),
             ("Lasso", "lasso"),
+            ("Magnetic", "magnetic_lasso"),
             ("Polygon", "polygon_lasso"),
             ("Quick Sel", "quick_selection"),
             ("Magic Wand", "magic_wand"),
@@ -754,6 +756,11 @@ class PhotoRedactorApp(tk.Tk):
             self.draw_polygon_lasso()
         elif tool == "lasso":
             self._lasso_points = [point]
+        elif tool == "magnetic_lasso":
+            self._magnetic_edges = self.doc.magnetic_edge_map()
+            snapped = self.doc.snap_point_to_edge(point, self._magnetic_edges, max(8, int(self.tolerance.get())))
+            self._lasso_points = [snapped]
+            self.status_text(f"Magnetic lasso: {snapped[0]}, {snapped[1]}")
 
     def pointer_drag(self, event) -> None:
         if self._panning:
@@ -776,6 +783,11 @@ class PhotoRedactorApp(tk.Tk):
         elif tool == "lasso" and self.drag_start:
             self._lasso_points.append(point)
             self.draw_lasso()
+        elif tool == "magnetic_lasso" and self.drag_start:
+            snapped = self.magnetic_lasso_point(point)
+            if not self._lasso_points or (snapped[0] - self._lasso_points[-1][0]) ** 2 + (snapped[1] - self._lasso_points[-1][1]) ** 2 >= 4:
+                self._lasso_points.append(snapped)
+                self.draw_lasso()
         elif tool == "quick_selection" and self.drag_start:
             self._quick_points.append(point)
             self.status_text(f"Quick selection points: {len(self._quick_points)}")
@@ -813,6 +825,15 @@ class PhotoRedactorApp(tk.Tk):
             points = list(self._lasso_points)
             self.run_selection_command("Lasso selection", lambda: self.doc.set_polygon_selection(points, mode))
             self.clear_lasso_overlay()
+        elif tool == "magnetic_lasso":
+            if self.drag_start:
+                self._lasso_points.append(self.magnetic_lasso_point(point))
+            if len(self._lasso_points) >= 3:
+                mode = self.selection_mode_from_event(event)
+                points = list(self._lasso_points)
+                self.run_selection_command("Magnetic lasso selection", lambda: self.doc.set_polygon_selection(points, mode))
+            self.clear_lasso_overlay()
+            self._magnetic_edges = None
         elif tool == "quick_selection" and self._quick_points:
             points = list(self._quick_points)
             mode = self._quick_mode
@@ -999,11 +1020,17 @@ class PhotoRedactorApp(tk.Tk):
         self.delete_lasso_overlay()
         self._lasso_points.clear()
         self._polygon_points.clear()
+        self._magnetic_edges = None
 
     def delete_lasso_overlay(self) -> None:
         for item_id in self._polygon_ids:
             self.canvas.delete(item_id)
         self._polygon_ids.clear()
+
+    def magnetic_lasso_point(self, point: tuple[int, int]) -> tuple[int, int]:
+        if self._magnetic_edges is None:
+            self._magnetic_edges = self.doc.magnetic_edge_map()
+        return self.doc.snap_point_to_edge(point, self._magnetic_edges, max(8, int(self.tolerance.get())))
 
     def update_selection_overlay(self) -> None:
         bounds = self.doc.selection_bounds()
