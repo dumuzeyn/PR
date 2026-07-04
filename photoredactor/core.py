@@ -95,6 +95,7 @@ class Layer:
     blend_mode: str = "Normal"
     clipping: bool = False
     effects: dict[str, Any] = field(default_factory=dict)
+    filters: list[dict[str, Any]] = field(default_factory=list)
     kind: str = "raster"
     text_data: dict[str, Any] | None = None
     shape_data: dict[str, Any] | None = None
@@ -117,6 +118,7 @@ class Layer:
             blend_mode=self.blend_mode,
             clipping=self.clipping,
             effects=json.loads(json.dumps(self.effects)),
+            filters=json.loads(json.dumps(self.filters)),
             kind=self.kind,
             text_data=None if self.text_data is None else dict(self.text_data),
             shape_data=None if self.shape_data is None else dict(self.shape_data),
@@ -196,6 +198,7 @@ class Document:
                     "blend_mode": layer.blend_mode,
                     "clipping": layer.clipping,
                     "effects": json.loads(json.dumps(layer.effects)),
+                    "filters": json.loads(json.dumps(layer.filters)),
                     "kind": layer.kind,
                     "text_data": None if layer.text_data is None else dict(layer.text_data),
                     "shape_data": None if layer.shape_data is None else dict(layer.shape_data),
@@ -237,6 +240,7 @@ class Document:
                     blend_mode=raw.get("blend_mode", "Normal"),
                     clipping=bool(raw.get("clipping", False)),
                     effects=raw.get("effects", {}),
+                    filters=json.loads(json.dumps(raw.get("filters", []))),
                     kind=raw.get("kind", "raster"),
                     text_data=raw.get("text_data"),
                     shape_data=raw.get("shape_data"),
@@ -273,6 +277,7 @@ class Document:
                     "blend_mode": layer.blend_mode,
                     "clipping": layer.clipping,
                     "effects": layer.effects,
+                    "filters": layer.filters,
                     "kind": layer.kind,
                     "text_data": layer.text_data,
                     "shape_data": layer.shape_data,
@@ -311,6 +316,7 @@ class Document:
                     blend_mode=raw.get("blend_mode", "Normal"),
                     clipping=bool(raw.get("clipping", False)),
                     effects=raw.get("effects", {}),
+                    filters=raw.get("filters", []),
                     kind=raw.get("kind", "raster"),
                     text_data=raw.get("text_data"),
                     shape_data=raw.get("shape_data"),
@@ -368,6 +374,7 @@ class Document:
                         "blend_mode": layer.blend_mode,
                         "clipping": layer.clipping,
                         "effects": layer.effects,
+                        "filters": layer.filters,
                         "kind": layer.kind,
                         "text_data": layer.text_data,
                         "shape_data": layer.shape_data,
@@ -424,6 +431,7 @@ class Document:
                         blend_mode=raw.get("blend_mode", "Normal"),
                         clipping=bool(raw.get("clipping", False)),
                         effects=raw.get("effects", {}),
+                        filters=raw.get("filters", []),
                         kind=raw.get("kind", "raster"),
                         text_data=raw.get("text_data"),
                         shape_data=raw.get("shape_data"),
@@ -448,14 +456,15 @@ class Document:
                 if layer.kind == "adjustment" and layer.adjustment is not None:
                     apply_adjustment_layer(out, layer)
                 else:
+                    layer_pixels = render_layer_pixels(layer)
                     alpha_mask = effective_layer_mask(layer) if layer.mask_enabled else None
                     if layer.clipping and previous_alpha is not None:
                         clipping_mask = document_alpha_to_layer_mask(previous_alpha, layer)
                         alpha_mask = clipping_mask if alpha_mask is None else np.minimum(alpha_mask, clipping_mask)
-                    for pixels, x, y, opacity, blend_mode in render_layer_effects(layer):
+                    for pixels, x, y, opacity, blend_mode in render_layer_effects(layer, layer_pixels):
                         alpha_blend_inplace(out, pixels, x, y, opacity, None, 1.0, blend_mode)
-                    alpha_blend_inplace(out, layer.pixels, layer.x, layer.y, layer.opacity, alpha_mask, layer.mask_density, layer.blend_mode)
-                    previous_alpha = layer_alpha_canvas(self, layer)
+                    alpha_blend_inplace(out, layer_pixels, layer.x, layer.y, layer.opacity, alpha_mask, layer.mask_density, layer.blend_mode)
+                    previous_alpha = layer_alpha_canvas(self, layer, layer_pixels)
         return out
 
     def export_flat(self, path: str | Path, quality: int = 95) -> None:
@@ -627,6 +636,14 @@ class Document:
 
     def set_active_layer_effects(self, effects: dict[str, Any]) -> None:
         self.layer.effects = json.loads(json.dumps(effects))
+        self.dirty = True
+
+    def set_active_layer_filters(self, filters: list[dict[str, Any]]) -> None:
+        self.layer.filters = json.loads(json.dumps(filters))
+        self.dirty = True
+
+    def clear_active_layer_filters(self) -> None:
+        self.layer.filters = []
         self.dirty = True
 
     def duplicate_active_layer(self) -> None:
@@ -1128,9 +1145,10 @@ def effective_layer_mask(layer: Layer) -> np.ndarray | None:
     return cv2.GaussianBlur(mask, (k, k), radius).astype(np.uint8)
 
 
-def layer_alpha_canvas(document: Document, layer: Layer) -> np.ndarray:
+def layer_alpha_canvas(document: Document, layer: Layer, pixels: np.ndarray | None = None) -> np.ndarray:
     canvas = np.zeros((document.height, document.width), dtype=np.uint8)
-    alpha = layer.pixels[:, :, 3].copy()
+    source = pixels if pixels is not None else render_layer_pixels(layer)
+    alpha = source[:, :, 3].copy()
     if layer.mask is not None and layer.mask_enabled:
         mask = effective_layer_mask(layer)
         mask_alpha = ((1.0 - float(layer.mask_density)) + (mask.astype(np.float32) / 255.0) * float(layer.mask_density)).clip(0, 1)
@@ -1151,11 +1169,18 @@ def document_alpha_to_layer_mask(alpha_canvas: np.ndarray, layer: Layer) -> np.n
     return mask
 
 
-def render_layer_effects(layer: Layer) -> list[tuple[np.ndarray, int, int, float, str]]:
+def render_layer_pixels(layer: Layer) -> np.ndarray:
+    if not layer.filters:
+        return layer.pixels
+    return apply_filter_stack(layer.pixels, layer.filters)
+
+
+def render_layer_effects(layer: Layer, pixels: np.ndarray | None = None) -> list[tuple[np.ndarray, int, int, float, str]]:
     effects: list[tuple[np.ndarray, int, int, float, str]] = []
     if not layer.effects:
         return effects
-    alpha = layer.pixels[:, :, 3]
+    source = pixels if pixels is not None else render_layer_pixels(layer)
+    alpha = source[:, :, 3]
     if not np.any(alpha):
         return effects
     shadow = layer.effects.get("drop_shadow")
@@ -1641,6 +1666,59 @@ def add_noise(arr: np.ndarray, amount: float) -> np.ndarray:
     noise = np.random.normal(0, amount * 255, out[:, :, :3].shape)
     out[:, :, :3] = np.clip(out[:, :, :3] + noise, 0, 255)
     return out.astype(np.uint8)
+
+
+def apply_filter_stack(arr: np.ndarray, filters: list[dict[str, Any]]) -> np.ndarray:
+    out = arr.copy()
+    for item in filters:
+        kind = str(item.get("type", "")).lower()
+        if kind == "blur":
+            out = blur(out, int(item.get("radius", 3)))
+        elif kind == "sharpen":
+            out = sharpen(out, float(item.get("amount", 1.0)))
+        elif kind == "noise":
+            out = deterministic_noise(out, float(item.get("amount", 0.03)), int(item.get("seed", 12345)))
+        elif kind == "median":
+            out = median_filter(out, int(item.get("size", 3)))
+        elif kind == "edge":
+            out = edge_filter(out, float(item.get("strength", 1.0)))
+        elif kind == "emboss":
+            out = emboss_filter(out, float(item.get("strength", 1.0)))
+    return out
+
+
+def median_filter(arr: np.ndarray, size: int) -> np.ndarray:
+    k = max(3, int(size) | 1)
+    out = arr.copy()
+    out[:, :, :3] = cv2.medianBlur(out[:, :, :3], k)
+    return out
+
+
+def deterministic_noise(arr: np.ndarray, amount: float, seed: int = 12345) -> np.ndarray:
+    out = arr.copy().astype(np.float32)
+    rng = np.random.default_rng(int(seed))
+    noise = rng.normal(0, float(amount) * 255, out[:, :, :3].shape)
+    out[:, :, :3] = np.clip(out[:, :, :3] + noise, 0, 255)
+    return out.astype(np.uint8)
+
+
+def edge_filter(arr: np.ndarray, strength: float = 1.0) -> np.ndarray:
+    gray = cv2.cvtColor(arr[:, :, :3], cv2.COLOR_RGB2GRAY)
+    edges = cv2.Canny(gray, 80, 160)
+    edge_rgb = cv2.cvtColor(edges, cv2.COLOR_GRAY2RGB).astype(np.float32)
+    out = arr.copy().astype(np.float32)
+    mix = np.clip(float(strength), 0, 1)
+    out[:, :, :3] = out[:, :, :3] * (1.0 - mix) + edge_rgb * mix
+    return np.clip(out, 0, 255).astype(np.uint8)
+
+
+def emboss_filter(arr: np.ndarray, strength: float = 1.0) -> np.ndarray:
+    kernel = np.array([[-2, -1, 0], [-1, 1, 1], [0, 1, 2]], dtype=np.float32)
+    embossed = cv2.filter2D(arr[:, :, :3], -1, kernel) + 128
+    out = arr.copy().astype(np.float32)
+    mix = np.clip(float(strength), 0, 1)
+    out[:, :, :3] = out[:, :, :3] * (1.0 - mix) + embossed.astype(np.float32) * mix
+    return np.clip(out, 0, 255).astype(np.uint8)
 
 
 def content_aware_fill(arr: np.ndarray, selection_mask: np.ndarray | None, radius: int = 3) -> np.ndarray:

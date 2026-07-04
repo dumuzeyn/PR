@@ -12,6 +12,7 @@ This repository starts with a real working editor and an architecture intended t
 - layer opacity, visibility, duplication, merge, flatten
 - layer locks, raster layer masks, mask painting, mask density/feather controls and blend modes
 - clipping masks and basic layer styles: stroke, drop shadow and outer glow
+- non-destructive per-layer filter stack with blur, sharpen, noise, median, edge and emboss filters
 - real selection mask with select all, invert, feather, grow, shrink, opaque-pixel selection, single row/column selection and saved alpha selections
 - numeric Free Transform for active layers
 - local retouch tools: blur, sharpen, dodge, burn, clone stamp and healing brush
@@ -27,7 +28,7 @@ This repository starts with a real working editor and an architecture intended t
 - command-based undo for strokes, moves and layer edits
 - `.prdx` projects with `manifest.json` and separate layer PNG files, without Base64-packed layers
 - resize, canvas resize, trim transparent pixels, reveal all layers, rotate, flip
-- brightness, contrast, saturation, levels, curves, blur, sharpen, noise, grayscale, invert
+- brightness, contrast, saturation, levels, curves, blur, sharpen, noise, median, edge detect, emboss, grayscale, invert
 - batch processing for folders
 - executable packaging with PyInstaller
 

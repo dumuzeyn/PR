@@ -8,6 +8,7 @@
 - Navigation: zoom, fit to screen, pan with scrollbars.
 - Raster layers: create, duplicate, delete, reorder, visibility, opacity, merge, flatten.
 - Layer compositing: clipping masks, basic layer styles, opacity and blend modes.
+- Non-destructive filters: per-layer editable filter stack for blur, sharpen, noise, median, edge detect and emboss.
 - Raster selections: rectangular, elliptical, freehand lasso, polygon lasso, quick selection brush, magic wand, color range, single row/column, opaque pixels, select all, invert, feather, grow, shrink, saved alpha selections.
 - Raster layer masks: reveal all, hide all, from selection, paint on mask, density, feather, invert, toggle, apply, delete.
 - Blend modes: Normal, Multiply, Screen, Overlay, Soft Light, Darken, Lighten, Difference, Color, Luminosity.
@@ -20,7 +21,7 @@
 - Analysis: eyedropper, metadata/EXIF viewer, histogram and image statistics.
 - Recovery and automation: autosave recovery file, manual recovery opening and action recording to JSON logs.
 - Adjustments: destructive brightness, contrast, saturation, levels, curves, grayscale, invert plus non-destructive adjustment layers for the same core set.
-- Filters: Gaussian blur, sharpen, noise, content-aware fill and red-eye reduction.
+- Filters: Gaussian blur, sharpen, noise, median, edge detect, emboss, content-aware fill and red-eye reduction.
 - History: undo and redo snapshots.
 - Automation: simple batch resize/convert.
 - Transform: numeric Free Transform for scale, rotate, position and flips.
@@ -31,7 +32,7 @@
 
 1. Selection engine: magnetic lasso, better quick-selection refinement and Refine Edge.
 2. Editable masks: mask thumbnails and linked/unlinked mask movement.
-3. Non-destructive editing: editable filter stack, adjustment-layer UI previews and clipping mask polish.
+3. Non-destructive editing: richer smart-filter UI, adjustment-layer previews and clipping mask polish.
 4. Free Transform: transform handles, warp, perspective and selected-pixel transforms.
 5. Text engine: text-on-path, richer typography controls and editable transform handles for text boxes.
 6. Shapes and paths: Bezier editing, polygon/star/custom shapes and shape boolean operations.

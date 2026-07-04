@@ -258,6 +258,8 @@ class PhotoRedactorApp(tk.Tk):
         layer.add_command(label="Free transform", command=self.free_transform_layer)
         layer.add_command(label="Toggle clipping mask", command=self.toggle_clipping_mask)
         layer.add_command(label="Layer styles", command=self.edit_layer_styles)
+        layer.add_command(label="Layer filters", command=self.edit_layer_filters)
+        layer.add_command(label="Clear layer filters", command=self.clear_layer_filters)
         layer.add_command(label="Merge down", command=self.merge_down)
         layer.add_command(label="Flatten image", command=self.flatten)
         layer.add_separator()
@@ -601,7 +603,8 @@ class PhotoRedactorApp(tk.Tk):
             kind_marker = "T" if layer.kind == "text" else "A" if layer.kind == "adjustment" else "S" if layer.kind == "shape" else "E" if layer.kind == "embedded" else " "
             clip_marker = "C" if layer.clipping else " "
             fx_marker = "F" if layer.effects else " "
-            self.layer_list.insert(tk.END, f"{marker}{mask_marker}{lock_marker}{kind_marker}{clip_marker}{fx_marker} {layer.name}  {round(layer.opacity * 100)}%")
+            filter_marker = "P" if layer.filters else " "
+            self.layer_list.insert(tk.END, f"{marker}{mask_marker}{lock_marker}{kind_marker}{clip_marker}{fx_marker}{filter_marker} {layer.name}  {round(layer.opacity * 100)}%")
         self.layer_list.selection_clear(0, tk.END)
         self.layer_list.selection_set(len(self.doc.layers) - 1 - self.doc.active_layer)
         self.layer_opacity.set(self.doc.layer.opacity)
@@ -1444,6 +1447,28 @@ class PhotoRedactorApp(tk.Tk):
         self.run_document_command("Layer styles", lambda: self.doc.set_active_layer_effects(effects))
         self.refresh()
 
+    def edit_layer_filters(self) -> None:
+        layer = self.doc.layer
+        initial = self.filters_to_text(layer.filters)
+        raw = simpledialog.askstring(
+            "Layer filters",
+            "Use semicolon-separated filters:\nblur,radius\nsharpen,amount\nnoise,amount\nmedian,size\nedge,strength\nemboss,strength\nempty clears filters",
+            initialvalue=initial,
+        )
+        if raw is None:
+            return
+        try:
+            filters = self.parse_filters(raw)
+        except ValueError:
+            messagebox.showerror("Layer filters", "Invalid filter string.")
+            return
+        self.run_document_command("Layer filters", lambda: self.doc.set_active_layer_filters(filters))
+        self.refresh()
+
+    def clear_layer_filters(self) -> None:
+        self.run_document_command("Clear layer filters", self.doc.clear_active_layer_filters)
+        self.refresh()
+
     def effects_to_text(self, effects: dict) -> str:
         parts = []
         stroke = effects.get("stroke")
@@ -1475,6 +1500,49 @@ class PhotoRedactorApp(tk.Tk):
             else:
                 raise ValueError
         return effects
+
+    def filters_to_text(self, filters: list[dict]) -> str:
+        parts = []
+        for item in filters:
+            kind = str(item.get("type", "")).lower()
+            if kind == "blur":
+                parts.append(f"blur,{item.get('radius', 3)}")
+            elif kind == "sharpen":
+                parts.append(f"sharpen,{item.get('amount', 1.0)}")
+            elif kind == "noise":
+                parts.append(f"noise,{item.get('amount', 0.03)}")
+            elif kind == "median":
+                parts.append(f"median,{item.get('size', 3)}")
+            elif kind == "edge":
+                parts.append(f"edge,{item.get('strength', 1.0)}")
+            elif kind == "emboss":
+                parts.append(f"emboss,{item.get('strength', 1.0)}")
+        return ";".join(parts)
+
+    def parse_filters(self, raw: str) -> list[dict]:
+        filters: list[dict] = []
+        if not raw.strip():
+            return filters
+        for chunk in raw.split(";"):
+            parts = [part.strip() for part in chunk.split(",") if part.strip()]
+            if not parts:
+                continue
+            kind = parts[0].lower()
+            if kind == "blur" and len(parts) == 2:
+                filters.append({"type": "blur", "radius": max(1, int(float(parts[1])))})
+            elif kind == "sharpen" and len(parts) == 2:
+                filters.append({"type": "sharpen", "amount": max(0.0, float(parts[1]))})
+            elif kind == "noise" and len(parts) == 2:
+                filters.append({"type": "noise", "amount": max(0.0, min(1.0, float(parts[1])))})
+            elif kind == "median" and len(parts) == 2:
+                filters.append({"type": "median", "size": max(3, int(float(parts[1])) | 1)})
+            elif kind == "edge" and len(parts) == 2:
+                filters.append({"type": "edge", "strength": max(0.0, min(1.0, float(parts[1])))})
+            elif kind == "emboss" and len(parts) == 2:
+                filters.append({"type": "emboss", "strength": max(0.0, min(1.0, float(parts[1])))})
+            else:
+                raise ValueError
+        return filters
 
     def merge_down(self) -> None:
         self.run_document_command("Merge down", self.doc.merge_down)
