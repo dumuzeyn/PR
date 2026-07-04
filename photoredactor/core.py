@@ -6,6 +6,7 @@ from typing import Any
 import base64
 import io
 import json
+import math
 import uuid
 import zipfile
 
@@ -543,6 +544,8 @@ class Document:
         fill: tuple[int, int, int, int],
         stroke: tuple[int, int, int, int] | None = None,
         stroke_width: int = 0,
+        sides: int = 5,
+        inner_ratio: float = 0.5,
     ) -> None:
         layer = Layer(
             name=f"{shape.title()} shape",
@@ -554,6 +557,8 @@ class Document:
                 "fill": list(fill),
                 "stroke": None if stroke is None else list(stroke),
                 "stroke_width": int(stroke_width),
+                "sides": int(sides),
+                "inner_ratio": float(inner_ratio),
             },
         )
         render_shape_layer(layer)
@@ -563,19 +568,29 @@ class Document:
 
     def edit_shape_layer(
         self,
+        shape: str | None = None,
         fill: tuple[int, int, int, int] | None = None,
         stroke: tuple[int, int, int, int] | None = None,
         stroke_width: int | None = None,
+        sides: int | None = None,
+        inner_ratio: float | None = None,
     ) -> None:
         layer = self.layer
         if layer.locked or layer.kind != "shape" or layer.shape_data is None:
             return
+        if shape is not None:
+            layer.shape_data["shape"] = shape
+            layer.name = f"{shape.title()} shape"
         if fill is not None:
             layer.shape_data["fill"] = list(fill)
         if stroke is not None:
             layer.shape_data["stroke"] = list(stroke)
         if stroke_width is not None:
             layer.shape_data["stroke_width"] = int(stroke_width)
+        if sides is not None:
+            layer.shape_data["sides"] = max(3, int(sides))
+        if inner_ratio is not None:
+            layer.shape_data["inner_ratio"] = float(np.clip(inner_ratio, 0.05, 0.95))
         render_shape_layer(layer)
         self.dirty = True
 
@@ -1610,9 +1625,41 @@ def render_shape_layer(layer: Layer) -> None:
         draw.ellipse(box, fill=fill, outline=outline, width=stroke_width)
     elif shape == "line":
         draw.line((box[0], box[1], box[2], box[3]), fill=outline or fill, width=max(1, stroke_width or 1))
+    elif shape == "polygon":
+        points = regular_polygon_points(box, max(3, int(data.get("sides", 5))))
+        draw.polygon(points, fill=fill)
+        if outline is not None and stroke_width > 0:
+            draw.line(points + [points[0]], fill=outline, width=stroke_width)
+    elif shape == "star":
+        points = star_points(box, max(3, int(data.get("sides", 5))), float(data.get("inner_ratio", 0.5)))
+        draw.polygon(points, fill=fill)
+        if outline is not None and stroke_width > 0:
+            draw.line(points + [points[0]], fill=outline, width=stroke_width)
     else:
         draw.rectangle(box, fill=fill, outline=outline, width=stroke_width)
     layer.pixels = pil_to_rgba_array(pil)
+
+
+def regular_polygon_points(box: tuple[int, int, int, int], sides: int) -> list[tuple[float, float]]:
+    x1, y1, x2, y2 = normalized_box(box)
+    cx, cy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
+    rx, ry = abs(x2 - x1) / 2.0, abs(y2 - y1) / 2.0
+    start = -math.pi / 2.0
+    return [(cx + math.cos(start + i * 2.0 * math.pi / sides) * rx, cy + math.sin(start + i * 2.0 * math.pi / sides) * ry) for i in range(sides)]
+
+
+def star_points(box: tuple[int, int, int, int], points: int, inner_ratio: float) -> list[tuple[float, float]]:
+    x1, y1, x2, y2 = normalized_box(box)
+    cx, cy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
+    rx, ry = abs(x2 - x1) / 2.0, abs(y2 - y1) / 2.0
+    inner_ratio = float(np.clip(inner_ratio, 0.05, 0.95))
+    start = -math.pi / 2.0
+    coords: list[tuple[float, float]] = []
+    for i in range(points * 2):
+        scale = 1.0 if i % 2 == 0 else inner_ratio
+        angle = start + i * math.pi / points
+        coords.append((cx + math.cos(angle) * rx * scale, cy + math.sin(angle) * ry * scale))
+    return coords
 
 
 def adjust_brightness_contrast(arr: np.ndarray, brightness: int, contrast: float) -> np.ndarray:

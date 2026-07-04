@@ -17,7 +17,7 @@ This repository starts with a real working editor and an architecture intended t
 - numeric Free Transform for active layers
 - local retouch tools: blur, sharpen, dodge, burn, clone stamp and healing brush
 - content-aware fill for selected areas, patch selection and red-eye reduction
-- editable shape layers for rectangles, ellipses and lines
+- editable shape layers for rectangles, ellipses, lines, polygons and stars
 - text layer font, size, block width, wrapping, alignment and line-spacing controls
 - grid and guide overlays plus RGB/Red/Green/Blue/Alpha channel preview
 - recovery autosave and manual recovery opening

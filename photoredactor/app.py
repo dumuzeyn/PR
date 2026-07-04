@@ -345,6 +345,8 @@ class PhotoRedactorApp(tk.Tk):
             ("Rect Shape", "rect_shape"),
             ("Ellipse Shape", "ellipse_shape"),
             ("Line Shape", "line_shape"),
+            ("Polygon Shape", "polygon_shape"),
+            ("Star Shape", "star_shape"),
             ("Rect Sel", "select"),
             ("Ellipse Sel", "ellipse_select"),
             ("Lasso", "lasso"),
@@ -762,7 +764,7 @@ class PhotoRedactorApp(tk.Tk):
             self.drag_start = point
             self.doc.dirty = True
             self.request_canvas_refresh()
-        elif tool in ["select", "ellipse_select", "crop", "gradient", "rect_shape", "ellipse_shape", "line_shape"]:
+        elif tool in ["select", "ellipse_select", "crop", "gradient", "rect_shape", "ellipse_shape", "line_shape", "polygon_shape", "star_shape"]:
             self.draw_selection(self.drag_start, point)
         elif tool == "lasso" and self.drag_start:
             self._lasso_points.append(point)
@@ -787,9 +789,8 @@ class PhotoRedactorApp(tk.Tk):
             self.run_document_command("Gradient", lambda: apply_gradient(self.doc.layer, (*self.drag_start, *point), self.foreground, self.background, self.doc.layer_selection_mask(self.doc.layer)))
             self.doc.dirty = True
             self.refresh()
-        elif tool in ["rect_shape", "ellipse_shape", "line_shape"] and self.drag_start:
-            shape = "rectangle" if tool == "rect_shape" else "ellipse" if tool == "ellipse_shape" else "line"
-            self.run_document_command("Shape layer", lambda: self.doc.add_shape_layer(shape, (*self.drag_start, *point), self.foreground, self.background, 2 if shape != "line" else int(self.brush_size.get())))
+        elif tool in ["rect_shape", "ellipse_shape", "line_shape", "polygon_shape", "star_shape"] and self.drag_start:
+            self.create_shape_from_drag(tool, (*self.drag_start, *point))
             self.refresh()
         elif tool in ["select", "ellipse_select", "crop"] and self.drag_start:
             self.selection_box = (*self.drag_start, *point)
@@ -1033,6 +1034,36 @@ class PhotoRedactorApp(tk.Tk):
                 self._overlay_ids.append(self.canvas.create_line(value * scale, 0, value * scale, self.doc.height * scale, fill="#ff4fd8", width=1))
         for item_id in self._overlay_ids:
             self.canvas.tag_raise(item_id)
+
+    def create_shape_from_drag(self, tool: str, box: tuple[int, int, int, int]) -> None:
+        shape = "rectangle"
+        sides = 5
+        inner_ratio = 0.5
+        if tool == "ellipse_shape":
+            shape = "ellipse"
+        elif tool == "line_shape":
+            shape = "line"
+        elif tool == "polygon_shape":
+            shape = "polygon"
+            value = simpledialog.askinteger("Polygon shape", "Sides:", initialvalue=5, minvalue=3, maxvalue=64)
+            if value is None:
+                return
+            sides = value
+        elif tool == "star_shape":
+            shape = "star"
+            value = simpledialog.askinteger("Star shape", "Points:", initialvalue=5, minvalue=3, maxvalue=64)
+            if value is None:
+                return
+            sides = value
+            ratio = simpledialog.askfloat("Star shape", "Inner radius 0.05..0.95:", initialvalue=0.5, minvalue=0.05, maxvalue=0.95)
+            if ratio is None:
+                return
+            inner_ratio = ratio
+        stroke_width = int(self.brush_size.get()) if shape == "line" else 2
+        self.run_document_command(
+            "Shape layer",
+            lambda: self.doc.add_shape_layer(shape, box, self.foreground, self.background, stroke_width, sides, inner_ratio),
+        )
 
     def clear_selection(self) -> None:
         self.run_selection_command("Clear selection", self.doc.clear_selection)
@@ -1677,10 +1708,27 @@ class PhotoRedactorApp(tk.Tk):
         if layer.kind != "shape" or layer.shape_data is None:
             messagebox.showinfo("Shape layer", "Select a shape layer first.")
             return
-        stroke_width = simpledialog.askinteger("Shape layer", "Stroke width:", initialvalue=int(layer.shape_data.get("stroke_width", 0)), minvalue=0, maxvalue=200)
-        if stroke_width is None:
+        initial = f"{layer.shape_data.get('shape', 'rectangle')},{layer.shape_data.get('stroke_width', 0)},{layer.shape_data.get('sides', 5)},{layer.shape_data.get('inner_ratio', 0.5)}"
+        raw = simpledialog.askstring("Shape layer", "shape,stroke_width,sides,inner_ratio:", initialvalue=initial)
+        if raw is None:
             return
-        self.run_document_command("Edit shape layer", lambda: self.doc.edit_shape_layer(fill=self.foreground, stroke=self.background, stroke_width=stroke_width))
+        try:
+            parts = [part.strip() for part in raw.split(",")]
+            if len(parts) != 4:
+                raise ValueError
+            shape = parts[0].lower()
+            if shape not in {"rectangle", "ellipse", "line", "polygon", "star"}:
+                raise ValueError
+            stroke_width = max(0, int(float(parts[1])))
+            sides = max(3, int(float(parts[2])))
+            inner_ratio = max(0.05, min(0.95, float(parts[3])))
+        except ValueError:
+            messagebox.showerror("Shape layer", "Use: shape,stroke_width,sides,inner_ratio")
+            return
+        self.run_document_command(
+            "Edit shape layer",
+            lambda: self.doc.edit_shape_layer(shape=shape, fill=self.foreground, stroke=self.background, stroke_width=stroke_width, sides=sides, inner_ratio=inner_ratio),
+        )
         self.refresh()
 
     def resize_image(self) -> None:
