@@ -105,6 +105,7 @@ TOOL_DEFINITIONS = [
     ("Прямоуг. фигура", "rect_shape", "Создает редактируемый прямоугольник."),
     ("Эллипс", "ellipse_shape", "Создает редактируемый эллипс."),
     ("Линия", "line_shape", "Создает редактируемую линию."),
+    ("Кривая Безье", "bezier_shape", "Создает редактируемую кубическую кривую Безье."),
     ("Многоугольник", "polygon_shape", "Создает редактируемый многоугольник."),
     ("Звезда", "star_shape", "Создает редактируемую звезду."),
     ("Прямоуг. выделение", "select", "Выделяет прямоугольную область."),
@@ -879,7 +880,7 @@ class PhotoRedactorApp(tk.Tk):
             self.doc.move_active_layer(dx, dy)
             self.drag_start = point
             self.request_canvas_refresh()
-        elif tool in ["select", "ellipse_select", "crop", "gradient", "rect_shape", "ellipse_shape", "line_shape", "polygon_shape", "star_shape"]:
+        elif tool in ["select", "ellipse_select", "crop", "gradient", "rect_shape", "ellipse_shape", "line_shape", "bezier_shape", "polygon_shape", "star_shape"]:
             self.draw_selection(self.drag_start, point)
         elif tool == "lasso" and self.drag_start:
             self._lasso_points.append(point)
@@ -909,7 +910,7 @@ class PhotoRedactorApp(tk.Tk):
             self.run_document_command("Gradient", lambda: apply_gradient(self.doc.layer, (*self.drag_start, *point), self.foreground, self.background, self.doc.layer_selection_mask(self.doc.layer)))
             self.doc.dirty = True
             self.refresh()
-        elif tool in ["rect_shape", "ellipse_shape", "line_shape", "polygon_shape", "star_shape"] and self.drag_start:
+        elif tool in ["rect_shape", "ellipse_shape", "line_shape", "bezier_shape", "polygon_shape", "star_shape"] and self.drag_start:
             self.create_shape_from_drag(tool, (*self.drag_start, *point))
             self.refresh()
         elif tool in ["select", "ellipse_select", "crop"] and self.drag_start:
@@ -1180,6 +1181,8 @@ class PhotoRedactorApp(tk.Tk):
             shape = "ellipse"
         elif tool == "line_shape":
             shape = "line"
+        elif tool == "bezier_shape":
+            shape = "bezier"
         elif tool == "polygon_shape":
             shape = "polygon"
             value = simpledialog.askinteger("Polygon shape", "Sides:", initialvalue=5, minvalue=3, maxvalue=64)
@@ -1196,7 +1199,7 @@ class PhotoRedactorApp(tk.Tk):
             if ratio is None:
                 return
             inner_ratio = ratio
-        stroke_width = int(self.brush_size.get()) if shape == "line" else 2
+        stroke_width = int(self.brush_size.get()) if shape in {"line", "bezier"} else 2
         self.run_document_command(
             "Shape layer",
             lambda: self.doc.add_shape_layer(shape, box, self.foreground, self.background, stroke_width, sides, inner_ratio),
@@ -1964,26 +1967,34 @@ class PhotoRedactorApp(tk.Tk):
         if layer.kind != "shape" or layer.shape_data is None:
             messagebox.showinfo("Shape layer", "Select a shape layer first.")
             return
-        initial = f"{layer.shape_data.get('shape', 'rectangle')},{layer.shape_data.get('stroke_width', 0)},{layer.shape_data.get('sides', 5)},{layer.shape_data.get('inner_ratio', 0.5)}"
-        raw = simpledialog.askstring("Shape layer", "shape,stroke_width,sides,inner_ratio:", initialvalue=initial)
+        control_points = layer.shape_data.get("control_points")
+        suffix = ""
+        if isinstance(control_points, list) and len(control_points) == 4:
+            suffix = "," + ",".join(str(v) for point in control_points for v in point[:2])
+        initial = f"{layer.shape_data.get('shape', 'rectangle')},{layer.shape_data.get('stroke_width', 0)},{layer.shape_data.get('sides', 5)},{layer.shape_data.get('inner_ratio', 0.5)}{suffix}"
+        raw = simpledialog.askstring("Shape layer", "shape,stroke_width,sides,inner_ratio[,p0x,p0y,p1x,p1y,p2x,p2y,p3x,p3y]:", initialvalue=initial)
         if raw is None:
             return
         try:
             parts = [part.strip() for part in raw.split(",")]
-            if len(parts) != 4:
+            if len(parts) not in {4, 12}:
                 raise ValueError
             shape = parts[0].lower()
-            if shape not in {"rectangle", "ellipse", "line", "polygon", "star"}:
+            if shape not in {"rectangle", "ellipse", "line", "bezier", "polygon", "star"}:
                 raise ValueError
             stroke_width = max(0, int(float(parts[1])))
             sides = max(3, int(float(parts[2])))
             inner_ratio = max(0.05, min(0.95, float(parts[3])))
+            new_control_points = None
+            if len(parts) == 12:
+                values = [float(value) for value in parts[4:]]
+                new_control_points = [(values[i], values[i + 1]) for i in range(0, 8, 2)]
         except ValueError:
-            messagebox.showerror("Shape layer", "Use: shape,stroke_width,sides,inner_ratio")
+            messagebox.showerror("Shape layer", "Use: shape,stroke_width,sides,inner_ratio[,p0x,p0y,p1x,p1y,p2x,p2y,p3x,p3y]")
             return
         self.run_document_command(
             "Edit shape layer",
-            lambda: self.doc.edit_shape_layer(shape=shape, fill=self.foreground, stroke=self.background, stroke_width=stroke_width, sides=sides, inner_ratio=inner_ratio),
+            lambda: self.doc.edit_shape_layer(shape=shape, fill=self.foreground, stroke=self.background, stroke_width=stroke_width, sides=sides, inner_ratio=inner_ratio, control_points=new_control_points),
         )
         self.refresh()
 

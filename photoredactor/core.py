@@ -125,7 +125,7 @@ class Layer:
             filters=json.loads(json.dumps(self.filters)),
             kind=self.kind,
             text_data=None if self.text_data is None else dict(self.text_data),
-            shape_data=None if self.shape_data is None else dict(self.shape_data),
+            shape_data=None if self.shape_data is None else json.loads(json.dumps(self.shape_data)),
             adjustment=None if self.adjustment is None else dict(self.adjustment),
             smart_data=None if self.smart_data is None else json.loads(json.dumps(self.smart_data, ensure_ascii=False)),
         )
@@ -603,19 +603,25 @@ class Document:
         stroke_width: int = 0,
         sides: int = 5,
         inner_ratio: float = 0.5,
+        control_points: list[tuple[float, float]] | None = None,
     ) -> None:
+        shape_box = normalized_box(box)
+        if shape == "bezier" and control_points is None:
+            x1, y1, x2, y2 = shape_box
+            control_points = [(x1, y2), (x1, y1), (x2, y1), (x2, y2)]
         layer = Layer(
             name=f"{shape.title()} shape",
             pixels=blank_rgba(self.width, self.height, (0, 0, 0, 0)),
             kind="shape",
             shape_data={
                 "shape": shape,
-                "box": [int(v) for v in normalized_box(box)],
+                "box": [int(v) for v in shape_box],
                 "fill": list(fill),
                 "stroke": None if stroke is None else list(stroke),
                 "stroke_width": int(stroke_width),
                 "sides": int(sides),
                 "inner_ratio": float(inner_ratio),
+                "control_points": None if control_points is None else [[float(x), float(y)] for x, y in control_points],
             },
         )
         render_shape_layer(layer)
@@ -631,6 +637,7 @@ class Document:
         stroke_width: int | None = None,
         sides: int | None = None,
         inner_ratio: float | None = None,
+        control_points: list[tuple[float, float]] | None = None,
     ) -> None:
         layer = self.layer
         if layer.locked or layer.kind != "shape" or layer.shape_data is None:
@@ -648,6 +655,8 @@ class Document:
             layer.shape_data["sides"] = max(3, int(sides))
         if inner_ratio is not None:
             layer.shape_data["inner_ratio"] = float(np.clip(inner_ratio, 0.05, 0.95))
+        if control_points is not None:
+            layer.shape_data["control_points"] = [[float(x), float(y)] for x, y in control_points]
         render_shape_layer(layer)
         self.dirty = True
 
@@ -1896,6 +1905,9 @@ def render_shape_layer(layer: Layer) -> None:
         draw.ellipse(box, fill=fill, outline=outline, width=stroke_width)
     elif shape == "line":
         draw.line((box[0], box[1], box[2], box[3]), fill=outline or fill, width=max(1, stroke_width or 1))
+    elif shape == "bezier":
+        points = bezier_curve_points(data.get("control_points"), box)
+        draw.line(points, fill=outline or fill, width=max(1, stroke_width or 2), joint="curve")
     elif shape == "polygon":
         points = regular_polygon_points(box, max(3, int(data.get("sides", 5))))
         draw.polygon(points, fill=fill)
@@ -1909,6 +1921,27 @@ def render_shape_layer(layer: Layer) -> None:
     else:
         draw.rectangle(box, fill=fill, outline=outline, width=stroke_width)
     layer.pixels = pil_to_rgba_array(pil)
+
+
+def bezier_curve_points(raw_points: Any, box: tuple[int, int, int, int], steps: int = 64) -> list[tuple[float, float]]:
+    if isinstance(raw_points, list) and len(raw_points) == 4:
+        try:
+            p0, p1, p2, p3 = [tuple(float(v) for v in point[:2]) for point in raw_points]
+        except (TypeError, ValueError):
+            p0 = p1 = p2 = p3 = None
+    else:
+        p0 = p1 = p2 = p3 = None
+    if p0 is None:
+        x1, y1, x2, y2 = normalized_box(box)
+        p0, p1, p2, p3 = (x1, y2), (x1, y1), (x2, y1), (x2, y2)
+    coords: list[tuple[float, float]] = []
+    for i in range(max(2, steps) + 1):
+        t = i / max(2, steps)
+        mt = 1.0 - t
+        x = mt**3 * p0[0] + 3 * mt * mt * t * p1[0] + 3 * mt * t * t * p2[0] + t**3 * p3[0]
+        y = mt**3 * p0[1] + 3 * mt * mt * t * p1[1] + 3 * mt * t * t * p2[1] + t**3 * p3[1]
+        coords.append((x, y))
+    return coords
 
 
 def regular_polygon_points(box: tuple[int, int, int, int], sides: int) -> list[tuple[float, float]]:
