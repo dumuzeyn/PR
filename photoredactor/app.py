@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import time
 import tkinter as tk
+import tkinter.font as tkfont
 from tkinter import colorchooser, filedialog, messagebox, simpledialog, ttk
 
 import cv2
@@ -712,10 +713,22 @@ class PhotoRedactorApp(tk.Tk):
         elif tool == "eyedropper":
             self.pick_color_from_document(point)
         elif tool == "text":
-            text = simpledialog.askstring("Text", "Text:")
-            if text:
-                size = simpledialog.askinteger("Text size", "Size:", initialvalue=48, minvalue=4, maxvalue=500) or 48
-                self.run_document_command("Text layer", lambda: self.doc.add_text_layer(text, point[0], point[1], self.foreground, size))
+            data = self.text_layer_dialog("Text layer", {"text": "", "size": 48, "font_family": "Arial", "box_width": 0, "align": "left", "line_spacing": 10})
+            if data and data["text"]:
+                self.run_document_command(
+                    "Text layer",
+                    lambda: self.doc.add_text_layer(
+                        data["text"],
+                        point[0],
+                        point[1],
+                        self.foreground,
+                        data["size"],
+                        data["font_family"],
+                        data["box_width"],
+                        data["align"],
+                        data["line_spacing"],
+                    ),
+                )
                 self.doc.dirty = True
                 self.refresh()
         elif tool == "move":
@@ -1264,6 +1277,70 @@ class PhotoRedactorApp(tk.Tk):
         area.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scroll.pack(side=tk.RIGHT, fill=tk.Y)
 
+    def text_layer_dialog(self, title: str, initial: dict) -> dict | None:
+        window = tk.Toplevel(self)
+        window.title(title)
+        window.geometry("560x440")
+        window.transient(self)
+        window.grab_set()
+        result: dict | None = None
+
+        frame = ttk.Frame(window, padding=10)
+        frame.pack(fill=tk.BOTH, expand=True)
+        text_widget = tk.Text(frame, height=8, wrap=tk.WORD)
+        text_widget.insert("1.0", str(initial.get("text", "")))
+        text_widget.grid(row=0, column=0, columnspan=4, sticky="nsew", pady=(0, 8))
+
+        size_var = tk.IntVar(value=int(initial.get("size", 48)))
+        width_var = tk.IntVar(value=int(initial.get("box_width", 0) or 0))
+        spacing_var = tk.IntVar(value=int(initial.get("line_spacing", max(2, size_var.get() // 5))))
+        align_var = tk.StringVar(value=str(initial.get("align", "left")))
+        font_var = tk.StringVar(value=str(initial.get("font_family", "Arial")))
+
+        families = sorted(set(tkfont.families()))
+        ttk.Label(frame, text="Font").grid(row=1, column=0, sticky=tk.W)
+        ttk.Combobox(frame, textvariable=font_var, values=families, state="normal").grid(row=1, column=1, columnspan=3, sticky="ew", pady=2)
+        ttk.Label(frame, text="Size").grid(row=2, column=0, sticky=tk.W)
+        ttk.Spinbox(frame, from_=4, to=500, textvariable=size_var, width=8).grid(row=2, column=1, sticky="ew", pady=2)
+        ttk.Label(frame, text="Box width").grid(row=2, column=2, sticky=tk.W, padx=(10, 0))
+        ttk.Spinbox(frame, from_=0, to=100000, textvariable=width_var, width=10).grid(row=2, column=3, sticky="ew", pady=2)
+        ttk.Label(frame, text="Align").grid(row=3, column=0, sticky=tk.W)
+        ttk.Combobox(frame, textvariable=align_var, values=["left", "center", "right"], state="readonly").grid(row=3, column=1, sticky="ew", pady=2)
+        ttk.Label(frame, text="Line spacing").grid(row=3, column=2, sticky=tk.W, padx=(10, 0))
+        ttk.Spinbox(frame, from_=0, to=500, textvariable=spacing_var, width=10).grid(row=3, column=3, sticky="ew", pady=2)
+
+        buttons = ttk.Frame(frame)
+        buttons.grid(row=4, column=0, columnspan=4, sticky="e", pady=(12, 0))
+
+        def safe_int(var, default: int, minimum: int = 0) -> int:
+            try:
+                return max(minimum, int(var.get()))
+            except (tk.TclError, ValueError):
+                return default
+
+        def accept() -> None:
+            nonlocal result
+            text = text_widget.get("1.0", "end-1c")
+            size = safe_int(size_var, 48, 4)
+            result = {
+                "text": text,
+                "size": size,
+                "font_family": font_var.get().strip() or "Arial",
+                "box_width": safe_int(width_var, 0, 0),
+                "align": align_var.get() if align_var.get() in {"left", "center", "right"} else "left",
+                "line_spacing": safe_int(spacing_var, max(2, size // 5), 0),
+            }
+            window.destroy()
+
+        ttk.Button(buttons, text="OK", command=accept).pack(side=tk.RIGHT, padx=(6, 0))
+        ttk.Button(buttons, text="Cancel", command=window.destroy).pack(side=tk.RIGHT)
+        frame.columnconfigure(1, weight=1)
+        frame.columnconfigure(3, weight=1)
+        frame.rowconfigure(0, weight=1)
+        text_widget.focus_set()
+        self.wait_window(window)
+        return result
+
     def export_layers(self) -> None:
         dst = filedialog.askdirectory(title="Export layers folder")
         if not dst:
@@ -1510,13 +1587,21 @@ class PhotoRedactorApp(tk.Tk):
         if layer.kind != "text" or layer.text_data is None:
             messagebox.showinfo("Text layer", "Select a text layer first.")
             return
-        text = simpledialog.askstring("Text layer", "Text:", initialvalue=str(layer.text_data.get("text", "")))
-        if text is None:
+        data = self.text_layer_dialog("Edit text layer", layer.text_data)
+        if data is None:
             return
-        size = simpledialog.askinteger("Text layer", "Size:", initialvalue=int(layer.text_data.get("size", 48)), minvalue=4, maxvalue=500)
-        if size is None:
-            return
-        self.run_document_command("Edit text layer", lambda: self.doc.edit_text_layer(text=text, size=size, color=self.foreground))
+        self.run_document_command(
+            "Edit text layer",
+            lambda: self.doc.edit_text_layer(
+                text=data["text"],
+                size=data["size"],
+                color=self.foreground,
+                font_family=data["font_family"],
+                box_width=data["box_width"],
+                align=data["align"],
+                line_spacing=data["line_spacing"],
+            ),
+        )
         self.refresh()
 
     def edit_shape_layer(self) -> None:

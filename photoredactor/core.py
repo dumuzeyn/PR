@@ -494,7 +494,18 @@ class Document:
         self.metadata["embedded_images"] = embedded
         self.dirty = True
 
-    def add_text_layer(self, text: str, x: int, y: int, color: tuple[int, int, int, int], size: int, font_family: str = "arial.ttf") -> None:
+    def add_text_layer(
+        self,
+        text: str,
+        x: int,
+        y: int,
+        color: tuple[int, int, int, int],
+        size: int,
+        font_family: str = "arial.ttf",
+        box_width: int = 0,
+        align: str = "left",
+        line_spacing: int | None = None,
+    ) -> None:
         layer = Layer(
             name=f"Text: {text[:24]}",
             pixels=blank_rgba(self.width, self.height, (0, 0, 0, 0)),
@@ -506,6 +517,9 @@ class Document:
                 "color": list(color),
                 "size": int(size),
                 "font_family": font_family,
+                "box_width": int(box_width),
+                "align": align,
+                "line_spacing": int(line_spacing if line_spacing is not None else max(2, int(size) // 5)),
             },
         )
         render_text_layer(layer)
@@ -556,7 +570,16 @@ class Document:
         render_shape_layer(layer)
         self.dirty = True
 
-    def edit_text_layer(self, text: str | None = None, size: int | None = None, color: tuple[int, int, int, int] | None = None) -> None:
+    def edit_text_layer(
+        self,
+        text: str | None = None,
+        size: int | None = None,
+        color: tuple[int, int, int, int] | None = None,
+        font_family: str | None = None,
+        box_width: int | None = None,
+        align: str | None = None,
+        line_spacing: int | None = None,
+    ) -> None:
         layer = self.layer
         if layer.locked or layer.kind != "text" or layer.text_data is None:
             return
@@ -567,6 +590,14 @@ class Document:
             layer.text_data["size"] = int(size)
         if color is not None:
             layer.text_data["color"] = list(color)
+        if font_family is not None:
+            layer.text_data["font_family"] = font_family
+        if box_width is not None:
+            layer.text_data["box_width"] = max(0, int(box_width))
+        if align is not None:
+            layer.text_data["align"] = align if align in {"left", "center", "right"} else "left"
+        if line_spacing is not None:
+            layer.text_data["line_spacing"] = max(0, int(line_spacing))
         render_text_layer(layer)
         self.dirty = True
 
@@ -1479,13 +1510,62 @@ def render_text_layer(layer: Layer) -> None:
     pil = rgba_array_to_pil(layer.pixels)
     draw = ImageDraw.Draw(pil)
     data = layer.text_data
-    try:
-        font = ImageFont.truetype(str(data.get("font_family", "arial.ttf")), int(data.get("size", 48)))
-    except OSError:
-        font = ImageFont.load_default()
+    font = load_text_font(str(data.get("font_family", "arial.ttf")), int(data.get("size", 48)))
     color = tuple(int(v) for v in data.get("color", [255, 255, 255, 255]))
-    draw.multiline_text((int(data.get("x", 0)), int(data.get("y", 0))), str(data.get("text", "")), fill=color, font=font, spacing=max(2, int(data.get("size", 48)) // 5))
+    x = int(data.get("x", 0))
+    y = int(data.get("y", 0))
+    size = int(data.get("size", 48))
+    box_width = max(0, int(data.get("box_width", 0) or 0))
+    spacing = max(0, int(data.get("line_spacing", max(2, size // 5))))
+    align = str(data.get("align", "left")).lower()
+    lines = wrapped_text_lines(draw, str(data.get("text", "")), font, box_width)
+    line_y = y
+    for line in lines:
+        bbox = draw.textbbox((0, 0), line or " ", font=font)
+        line_width = bbox[2] - bbox[0]
+        dx = 0
+        if box_width > 0 and align == "center":
+            dx = max(0, (box_width - line_width) // 2)
+        elif box_width > 0 and align == "right":
+            dx = max(0, box_width - line_width)
+        draw.text((x + dx, line_y), line, fill=color, font=font)
+        line_y += max(1, bbox[3] - bbox[1]) + spacing
     layer.pixels = pil_to_rgba_array(pil)
+
+
+def wrapped_text_lines(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont, box_width: int) -> list[str]:
+    if box_width <= 0:
+        return text.splitlines() or [""]
+    lines: list[str] = []
+    for paragraph in text.splitlines() or [""]:
+        if not paragraph:
+            lines.append("")
+            continue
+        current = ""
+        for word in paragraph.split(" "):
+            candidate = word if not current else f"{current} {word}"
+            bbox = draw.textbbox((0, 0), candidate, font=font)
+            if bbox[2] - bbox[0] <= box_width or not current:
+                current = candidate
+            else:
+                lines.append(current)
+                current = word
+        lines.append(current)
+    return lines
+
+
+def load_text_font(font_family: str, size: int) -> ImageFont.ImageFont:
+    family = font_family.strip() or "arial.ttf"
+    candidates = [family]
+    if not Path(family).suffix:
+        compact = family.lower().replace(" ", "")
+        candidates.extend([f"{family}.ttf", f"{compact}.ttf"])
+    for candidate in candidates:
+        try:
+            return ImageFont.truetype(candidate, size)
+        except OSError:
+            continue
+    return ImageFont.load_default()
 
 
 def render_shape_layer(layer: Layer) -> None:
