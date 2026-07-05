@@ -574,6 +574,7 @@ class Document:
         box_width: int = 0,
         align: str = "left",
         line_spacing: int | None = None,
+        tracking: int = 0,
     ) -> None:
         layer = Layer(
             name=f"Text: {text[:24]}",
@@ -589,6 +590,7 @@ class Document:
                 "box_width": int(box_width),
                 "align": align,
                 "line_spacing": int(line_spacing if line_spacing is not None else max(2, int(size) // 5)),
+                "tracking": int(tracking),
             },
         )
         render_text_layer(layer)
@@ -671,6 +673,7 @@ class Document:
         box_width: int | None = None,
         align: str | None = None,
         line_spacing: int | None = None,
+        tracking: int | None = None,
     ) -> None:
         layer = self.layer
         if layer.locked or layer.kind != "text" or layer.text_data is None:
@@ -690,6 +693,8 @@ class Document:
             layer.text_data["align"] = align if align in {"left", "center", "right"} else "left"
         if line_spacing is not None:
             layer.text_data["line_spacing"] = max(0, int(line_spacing))
+        if tracking is not None:
+            layer.text_data["tracking"] = int(tracking)
         render_text_layer(layer)
         self.dirty = True
 
@@ -1900,23 +1905,24 @@ def render_text_layer(layer: Layer) -> None:
     size = int(data.get("size", 48))
     box_width = max(0, int(data.get("box_width", 0) or 0))
     spacing = max(0, int(data.get("line_spacing", max(2, size // 5))))
+    tracking = int(data.get("tracking", 0))
     align = str(data.get("align", "left")).lower()
-    lines = wrapped_text_lines(draw, str(data.get("text", "")), font, box_width)
+    lines = wrapped_text_lines(draw, str(data.get("text", "")), font, box_width, tracking)
     line_y = y
     for line in lines:
         bbox = draw.textbbox((0, 0), line or " ", font=font)
-        line_width = bbox[2] - bbox[0]
+        line_width = text_line_width(draw, line or " ", font, tracking)
         dx = 0
         if box_width > 0 and align == "center":
             dx = max(0, (box_width - line_width) // 2)
         elif box_width > 0 and align == "right":
             dx = max(0, box_width - line_width)
-        draw.text((x + dx, line_y), line, fill=color, font=font)
+        draw_text_with_tracking(draw, (x + dx, line_y), line, fill=color, font=font, tracking=tracking)
         line_y += max(1, bbox[3] - bbox[1]) + spacing
     layer.pixels = pil_to_rgba_array(pil)
 
 
-def wrapped_text_lines(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont, box_width: int) -> list[str]:
+def wrapped_text_lines(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont, box_width: int, tracking: int = 0) -> list[str]:
     if box_width <= 0:
         return text.splitlines() or [""]
     lines: list[str] = []
@@ -1927,14 +1933,32 @@ def wrapped_text_lines(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.Ima
         current = ""
         for word in paragraph.split(" "):
             candidate = word if not current else f"{current} {word}"
-            bbox = draw.textbbox((0, 0), candidate, font=font)
-            if bbox[2] - bbox[0] <= box_width or not current:
+            if text_line_width(draw, candidate, font, tracking) <= box_width or not current:
                 current = candidate
             else:
                 lines.append(current)
                 current = word
         lines.append(current)
     return lines
+
+
+def text_line_width(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont, tracking: int = 0) -> int:
+    if not text:
+        return 0
+    bbox = draw.textbbox((0, 0), text, font=font)
+    base_width = bbox[2] - bbox[0]
+    return max(0, base_width + max(0, len(text) - 1) * int(tracking))
+
+
+def draw_text_with_tracking(draw: ImageDraw.ImageDraw, xy: tuple[int, int], text: str, fill: tuple[int, int, int, int], font: ImageFont.ImageFont, tracking: int = 0) -> None:
+    if tracking == 0 or len(text) <= 1:
+        draw.text(xy, text, fill=fill, font=font)
+        return
+    x, y = xy
+    for char in text:
+        draw.text((x, y), char, fill=fill, font=font)
+        bbox = draw.textbbox((0, 0), char, font=font)
+        x += max(0, bbox[2] - bbox[0]) + int(tracking)
 
 
 def load_text_font(font_family: str, size: int) -> ImageFont.ImageFont:

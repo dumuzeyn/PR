@@ -18,7 +18,7 @@ This repository starts with a real working editor and an architecture intended t
 - local retouch tools: blur, sharpen, dodge, burn, clone stamp and healing brush
 - content-aware fill for selected areas, patch selection and red-eye reduction
 - editable shape layers for rectangles, ellipses, lines, Bezier curves, polygons and stars
-- text layer font, size, block width, wrapping, alignment and line-spacing controls
+- text layer font, size, block width, wrapping, alignment, line-spacing and tracking controls
 - grid and guide overlays plus RGB/Red/Green/Blue/Alpha channel preview
 - Russian main interface labels and hover tooltips for the tool palette
 - recovery autosave and manual recovery opening

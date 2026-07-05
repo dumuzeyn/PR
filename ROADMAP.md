@@ -13,7 +13,7 @@
 - Raster layer masks: reveal all, hide all, from selection, mask thumbnails, thumbnail-click mask channel editing, red-overlay/black-white mask preview, linked/unlinked movement, paint on mask, density, feather, invert, toggle, apply, delete.
 - Blend modes: Normal, Multiply, Screen, Overlay, Soft Light, Darken, Lighten, Difference, Color, Luminosity.
 - Tools: move, brush, eraser, fill, gradient, editable text, rectangular/elliptical/lasso/magnetic/polygon selection, magic wand, color range, crop.
-- Text layers: font selection, multiline editing, paragraph width, word wrapping, alignment and line spacing.
+- Text layers: font selection, multiline editing, paragraph width, word wrapping, alignment, line spacing and tracking.
 - Local retouching: blur, sharpen, dodge, burn, clone stamp, healing brush, patch selection, red-eye reduction and content-aware fill.
 - Layer import: place embedded images, place linked images, update/relink linked layers and load several image files as layers.
 - Shape layers: editable rectangle, ellipse, line, Bezier curve, polygon and star layers.
@@ -35,7 +35,7 @@
 2. Editable masks: stronger mask edge controls.
 3. Non-destructive editing: richer editable adjustment controls and filter blending options.
 4. Free Transform: transform handles and richer warp preview controls.
-5. Text engine: text-on-path, richer typography controls and editable transform handles for text boxes.
+5. Text engine: text-on-path, OpenType-style controls and editable transform handles for text boxes.
 6. Shapes and paths: custom shapes, richer Bezier point editing and shape boolean operations.
 7. Retouching: interactive patch tool, retouch presets and stronger edge-aware cleanup.
 8. Smart objects: re-editable transforms, embedded payload management and richer linked-file status/conflict handling.

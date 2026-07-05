@@ -942,7 +942,7 @@ class PhotoRedactorApp(tk.Tk):
         elif tool == "eyedropper":
             self.pick_color_from_document(point)
         elif tool == "text":
-            data = self.text_layer_dialog("Text layer", {"text": "", "size": 48, "font_family": "Arial", "box_width": 0, "align": "left", "line_spacing": 10})
+            data = self.text_layer_dialog("Text layer", {"text": "", "size": 48, "font_family": "Arial", "box_width": 0, "align": "left", "line_spacing": 10, "tracking": 0})
             if data and data["text"]:
                 self.run_document_command(
                     "Text layer",
@@ -956,6 +956,7 @@ class PhotoRedactorApp(tk.Tk):
                         data["box_width"],
                         data["align"],
                         data["line_spacing"],
+                        data["tracking"],
                     ),
                 )
                 self.doc.dirty = True
@@ -1726,7 +1727,7 @@ class PhotoRedactorApp(tk.Tk):
     def text_layer_dialog(self, title: str, initial: dict) -> dict | None:
         window = tk.Toplevel(self)
         window.title(title)
-        window.geometry("560x440")
+        window.geometry("560x470")
         window.transient(self)
         window.grab_set()
         result: dict | None = None
@@ -1740,6 +1741,7 @@ class PhotoRedactorApp(tk.Tk):
         size_var = tk.IntVar(value=int(initial.get("size", 48)))
         width_var = tk.IntVar(value=int(initial.get("box_width", 0) or 0))
         spacing_var = tk.IntVar(value=int(initial.get("line_spacing", max(2, size_var.get() // 5))))
+        tracking_var = tk.IntVar(value=int(initial.get("tracking", 0)))
         align_var = tk.StringVar(value=str(initial.get("align", "left")))
         font_var = tk.StringVar(value=str(initial.get("font_family", "Arial")))
 
@@ -1754,9 +1756,11 @@ class PhotoRedactorApp(tk.Tk):
         ttk.Combobox(frame, textvariable=align_var, values=["left", "center", "right"], state="readonly").grid(row=3, column=1, sticky="ew", pady=2)
         ttk.Label(frame, text="Line spacing").grid(row=3, column=2, sticky=tk.W, padx=(10, 0))
         ttk.Spinbox(frame, from_=0, to=500, textvariable=spacing_var, width=10).grid(row=3, column=3, sticky="ew", pady=2)
+        ttk.Label(frame, text="Tracking").grid(row=4, column=0, sticky=tk.W)
+        ttk.Spinbox(frame, from_=-50, to=500, textvariable=tracking_var, width=8).grid(row=4, column=1, sticky="ew", pady=2)
 
         buttons = ttk.Frame(frame)
-        buttons.grid(row=4, column=0, columnspan=4, sticky="e", pady=(12, 0))
+        buttons.grid(row=5, column=0, columnspan=4, sticky="e", pady=(12, 0))
 
         def safe_int(var, default: int, minimum: int = 0) -> int:
             try:
@@ -1775,6 +1779,7 @@ class PhotoRedactorApp(tk.Tk):
                 "box_width": safe_int(width_var, 0, 0),
                 "align": align_var.get() if align_var.get() in {"left", "center", "right"} else "left",
                 "line_spacing": safe_int(spacing_var, max(2, size // 5), 0),
+                "tracking": safe_int(tracking_var, 0, -50),
             }
             window.destroy()
 
@@ -2440,6 +2445,7 @@ class PhotoRedactorApp(tk.Tk):
                 box_width=data["box_width"],
                 align=data["align"],
                 line_spacing=data["line_spacing"],
+                tracking=data["tracking"],
             ),
         )
         self.refresh()
