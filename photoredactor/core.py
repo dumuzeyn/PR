@@ -2073,19 +2073,33 @@ def add_noise(arr: np.ndarray, amount: float) -> np.ndarray:
 def apply_filter_stack(arr: np.ndarray, filters: list[dict[str, Any]]) -> np.ndarray:
     out = arr.copy()
     for item in filters:
+        if not bool(item.get("enabled", True)):
+            continue
+        before = out
         kind = str(item.get("type", "")).lower()
         if kind == "blur":
-            out = blur(out, int(item.get("radius", 3)))
+            filtered = blur(out, int(item.get("radius", 3)))
         elif kind == "sharpen":
-            out = sharpen(out, float(item.get("amount", 1.0)))
+            filtered = sharpen(out, float(item.get("amount", 1.0)))
         elif kind == "noise":
-            out = deterministic_noise(out, float(item.get("amount", 0.03)), int(item.get("seed", 12345)))
+            filtered = deterministic_noise(out, float(item.get("amount", 0.03)), int(item.get("seed", 12345)))
         elif kind == "median":
-            out = median_filter(out, int(item.get("size", 3)))
+            filtered = median_filter(out, int(item.get("size", 3)))
         elif kind == "edge":
-            out = edge_filter(out, float(item.get("strength", 1.0)))
+            filtered = edge_filter(out, float(item.get("strength", 1.0)))
         elif kind == "emboss":
-            out = emboss_filter(out, float(item.get("strength", 1.0)))
+            filtered = emboss_filter(out, float(item.get("strength", 1.0)))
+        else:
+            continue
+        opacity = float(np.clip(item.get("opacity", 1.0), 0.0, 1.0))
+        if opacity >= 0.999:
+            out = filtered
+        elif opacity <= 0.001:
+            out = before
+        else:
+            out = before.copy().astype(np.float32)
+            out[:, :, :3] = before[:, :, :3].astype(np.float32) * (1.0 - opacity) + filtered[:, :, :3].astype(np.float32) * opacity
+            out = np.clip(out, 0, 255).astype(np.uint8)
     return out
 
 

@@ -8,7 +8,7 @@
 - Navigation: zoom, fit to screen, pan with scrollbars.
 - Raster layers: create, duplicate, delete, reorder, visibility, opacity, merge, flatten.
 - Layer compositing: clipping masks including adjustment-layer clipping, basic layer styles, opacity and blend modes.
-- Non-destructive filters: per-layer editable filter stack with visual editor, preview, reordering, blur, sharpen, noise, median, edge detect and emboss.
+- Non-destructive filters: per-layer editable filter stack with visual editor, preview, reordering, per-filter enable/opacity, blur, sharpen, noise, median, edge detect and emboss.
 - Raster selections: rectangular, elliptical, freehand lasso, magnetic lasso, polygon lasso, quick selection brush, magic wand, color range, single row/column, opaque pixels, select all, invert, feather, smooth, grow, shrink, border/refine, Select and Mask output, saved alpha selections.
 - Raster layer masks: reveal all, hide all, from selection, mask thumbnails, thumbnail-click mask channel editing, red-overlay/black-white mask preview, linked/unlinked movement, paint on mask, density, feather, invert, toggle, apply, delete.
 - Blend modes: Normal, Multiply, Screen, Overlay, Soft Light, Darken, Lighten, Difference, Color, Luminosity.
@@ -33,7 +33,7 @@
 
 1. Selection engine: better quick-selection refinement and richer Select and Mask previews.
 2. Editable masks: stronger mask edge controls.
-3. Non-destructive editing: smart-filter polish and richer editable adjustment controls.
+3. Non-destructive editing: richer editable adjustment controls and advanced smart-filter masks.
 4. Free Transform: transform handles and warp.
 5. Text engine: text-on-path, richer typography controls and editable transform handles for text boxes.
 6. Shapes and paths: custom shapes, richer Bezier point editing and shape boolean operations.

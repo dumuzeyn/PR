@@ -1986,8 +1986,15 @@ class PhotoRedactorApp(tk.Tk):
         value_var = tk.DoubleVar(value=3.0)
         value_spin = ttk.Spinbox(controls, textvariable=value_var, from_=0.0, to=500.0, increment=1.0, width=12)
         value_spin.grid(row=1, column=1, sticky="ew", pady=(0, 8))
+        enabled_var = tk.BooleanVar(value=True)
+        enabled_check = ttk.Checkbutton(controls, text="Включен", variable=enabled_var)
+        enabled_check.grid(row=2, column=0, columnspan=2, sticky="w", pady=(0, 6))
+        ttk.Label(controls, text="Opacity").grid(row=3, column=0, sticky="w")
+        opacity_var = tk.DoubleVar(value=100.0)
+        opacity_spin = ttk.Spinbox(controls, textvariable=opacity_var, from_=0.0, to=100.0, increment=5.0, width=12)
+        opacity_spin.grid(row=3, column=1, sticky="ew", pady=(0, 8))
         hint = ttk.Label(controls, text="", wraplength=190, justify=tk.LEFT)
-        hint.grid(row=2, column=0, columnspan=2, sticky="w", pady=(0, 8))
+        hint.grid(row=4, column=0, columnspan=2, sticky="w", pady=(0, 8))
 
         buttons = ttk.Frame(dialog)
         buttons.grid(row=6, column=1, columnspan=2, sticky="ew", padx=(0, 12), pady=(0, 8))
@@ -2002,7 +2009,10 @@ class PhotoRedactorApp(tk.Tk):
             kind = str(item.get("type", "")).lower()
             label = FILTER_LABELS.get(kind, kind)
             value = self.filter_primary_value(item)
-            return f"{label}: {value:g}"
+            enabled = bool(item.get("enabled", True))
+            opacity = int(round(float(item.get("opacity", 1.0)) * 100))
+            prefix = "" if enabled else "выкл. "
+            return f"{prefix}{label}: {value:g}, {opacity}%"
 
         def refresh_list(select_index: int | None = None) -> None:
             listbox.delete(0, tk.END)
@@ -2043,10 +2053,15 @@ class PhotoRedactorApp(tk.Tk):
             filter_type.set(kind if kind in FILTER_TYPES else "blur")
             update_value_controls(filter_type.get())
             value_var.set(self.filter_primary_value(item))
+            enabled_var.set(bool(item.get("enabled", True)))
+            opacity_var.set(float(item.get("opacity", 1.0)) * 100.0)
             updating_controls = False
 
-        def current_item() -> dict:
-            return self.make_filter_item(filter_type.get(), value_var.get())
+        def current_item(original: dict | None = None) -> dict:
+            metadata = dict(original or {})
+            metadata["enabled"] = bool(enabled_var.get())
+            metadata["opacity"] = float(opacity_var.get()) / 100.0
+            return self.make_filter_item(filter_type.get(), value_var.get(), metadata)
 
         def apply_current(_event=None) -> None:
             if updating_controls:
@@ -2054,7 +2069,7 @@ class PhotoRedactorApp(tk.Tk):
             index = selected_index()
             if index is None:
                 return
-            filters[index] = current_item()
+            filters[index] = current_item(filters[index])
             refresh_list(index)
 
         def add_filter() -> None:
@@ -2112,7 +2127,11 @@ class PhotoRedactorApp(tk.Tk):
         type_box.bind("<<ComboboxSelected>>", lambda _event: (update_value_controls(filter_type.get()), apply_current()))
         value_spin.bind("<KeyRelease>", apply_current)
         value_spin.bind("<FocusOut>", apply_current)
+        opacity_spin.bind("<KeyRelease>", apply_current)
+        opacity_spin.bind("<FocusOut>", apply_current)
         value_var.trace_add("write", lambda *_args: apply_current())
+        enabled_var.trace_add("write", lambda *_args: apply_current())
+        opacity_var.trace_add("write", lambda *_args: apply_current())
         dialog.protocol("WM_DELETE_WINDOW", cancel)
         refresh_list(0 if filters else None)
         if not filters:
@@ -2128,18 +2147,22 @@ class PhotoRedactorApp(tk.Tk):
         return self.make_filter_item(kind, self.filter_primary_value(item), item)
 
     def make_filter_item(self, kind: str, value: float, original: dict | None = None) -> dict:
+        original = original or {}
         if kind == "blur":
-            return {"type": "blur", "radius": max(1, int(float(value)))}
-        if kind == "sharpen":
-            return {"type": "sharpen", "amount": max(0.0, float(value))}
-        if kind == "noise":
-            seed = int((original or {}).get("seed", 12345))
-            return {"type": "noise", "amount": max(0.0, min(1.0, float(value))), "seed": seed}
-        if kind == "median":
-            return {"type": "median", "size": max(3, int(float(value)) | 1)}
-        if kind == "edge":
-            return {"type": "edge", "strength": max(0.0, min(1.0, float(value)))}
-        return {"type": "emboss", "strength": max(0.0, min(1.0, float(value)))}
+            item = {"type": "blur", "radius": max(1, int(float(value)))}
+        elif kind == "sharpen":
+            item = {"type": "sharpen", "amount": max(0.0, float(value))}
+        elif kind == "noise":
+            item = {"type": "noise", "amount": max(0.0, min(1.0, float(value))), "seed": int(original.get("seed", 12345))}
+        elif kind == "median":
+            item = {"type": "median", "size": max(3, int(float(value)) | 1)}
+        elif kind == "edge":
+            item = {"type": "edge", "strength": max(0.0, min(1.0, float(value)))}
+        else:
+            item = {"type": "emboss", "strength": max(0.0, min(1.0, float(value)))}
+        item["enabled"] = bool(original.get("enabled", True))
+        item["opacity"] = max(0.0, min(1.0, float(original.get("opacity", 1.0))))
+        return item
 
     @staticmethod
     def filter_primary_value(item: dict) -> float:
