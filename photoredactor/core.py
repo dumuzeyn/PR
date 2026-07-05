@@ -471,7 +471,8 @@ class Document:
         for layer in self.layers:
             if layer.visible:
                 if layer.kind == "adjustment" and layer.adjustment is not None:
-                    apply_adjustment_layer(out, layer)
+                    clipping_mask = previous_alpha if layer.clipping and previous_alpha is not None else None
+                    apply_adjustment_layer(out, layer, clipping_mask)
                 else:
                     layer_pixels = render_layer_pixels(layer)
                     alpha_mask = effective_layer_mask(layer) if layer.mask_enabled else None
@@ -2137,7 +2138,7 @@ def image_statistics(arr: np.ndarray) -> dict[str, Any]:
     return stats
 
 
-def apply_adjustment_layer(out: np.ndarray, layer: Layer) -> None:
+def apply_adjustment_layer(out: np.ndarray, layer: Layer, clipping_mask: np.ndarray | None = None) -> None:
     if layer.adjustment is None:
         return
     kind = str(layer.adjustment.get("type", "")).lower()
@@ -2164,5 +2165,7 @@ def apply_adjustment_layer(out: np.ndarray, layer: Layer) -> None:
         paste_mask(mask_canvas, effective_layer_mask(layer), layer.x, layer.y)
         mask_alpha = ((1.0 - float(layer.mask_density)) + (mask_canvas.astype(np.float32) / 255.0) * float(layer.mask_density))
         alpha *= mask_alpha
+    if clipping_mask is not None:
+        alpha *= (clipping_mask.astype(np.float32) / 255.0).clip(0, 1)
     alpha = alpha[:, :, None].clip(0, 1)
     out[:, :, :3] = np.clip(adjusted[:, :, :3].astype(np.float32) * alpha + out[:, :, :3].astype(np.float32) * (1.0 - alpha), 0, 255).astype(np.uint8)
