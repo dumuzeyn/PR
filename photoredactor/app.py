@@ -406,6 +406,7 @@ class PhotoRedactorApp(tk.Tk):
         layer.add_command(label="Свободная трансформация", command=self.free_transform_layer)
         layer.add_command(label="Трансформировать выделенные пиксели", command=self.transform_selected_pixels)
         layer.add_command(label="Перспективная трансформация", command=self.perspective_transform_layer)
+        layer.add_command(label="Деформация слоя", command=self.warp_layer)
         layer.add_command(label="Обновить связанный слой", command=self.update_linked_layer)
         layer.add_command(label="Перелинковать слой", command=self.relink_layer)
         layer.add_command(label="Переключить обтравочную маску", command=self.toggle_clipping_mask)
@@ -1919,6 +1920,33 @@ class PhotoRedactorApp(tk.Tk):
             messagebox.showerror("Perspective transform", "Use: TLx,TLy,TRx,TRy,BRx,BRy,BLx,BLy")
             return
         self.run_document_command("Perspective transform", lambda: self.doc.perspective_transform_active_layer(corners))
+        self.refresh()
+
+    def warp_layer(self) -> None:
+        layer = self.doc.layer
+        if layer.locked:
+            self.status_text("Слой заблокирован")
+            return
+        raw = simpledialog.askstring(
+            "Деформация слоя",
+            "mode,amount,wavelength: arc, arc_vertical, bulge, pinch, wave_x, wave_y",
+            initialvalue="arc,0.35,96",
+        )
+        if not raw:
+            return
+        try:
+            parts = [part.strip() for part in raw.split(",")]
+            if len(parts) not in {2, 3}:
+                raise ValueError
+            mode = parts[0].lower()
+            if mode not in {"arc", "arc_vertical", "bulge", "pinch", "wave_x", "wave_y"}:
+                raise ValueError
+            amount = float(parts[1])
+            wavelength = float(parts[2]) if len(parts) == 3 else 96.0
+        except ValueError:
+            messagebox.showerror("Деформация слоя", "Используйте: mode,amount,wavelength. Пример: arc,0.35,96")
+            return
+        self.run_document_command("Warp layer", lambda: self.doc.warp_active_layer(mode, amount, wavelength))
         self.refresh()
 
     def toggle_clipping_mask(self) -> None:

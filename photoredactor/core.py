@@ -1358,6 +1358,15 @@ class Document:
         layer.y = min_y
         self.dirty = True
 
+    def warp_active_layer(self, mode: str, amount: float = 0.35, wavelength: float = 96.0) -> None:
+        layer = self.layer
+        if layer.locked:
+            return
+        layer.pixels = warp_pixels(layer.pixels, mode, amount, wavelength, cv2.INTER_CUBIC)
+        if layer.mask is not None:
+            layer.mask = warp_pixels(layer.mask, mode, amount, wavelength, cv2.INTER_LINEAR)
+        self.dirty = True
+
 
 def normalized_box(box: tuple[int, int, int, int]) -> tuple[int, int, int, int]:
     x1, y1, x2, y2 = box
@@ -1544,6 +1553,51 @@ def rotate_bound(arr: np.ndarray, angle: float, interpolation: int) -> np.ndarra
     matrix[1, 2] += new_h / 2.0 - center[1]
     border = 0 if arr.ndim == 2 else (0, 0, 0, 0)
     return cv2.warpAffine(arr, matrix, (new_w, new_h), flags=interpolation, borderMode=cv2.BORDER_CONSTANT, borderValue=border)
+
+
+def warp_pixels(arr: np.ndarray, mode: str, amount: float = 0.35, wavelength: float = 96.0, interpolation: int = cv2.INTER_CUBIC) -> np.ndarray:
+    h, w = arr.shape[:2]
+    if h <= 1 or w <= 1:
+        return arr.copy()
+    amount = float(np.clip(amount, -2.0, 2.0))
+    wavelength = max(4.0, float(wavelength))
+    yy, xx = np.indices((h, w), dtype=np.float32)
+    src_x = xx.copy()
+    src_y = yy.copy()
+    mode = str(mode).lower().strip()
+    if mode == "arc":
+        nx = (xx / max(1.0, w - 1.0)) * 2.0 - 1.0
+        src_y = yy - amount * h * 0.25 * (1.0 - nx * nx)
+    elif mode == "arc_vertical":
+        ny = (yy / max(1.0, h - 1.0)) * 2.0 - 1.0
+        src_x = xx - amount * w * 0.25 * (1.0 - ny * ny)
+    elif mode in {"bulge", "pinch"}:
+        cx = (w - 1.0) / 2.0
+        cy = (h - 1.0) / 2.0
+        radius = max(1.0, min(w, h) / 2.0)
+        dx = (xx - cx) / radius
+        dy = (yy - cy) / radius
+        r = np.sqrt(dx * dx + dy * dy)
+        influence = np.clip(1.0 - r, 0.0, 1.0) ** 2
+        direction = -1.0 if mode == "bulge" else 1.0
+        factor = np.clip(1.0 + direction * amount * 0.75 * influence, 0.05, 4.0)
+        src_x = cx + (xx - cx) * factor
+        src_y = cy + (yy - cy) * factor
+    elif mode == "wave_x":
+        src_x = xx - np.sin(yy / wavelength * math.tau) * amount * w * 0.08
+    elif mode == "wave_y":
+        src_y = yy - np.sin(xx / wavelength * math.tau) * amount * h * 0.08
+    else:
+        return arr.copy()
+    border = 0 if arr.ndim == 2 else (0, 0, 0, 0)
+    return cv2.remap(
+        arr,
+        src_x.astype(np.float32),
+        src_y.astype(np.float32),
+        interpolation=interpolation,
+        borderMode=cv2.BORDER_CONSTANT,
+        borderValue=border,
+    )
 
 
 def alpha_blend(dst: np.ndarray, src: np.ndarray, x: int, y: int, opacity: float) -> np.ndarray:
