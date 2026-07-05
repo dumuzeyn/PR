@@ -1989,6 +1989,49 @@ def adjust_saturation(arr: np.ndarray, saturation: float) -> np.ndarray:
     return out
 
 
+def adjust_hue_saturation(arr: np.ndarray, hue: int, saturation: float, lightness: int) -> np.ndarray:
+    rgb = arr[:, :, :3]
+    hsv = cv2.cvtColor(rgb, cv2.COLOR_RGB2HSV).astype(np.float32)
+    hsv[:, :, 0] = (hsv[:, :, 0] + float(hue) / 2.0) % 180.0
+    hsv[:, :, 1] = np.clip(hsv[:, :, 1] * float(saturation), 0, 255)
+    hsv[:, :, 2] = np.clip(hsv[:, :, 2] + float(lightness), 0, 255)
+    out = arr.copy()
+    out[:, :, :3] = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2RGB)
+    return out
+
+
+def adjust_exposure(arr: np.ndarray, exposure: float, offset: float, gamma: float) -> np.ndarray:
+    out = arr.copy().astype(np.float32)
+    rgb = out[:, :, :3] / 255.0
+    rgb = np.clip(rgb * (2.0 ** float(exposure)) + float(offset), 0, 1)
+    rgb = np.power(rgb, 1.0 / max(0.01, float(gamma)))
+    out[:, :, :3] = rgb * 255.0
+    return np.clip(out, 0, 255).astype(np.uint8)
+
+
+def adjust_color_balance(arr: np.ndarray, red: int, green: int, blue: int) -> np.ndarray:
+    out = arr.copy().astype(np.float32)
+    shifts = np.array([red, green, blue], dtype=np.float32)
+    out[:, :, :3] = np.clip(out[:, :, :3] + shifts, 0, 255)
+    return out.astype(np.uint8)
+
+
+def adjust_threshold(arr: np.ndarray, threshold: int) -> np.ndarray:
+    out = arr.copy()
+    gray = cv2.cvtColor(out[:, :, :3], cv2.COLOR_RGB2GRAY)
+    bw = np.where(gray >= int(np.clip(threshold, 0, 255)), 255, 0).astype(np.uint8)
+    out[:, :, :3] = cv2.cvtColor(bw, cv2.COLOR_GRAY2RGB)
+    return out
+
+
+def adjust_posterize(arr: np.ndarray, levels_count: int) -> np.ndarray:
+    levels_count = int(np.clip(levels_count, 2, 64))
+    out = arr.copy().astype(np.float32)
+    rgb = out[:, :, :3] / 255.0
+    out[:, :, :3] = np.round(rgb * (levels_count - 1)) * (255.0 / (levels_count - 1))
+    return np.clip(out, 0, 255).astype(np.uint8)
+
+
 def levels(arr: np.ndarray, black: int, white: int, gamma: float) -> np.ndarray:
     out = arr.copy().astype(np.float32)
     rgb = np.clip((out[:, :, :3] - black) / max(1, white - black), 0, 1)
@@ -2146,6 +2189,16 @@ def apply_adjustment_layer(out: np.ndarray, layer: Layer, clipping_mask: np.ndar
         adjusted = adjust_brightness_contrast(out, int(layer.adjustment.get("brightness", 0)), float(layer.adjustment.get("contrast", 1.0)))
     elif kind == "saturation":
         adjusted = adjust_saturation(out, float(layer.adjustment.get("saturation", 1.0)))
+    elif kind == "hue_saturation":
+        adjusted = adjust_hue_saturation(out, int(layer.adjustment.get("hue", 0)), float(layer.adjustment.get("saturation", 1.0)), int(layer.adjustment.get("lightness", 0)))
+    elif kind == "exposure":
+        adjusted = adjust_exposure(out, float(layer.adjustment.get("exposure", 0.0)), float(layer.adjustment.get("offset", 0.0)), float(layer.adjustment.get("gamma", 1.0)))
+    elif kind == "color_balance":
+        adjusted = adjust_color_balance(out, int(layer.adjustment.get("red", 0)), int(layer.adjustment.get("green", 0)), int(layer.adjustment.get("blue", 0)))
+    elif kind == "threshold":
+        adjusted = adjust_threshold(out, int(layer.adjustment.get("threshold", 128)))
+    elif kind == "posterize":
+        adjusted = adjust_posterize(out, int(layer.adjustment.get("levels", 6)))
     elif kind == "levels":
         adjusted = levels(out, int(layer.adjustment.get("black", 0)), int(layer.adjustment.get("white", 255)), float(layer.adjustment.get("gamma", 1.0)))
     elif kind == "curves":

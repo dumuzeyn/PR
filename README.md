@@ -24,12 +24,12 @@ This repository starts with a real working editor and an architecture intended t
 - recovery autosave and manual recovery opening
 - simple action recording to JSON logs
 - metadata/EXIF view, histogram, image statistics and eyedropper
-- non-destructive adjustment layers for brightness/contrast, saturation, levels, curves, invert and grayscale
+- non-destructive adjustment layers for brightness/contrast, saturation, hue/saturation, exposure, color balance, levels, curves, threshold, posterize, invert and grayscale
 - undo/redo
 - command-based undo for strokes, moves and layer edits
 - `.prdx` projects with `manifest.json` and separate layer PNG files, without Base64-packed layers
 - resize, canvas resize, trim transparent pixels, reveal all layers, rotate, flip
-- brightness, contrast, saturation, levels, curves, blur, sharpen, noise, median, edge detect, emboss, grayscale, invert
+- brightness, contrast, saturation, hue/saturation, exposure, color balance, levels, curves, threshold, posterize, blur, sharpen, noise, median, edge detect, emboss, grayscale, invert
 - batch processing for folders
 - executable packaging with PyInstaller
 

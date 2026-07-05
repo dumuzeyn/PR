@@ -18,7 +18,12 @@ from .core import (
     BLEND_MODES,
     add_noise,
     adjust_brightness_contrast,
+    adjust_color_balance,
+    adjust_exposure,
+    adjust_hue_saturation,
+    adjust_posterize,
     adjust_saturation,
+    adjust_threshold,
     apply_gradient,
     apply_filter_stack,
     blur,
@@ -138,12 +143,29 @@ FILTER_LABELS = {
     "emboss": "Тиснение",
 }
 
-ADJUSTMENT_TYPES = ["brightness_contrast", "saturation", "levels", "curves", "invert", "grayscale"]
+ADJUSTMENT_TYPES = [
+    "brightness_contrast",
+    "saturation",
+    "hue_saturation",
+    "exposure",
+    "color_balance",
+    "levels",
+    "curves",
+    "threshold",
+    "posterize",
+    "invert",
+    "grayscale",
+]
 ADJUSTMENT_LABELS = {
     "brightness_contrast": "\u042f\u0440\u043a\u043e\u0441\u0442\u044c/\u041a\u043e\u043d\u0442\u0440\u0430\u0441\u0442",
     "saturation": "\u041d\u0430\u0441\u044b\u0449\u0435\u043d\u043d\u043e\u0441\u0442\u044c",
+    "hue_saturation": "\u0422\u043e\u043d/\u041d\u0430\u0441\u044b\u0449\u0435\u043d\u043d\u043e\u0441\u0442\u044c",
+    "exposure": "\u042d\u043a\u0441\u043f\u043e\u0437\u0438\u0446\u0438\u044f",
+    "color_balance": "\u0426\u0432\u0435\u0442\u043e\u0432\u043e\u0439 \u0431\u0430\u043b\u0430\u043d\u0441",
     "levels": "\u0423\u0440\u043e\u0432\u043d\u0438",
     "curves": "\u041a\u0440\u0438\u0432\u044b\u0435",
+    "threshold": "\u041f\u043e\u0440\u043e\u0433",
+    "posterize": "\u041f\u043e\u0441\u0442\u0435\u0440\u0438\u0437\u0430\u0446\u0438\u044f",
     "invert": "\u0418\u043d\u0432\u0435\u0440\u0441\u0438\u044f",
     "grayscale": "\u0427\u0435\u0440\u043d\u043e-\u0431\u0435\u043b\u043e\u0435",
 }
@@ -408,8 +430,13 @@ class PhotoRedactorApp(tk.Tk):
         menu.add_cascade(label="Коррекция", menu=adj)
         adj.add_command(label="Яркость/контраст", command=self.adjust_brightness_contrast)
         adj.add_command(label="Насыщенность", command=self.adjust_saturation)
+        adj.add_command(label="Тон/Насыщенность", command=self.adjust_hue_saturation)
+        adj.add_command(label="Экспозиция", command=self.adjust_exposure)
+        adj.add_command(label="Цветовой баланс", command=self.adjust_color_balance)
         adj.add_command(label="Уровни", command=self.adjust_levels)
         adj.add_command(label="Кривые", command=self.adjust_curves)
+        adj.add_command(label="Порог", command=self.adjust_threshold)
+        adj.add_command(label="Постеризация", command=self.adjust_posterize)
         adj.add_command(label="Инверсия", command=self.adjust_invert)
         adj.add_command(label="Черно-белое", command=self.adjust_grayscale)
         adj.add_separator()
@@ -2504,6 +2531,27 @@ class PhotoRedactorApp(tk.Tk):
         if s is not None:
             self.apply_to_layer("saturation", lambda arr: adjust_saturation(arr, s))
 
+    def adjust_hue_saturation(self) -> None:
+        hue = simpledialog.askinteger("Hue/Saturation", "Hue shift -180..180:", initialvalue=0, minvalue=-180, maxvalue=180)
+        saturation = simpledialog.askfloat("Hue/Saturation", "Saturation multiplier:", initialvalue=1.0, minvalue=0.0, maxvalue=10.0)
+        lightness = simpledialog.askinteger("Hue/Saturation", "Lightness -255..255:", initialvalue=0, minvalue=-255, maxvalue=255)
+        if hue is not None and saturation is not None and lightness is not None:
+            self.apply_to_layer("hue/saturation", lambda arr: adjust_hue_saturation(arr, hue, saturation, lightness))
+
+    def adjust_exposure(self) -> None:
+        exposure = simpledialog.askfloat("Exposure", "Exposure stops -5..5:", initialvalue=0.0, minvalue=-5.0, maxvalue=5.0)
+        offset = simpledialog.askfloat("Exposure", "Offset -1..1:", initialvalue=0.0, minvalue=-1.0, maxvalue=1.0)
+        gamma = simpledialog.askfloat("Exposure", "Gamma:", initialvalue=1.0, minvalue=0.01, maxvalue=10.0)
+        if exposure is not None and offset is not None and gamma is not None:
+            self.apply_to_layer("exposure", lambda arr: adjust_exposure(arr, exposure, offset, gamma))
+
+    def adjust_color_balance(self) -> None:
+        red = simpledialog.askinteger("Color balance", "Red shift -255..255:", initialvalue=0, minvalue=-255, maxvalue=255)
+        green = simpledialog.askinteger("Color balance", "Green shift -255..255:", initialvalue=0, minvalue=-255, maxvalue=255)
+        blue = simpledialog.askinteger("Color balance", "Blue shift -255..255:", initialvalue=0, minvalue=-255, maxvalue=255)
+        if red is not None and green is not None and blue is not None:
+            self.apply_to_layer("color balance", lambda arr: adjust_color_balance(arr, red, green, blue))
+
     def adjust_levels(self) -> None:
         black = simpledialog.askinteger("Levels", "Black point:", initialvalue=0, minvalue=0, maxvalue=254)
         white = simpledialog.askinteger("Levels", "White point:", initialvalue=255, minvalue=1, maxvalue=255)
@@ -2517,6 +2565,16 @@ class PhotoRedactorApp(tk.Tk):
         highlights = simpledialog.askinteger("Curves", "Highlights output:", initialvalue=192, minvalue=0, maxvalue=255)
         if shadows is not None and midtones is not None and highlights is not None:
             self.apply_to_layer("curves", lambda arr: curves(arr, shadows, midtones, highlights))
+
+    def adjust_threshold(self) -> None:
+        threshold = simpledialog.askinteger("Threshold", "Threshold 0..255:", initialvalue=128, minvalue=0, maxvalue=255)
+        if threshold is not None:
+            self.apply_to_layer("threshold", lambda arr: adjust_threshold(arr, threshold))
+
+    def adjust_posterize(self) -> None:
+        levels_count = simpledialog.askinteger("Posterize", "Levels 2..64:", initialvalue=6, minvalue=2, maxvalue=64)
+        if levels_count is not None:
+            self.apply_to_layer("posterize", lambda arr: adjust_posterize(arr, levels_count))
 
     def adjust_invert(self) -> None:
         self.apply_to_layer("invert", lambda arr: self._invert(arr))
@@ -2652,10 +2710,20 @@ class PhotoRedactorApp(tk.Tk):
             return [("\u042f\u0440\u043a\u043e\u0441\u0442\u044c", float(adjustment.get("brightness", 0)), -255, 255, 1), ("\u041a\u043e\u043d\u0442\u0440\u0430\u0441\u0442", float(adjustment.get("contrast", 1.0)), 0, 5, 0.05)]
         if kind == "saturation":
             return [("\u041d\u0430\u0441\u044b\u0449\u0435\u043d\u043d\u043e\u0441\u0442\u044c", float(adjustment.get("saturation", 1.0)), 0, 5, 0.05)]
+        if kind == "hue_saturation":
+            return [("\u0422\u043e\u043d", float(adjustment.get("hue", 0)), -180, 180, 1), ("\u041d\u0430\u0441\u044b\u0449\u0435\u043d\u043d\u043e\u0441\u0442\u044c", float(adjustment.get("saturation", 1.0)), 0, 5, 0.05), ("\u0421\u0432\u0435\u0442\u043b\u043e\u0442\u0430", float(adjustment.get("lightness", 0)), -255, 255, 1)]
+        if kind == "exposure":
+            return [("\u042d\u043a\u0441\u043f\u043e\u0437\u0438\u0446\u0438\u044f", float(adjustment.get("exposure", 0.0)), -5, 5, 0.05), ("\u0421\u0434\u0432\u0438\u0433", float(adjustment.get("offset", 0.0)), -1, 1, 0.01), ("\u0413\u0430\u043c\u043c\u0430", float(adjustment.get("gamma", 1.0)), 0.01, 10, 0.05)]
+        if kind == "color_balance":
+            return [("\u041a\u0440\u0430\u0441\u043d\u044b\u0439", float(adjustment.get("red", 0)), -255, 255, 1), ("\u0417\u0435\u043b\u0435\u043d\u044b\u0439", float(adjustment.get("green", 0)), -255, 255, 1), ("\u0421\u0438\u043d\u0438\u0439", float(adjustment.get("blue", 0)), -255, 255, 1)]
         if kind == "levels":
             return [("\u0427\u0435\u0440\u043d\u0430\u044f \u0442\u043e\u0447\u043a\u0430", float(adjustment.get("black", 0)), 0, 254, 1), ("\u0411\u0435\u043b\u0430\u044f \u0442\u043e\u0447\u043a\u0430", float(adjustment.get("white", 255)), 1, 255, 1), ("\u0413\u0430\u043c\u043c\u0430", float(adjustment.get("gamma", 1.0)), 0.01, 10, 0.05)]
         if kind == "curves":
             return [("\u0422\u0435\u043d\u0438", float(adjustment.get("shadows", 64)), 0, 255, 1), ("\u0421\u0440\u0435\u0434\u043d\u0438\u0435", float(adjustment.get("midtones", 128)), 0, 255, 1), ("\u0421\u0432\u0435\u0442\u0430", float(adjustment.get("highlights", 192)), 0, 255, 1)]
+        if kind == "threshold":
+            return [("\u041f\u043e\u0440\u043e\u0433", float(adjustment.get("threshold", 128)), 0, 255, 1)]
+        if kind == "posterize":
+            return [("\u0423\u0440\u043e\u0432\u043d\u0438", float(adjustment.get("levels", 6)), 2, 64, 1)]
         return []
 
     @staticmethod
@@ -2670,12 +2738,22 @@ class PhotoRedactorApp(tk.Tk):
             return {"type": kind, "brightness": int(values[0]), "contrast": float(values[1])}
         if kind == "saturation":
             return {"type": kind, "saturation": float(values[0])}
+        if kind == "hue_saturation":
+            return {"type": kind, "hue": int(values[0]), "saturation": float(values[1]), "lightness": int(values[2])}
+        if kind == "exposure":
+            return {"type": kind, "exposure": float(values[0]), "offset": float(values[1]), "gamma": max(0.01, float(values[2]))}
+        if kind == "color_balance":
+            return {"type": kind, "red": int(values[0]), "green": int(values[1]), "blue": int(values[2])}
         if kind == "levels":
             black = int(values[0])
             white = max(black + 1, int(values[1]))
             return {"type": kind, "black": black, "white": min(255, white), "gamma": max(0.01, float(values[2]))}
         if kind == "curves":
             return {"type": kind, "shadows": int(values[0]), "midtones": int(values[1]), "highlights": int(values[2])}
+        if kind == "threshold":
+            return {"type": kind, "threshold": int(values[0])}
+        if kind == "posterize":
+            return {"type": kind, "levels": int(values[0])}
         if kind in {"invert", "grayscale"}:
             return {"type": kind}
         return {"type": "brightness_contrast", "brightness": 0, "contrast": 1.0}
@@ -2691,10 +2769,20 @@ class PhotoRedactorApp(tk.Tk):
             return adjust_brightness_contrast(arr, int(adjustment.get("brightness", 0)), float(adjustment.get("contrast", 1.0)))
         if kind == "saturation":
             return adjust_saturation(arr, float(adjustment.get("saturation", 1.0)))
+        if kind == "hue_saturation":
+            return adjust_hue_saturation(arr, int(adjustment.get("hue", 0)), float(adjustment.get("saturation", 1.0)), int(adjustment.get("lightness", 0)))
+        if kind == "exposure":
+            return adjust_exposure(arr, float(adjustment.get("exposure", 0.0)), float(adjustment.get("offset", 0.0)), float(adjustment.get("gamma", 1.0)))
+        if kind == "color_balance":
+            return adjust_color_balance(arr, int(adjustment.get("red", 0)), int(adjustment.get("green", 0)), int(adjustment.get("blue", 0)))
         if kind == "levels":
             return levels(arr, int(adjustment.get("black", 0)), int(adjustment.get("white", 255)), float(adjustment.get("gamma", 1.0)))
         if kind == "curves":
             return curves(arr, int(adjustment.get("shadows", 64)), int(adjustment.get("midtones", 128)), int(adjustment.get("highlights", 192)))
+        if kind == "threshold":
+            return adjust_threshold(arr, int(adjustment.get("threshold", 128)))
+        if kind == "posterize":
+            return adjust_posterize(arr, int(adjustment.get("levels", 6)))
         if kind == "invert":
             return self._invert(arr)
         if kind == "grayscale":
