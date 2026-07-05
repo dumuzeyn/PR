@@ -16,7 +16,7 @@
 - Text layers: font selection, multiline editing, paragraph width, word wrapping, alignment, line spacing and tracking.
 - Local retouching: blur, sharpen, dodge, burn, clone stamp, healing brush, patch selection, red-eye reduction and content-aware fill.
 - Layer import: place embedded images, place linked images, update/relink linked layers and load several image files as layers.
-- Shape layers: editable rectangle, ellipse, line, Bezier curve, polygon and star layers.
+- Shape layers: editable rectangle, ellipse, line, Bezier curve, polygon, star and boolean-combination layers.
 - View helpers: grid overlay, numeric guides and channel preview for RGB/Red/Green/Blue/Alpha.
 - UI: Russian main menu/tool labels and hover explanations for tools.
 - Analysis: eyedropper, metadata/EXIF viewer, histogram and image statistics.
@@ -36,7 +36,7 @@
 3. Non-destructive editing: richer editable adjustment controls and filter blending options.
 4. Free Transform: transform handles and richer warp preview controls.
 5. Text engine: text-on-path, OpenType-style controls and editable transform handles for text boxes.
-6. Shapes and paths: custom shapes, richer Bezier point editing and shape boolean operations.
+6. Shapes and paths: custom shapes and richer Bezier point editing.
 7. Retouching: interactive patch tool, retouch presets and stronger edge-aware cleanup.
 8. Smart objects: re-editable transforms, embedded payload management and richer linked-file status/conflict handling.
 9. RAW/color management: ICC profiles, 16/32-bit channels, Lab/CMYK workflows and richer metadata editing.

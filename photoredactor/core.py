@@ -664,6 +664,39 @@ class Document:
         render_shape_layer(layer)
         self.dirty = True
 
+    def boolean_active_shape_with_lower(self, mode: str) -> bool:
+        if self.active_layer <= 0:
+            return False
+        upper = self.layer
+        lower = self.layers[self.active_layer - 1]
+        if upper.locked or lower.locked or upper.kind != "shape" or lower.kind != "shape" or upper.shape_data is None or lower.shape_data is None:
+            return False
+        mode = str(mode).lower().strip()
+        if mode not in {"union", "subtract", "intersect", "xor"}:
+            return False
+        fill = upper.shape_data.get("fill", lower.shape_data.get("fill", [255, 255, 255, 255]))
+        stroke = upper.shape_data.get("stroke")
+        stroke_width = int(upper.shape_data.get("stroke_width", 0))
+        combined = Layer(
+            name=f"Boolean {mode}",
+            pixels=blank_rgba(self.width, self.height, (0, 0, 0, 0)),
+            kind="shape",
+            shape_data={
+                "shape": "boolean",
+                "boolean_mode": mode,
+                "children": [json.loads(json.dumps(lower.shape_data)), json.loads(json.dumps(upper.shape_data))],
+                "fill": list(fill),
+                "stroke": None if stroke is None else list(stroke),
+                "stroke_width": max(0, stroke_width),
+            },
+        )
+        render_shape_layer(combined)
+        self.layers[self.active_layer - 1] = combined
+        del self.layers[self.active_layer]
+        self.active_layer -= 1
+        self.dirty = True
+        return True
+
     def edit_text_layer(
         self,
         text: str | None = None,
@@ -1980,6 +2013,9 @@ def render_shape_layer(layer: Layer) -> None:
         return
     layer.pixels[:] = 0
     data = layer.shape_data
+    if str(data.get("shape", "rectangle")).lower() == "boolean":
+        render_boolean_shape_layer(layer)
+        return
     pil = rgba_array_to_pil(layer.pixels)
     draw = ImageDraw.Draw(pil)
     box = tuple(int(v) for v in data.get("box", [0, 0, 1, 1]))
@@ -2008,6 +2044,73 @@ def render_shape_layer(layer: Layer) -> None:
     else:
         draw.rectangle(box, fill=fill, outline=outline, width=stroke_width)
     layer.pixels = pil_to_rgba_array(pil)
+
+
+def render_boolean_shape_layer(layer: Layer) -> None:
+    if layer.shape_data is None:
+        return
+    data = layer.shape_data
+    mask = boolean_shape_mask(data, layer.pixels.shape[:2])
+    fill = tuple(int(v) for v in data.get("fill", [255, 255, 255, 255]))
+    out = np.zeros_like(layer.pixels)
+    out[:, :, :3] = fill[:3]
+    out[:, :, 3] = np.clip(mask.astype(np.float32) * (fill[3] / 255.0), 0, 255).astype(np.uint8)
+    stroke = data.get("stroke")
+    stroke_width = max(0, int(data.get("stroke_width", 0)))
+    if stroke is not None and stroke_width > 0 and np.any(mask):
+        stroke_color = tuple(int(v) for v in stroke)
+        kernel = np.ones((stroke_width * 2 + 1, stroke_width * 2 + 1), dtype=np.uint8)
+        outer = cv2.dilate(mask, kernel)
+        inner = cv2.erode(mask, kernel)
+        edge = ((outer > 0) & (inner == 0))
+        out[edge, :3] = stroke_color[:3]
+        out[edge, 3] = stroke_color[3]
+    layer.pixels = out
+
+
+def boolean_shape_mask(data: dict[str, Any], shape: tuple[int, int]) -> np.ndarray:
+    children = data.get("children", [])
+    if not isinstance(children, list) or not children:
+        return np.zeros(shape, dtype=np.uint8)
+    masks = [shape_data_to_mask(child, shape) for child in children if isinstance(child, dict)]
+    if not masks:
+        return np.zeros(shape, dtype=np.uint8)
+    mode = str(data.get("boolean_mode", "union")).lower()
+    result = masks[0] > 0
+    for mask in masks[1:]:
+        other = mask > 0
+        if mode == "subtract":
+            result = result & ~other
+        elif mode == "intersect":
+            result = result & other
+        elif mode == "xor":
+            result = result ^ other
+        else:
+            result = result | other
+    return (result.astype(np.uint8) * 255)
+
+
+def shape_data_to_mask(data: dict[str, Any], shape: tuple[int, int]) -> np.ndarray:
+    if str(data.get("shape", "rectangle")).lower() == "boolean":
+        return boolean_shape_mask(data, shape)
+    pil = Image.new("L", (shape[1], shape[0]), 0)
+    draw = ImageDraw.Draw(pil)
+    box = tuple(int(v) for v in data.get("box", [0, 0, 1, 1]))
+    stroke_width = max(1, int(data.get("stroke_width", 1)))
+    kind = str(data.get("shape", "rectangle")).lower()
+    if kind == "ellipse":
+        draw.ellipse(box, fill=255)
+    elif kind == "line":
+        draw.line((box[0], box[1], box[2], box[3]), fill=255, width=stroke_width)
+    elif kind == "bezier":
+        draw.line(bezier_curve_points(data.get("control_points"), box), fill=255, width=max(1, stroke_width), joint="curve")
+    elif kind == "polygon":
+        draw.polygon(regular_polygon_points(box, max(3, int(data.get("sides", 5)))), fill=255)
+    elif kind == "star":
+        draw.polygon(star_points(box, max(3, int(data.get("sides", 5))), float(data.get("inner_ratio", 0.5))), fill=255)
+    else:
+        draw.rectangle(box, fill=255)
+    return np.array(pil, dtype=np.uint8)
 
 
 def bezier_curve_points(raw_points: Any, box: tuple[int, int, int, int], steps: int = 64) -> list[tuple[float, float]]:

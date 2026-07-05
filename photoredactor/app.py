@@ -399,6 +399,7 @@ class PhotoRedactorApp(tk.Tk):
         layer.add_command(label="Заблокировать/разблокировать", command=self.toggle_layer_lock)
         layer.add_command(label="Редактировать текстовый слой", command=self.edit_text_layer)
         layer.add_command(label="Редактировать фигуру", command=self.edit_shape_layer)
+        layer.add_command(label="Булева операция фигур", command=self.boolean_shape_layers)
         layer.add_command(label="\u0420\u0435\u0434\u0430\u043a\u0442\u0438\u0440\u043e\u0432\u0430\u0442\u044c \u043a\u043e\u0440\u0440\u0435\u043a\u0442\u0438\u0440\u0443\u044e\u0449\u0438\u0439 \u0441\u043b\u043e\u0439", command=self.edit_adjustment_layer)
         layer.add_separator()
         layer.add_command(label="Поднять выше", command=lambda: self.move_layer(1))
@@ -2484,6 +2485,25 @@ class PhotoRedactorApp(tk.Tk):
             "Edit shape layer",
             lambda: self.doc.edit_shape_layer(shape=shape, fill=self.foreground, stroke=self.background, stroke_width=stroke_width, sides=sides, inner_ratio=inner_ratio, control_points=new_control_points),
         )
+        self.refresh()
+
+    def boolean_shape_layers(self) -> None:
+        if self.doc.active_layer <= 0:
+            messagebox.showinfo("Булева операция фигур", "Активная фигура должна быть над другой фигурой.")
+            return
+        upper = self.doc.layer
+        lower = self.doc.layers[self.doc.active_layer - 1]
+        if upper.kind != "shape" or lower.kind != "shape" or upper.shape_data is None or lower.shape_data is None:
+            messagebox.showinfo("Булева операция фигур", "Выберите фигуру, расположенную прямо над другой фигурой.")
+            return
+        raw = simpledialog.askstring("Булева операция фигур", "mode: union, subtract, intersect, xor", initialvalue="union")
+        if raw is None:
+            return
+        mode = raw.strip().lower()
+        if mode not in {"union", "subtract", "intersect", "xor"}:
+            messagebox.showerror("Булева операция фигур", "Используйте: union, subtract, intersect или xor.")
+            return
+        self.run_document_command("Boolean shape operation", lambda: self.doc.boolean_active_shape_with_lower(mode))
         self.refresh()
 
     def resize_image(self) -> None:
