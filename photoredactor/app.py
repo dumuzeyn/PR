@@ -32,6 +32,7 @@ from .core import (
     clone_or_heal,
     draw_mask_brush,
     draw_brush,
+    encode_png,
     flood_fill,
     image_statistics,
     effective_layer_mask,
@@ -1947,7 +1948,7 @@ class PhotoRedactorApp(tk.Tk):
 
     def edit_layer_filters(self) -> None:
         layer = self.doc.layer
-        filters = self.layer_filters_dialog(layer.filters, layer.pixels)
+        filters = self.layer_filters_dialog(layer.filters, layer.pixels, self.doc.layer_selection_mask(layer))
         if filters is None:
             return
         self.run_document_command("Layer filters", lambda: self.doc.set_active_layer_filters(filters))
@@ -1957,7 +1958,7 @@ class PhotoRedactorApp(tk.Tk):
         self.run_document_command("Clear layer filters", self.doc.clear_active_layer_filters)
         self.refresh()
 
-    def layer_filters_dialog(self, initial_filters: list[dict], pixels: np.ndarray) -> list[dict] | None:
+    def layer_filters_dialog(self, initial_filters: list[dict], pixels: np.ndarray, selection_mask: np.ndarray | None = None) -> list[dict] | None:
         filters = []
         for item in initial_filters:
             normalized = self.normalize_filter_item(item)
@@ -1998,8 +1999,10 @@ class PhotoRedactorApp(tk.Tk):
 
         buttons = ttk.Frame(dialog)
         buttons.grid(row=6, column=1, columnspan=2, sticky="ew", padx=(0, 12), pady=(0, 8))
+        mask_buttons = ttk.Frame(dialog)
+        mask_buttons.grid(row=7, column=1, columnspan=2, sticky="ew", padx=(0, 12), pady=(0, 8))
         bottom = ttk.Frame(dialog)
-        bottom.grid(row=7, column=1, columnspan=2, sticky="e", padx=(0, 12), pady=(0, 12))
+        bottom.grid(row=8, column=1, columnspan=2, sticky="e", padx=(0, 12), pady=(0, 12))
 
         def selected_index() -> int | None:
             selection = listbox.curselection()
@@ -2012,7 +2015,8 @@ class PhotoRedactorApp(tk.Tk):
             enabled = bool(item.get("enabled", True))
             opacity = int(round(float(item.get("opacity", 1.0)) * 100))
             prefix = "" if enabled else "выкл. "
-            return f"{prefix}{label}: {value:g}, {opacity}%"
+            mask = ", маска" if item.get("mask") else ""
+            return f"{prefix}{label}: {value:g}, {opacity}%{mask}"
 
         def refresh_list(select_index: int | None = None) -> None:
             listbox.delete(0, tk.END)
@@ -2093,6 +2097,25 @@ class PhotoRedactorApp(tk.Tk):
             filters[index], filters[target] = filters[target], filters[index]
             refresh_list(target)
 
+        def set_filter_mask_from_selection() -> None:
+            index = selected_index()
+            if index is None:
+                return
+            if selection_mask is None or not np.any(selection_mask):
+                messagebox.showinfo("Маска фильтра", "Создайте выделение на активном слое перед добавлением маски фильтра.")
+                return
+            filters[index] = current_item(filters[index])
+            filters[index]["mask"] = encode_png(np.dstack([selection_mask] * 4))
+            refresh_list(index)
+
+        def clear_filter_mask() -> None:
+            index = selected_index()
+            if index is None:
+                return
+            filters[index] = current_item(filters[index])
+            filters[index].pop("mask", None)
+            refresh_list(index)
+
         def update_preview() -> None:
             source = rgba_array_to_pil(pixels)
             source.thumbnail((180, 180), Image.Resampling.LANCZOS)
@@ -2121,6 +2144,8 @@ class PhotoRedactorApp(tk.Tk):
         ttk.Button(buttons, text="Удалить", command=remove_filter).pack(side=tk.LEFT, padx=(0, 4))
         ttk.Button(buttons, text="Вверх", command=lambda: move_filter(-1)).pack(side=tk.LEFT, padx=(0, 4))
         ttk.Button(buttons, text="Вниз", command=lambda: move_filter(1)).pack(side=tk.LEFT)
+        ttk.Button(mask_buttons, text="Маска из выделения", command=set_filter_mask_from_selection).pack(side=tk.LEFT, padx=(0, 4))
+        ttk.Button(mask_buttons, text="Удалить маску", command=clear_filter_mask).pack(side=tk.LEFT)
         ttk.Button(bottom, text="ОК", command=accept).pack(side=tk.RIGHT, padx=(6, 0))
         ttk.Button(bottom, text="Отмена", command=cancel).pack(side=tk.RIGHT)
         listbox.bind("<<ListboxSelect>>", load_selected)
@@ -2162,6 +2187,8 @@ class PhotoRedactorApp(tk.Tk):
             item = {"type": "emboss", "strength": max(0.0, min(1.0, float(value)))}
         item["enabled"] = bool(original.get("enabled", True))
         item["opacity"] = max(0.0, min(1.0, float(original.get("opacity", 1.0))))
+        if isinstance(original.get("mask"), str) and original.get("mask"):
+            item["mask"] = original["mask"]
         return item
 
     @staticmethod

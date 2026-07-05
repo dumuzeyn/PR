@@ -17,6 +17,7 @@ from PIL import ExifTags, Image, ImageDraw, ImageFont
 
 _checker_cache: dict[tuple[int, int, int], np.ndarray] = {}
 _brush_mask_cache: dict[int, np.ndarray] = {}
+_filter_mask_cache: dict[str, np.ndarray] = {}
 BLEND_MODES = [
     "Normal",
     "Multiply",
@@ -2092,15 +2093,45 @@ def apply_filter_stack(arr: np.ndarray, filters: list[dict[str, Any]]) -> np.nda
         else:
             continue
         opacity = float(np.clip(item.get("opacity", 1.0), 0.0, 1.0))
+        mask = filter_mask_from_item(item, out.shape[:2])
         if opacity >= 0.999:
-            out = filtered
+            if mask is None:
+                out = filtered
+            else:
+                out = before.copy().astype(np.float32)
+                out[:, :, :3] = before[:, :, :3].astype(np.float32) * (1.0 - mask[:, :, None]) + filtered[:, :, :3].astype(np.float32) * mask[:, :, None]
+                out = np.clip(out, 0, 255).astype(np.uint8)
         elif opacity <= 0.001:
             out = before
         else:
+            if mask is not None:
+                mask = mask * opacity
+            else:
+                mask = np.full(out.shape[:2], opacity, dtype=np.float32)
             out = before.copy().astype(np.float32)
-            out[:, :, :3] = before[:, :, :3].astype(np.float32) * (1.0 - opacity) + filtered[:, :, :3].astype(np.float32) * opacity
+            out[:, :, :3] = before[:, :, :3].astype(np.float32) * (1.0 - mask[:, :, None]) + filtered[:, :, :3].astype(np.float32) * mask[:, :, None]
             out = np.clip(out, 0, 255).astype(np.uint8)
     return out
+
+
+def filter_mask_from_item(item: dict[str, Any], shape: tuple[int, int]) -> np.ndarray | None:
+    encoded = item.get("mask")
+    if not isinstance(encoded, str) or not encoded:
+        return None
+    cached = _filter_mask_cache.get(encoded)
+    if cached is None:
+        try:
+            cached = decode_png(encoded)[:, :, 0].astype(np.uint8)
+        except Exception:
+            return None
+        if len(_filter_mask_cache) > 32:
+            _filter_mask_cache.clear()
+        _filter_mask_cache[encoded] = cached
+    mask = cached
+    target_h, target_w = shape
+    if mask.shape != (target_h, target_w):
+        mask = cv2.resize(mask, (target_w, target_h), interpolation=cv2.INTER_LINEAR)
+    return (mask.astype(np.float32) / 255.0).clip(0, 1)
 
 
 def median_filter(arr: np.ndarray, size: int) -> np.ndarray:
