@@ -138,6 +138,16 @@ FILTER_LABELS = {
     "emboss": "Тиснение",
 }
 
+ADJUSTMENT_TYPES = ["brightness_contrast", "saturation", "levels", "curves", "invert", "grayscale"]
+ADJUSTMENT_LABELS = {
+    "brightness_contrast": "\u042f\u0440\u043a\u043e\u0441\u0442\u044c/\u041a\u043e\u043d\u0442\u0440\u0430\u0441\u0442",
+    "saturation": "\u041d\u0430\u0441\u044b\u0449\u0435\u043d\u043d\u043e\u0441\u0442\u044c",
+    "levels": "\u0423\u0440\u043e\u0432\u043d\u0438",
+    "curves": "\u041a\u0440\u0438\u0432\u044b\u0435",
+    "invert": "\u0418\u043d\u0432\u0435\u0440\u0441\u0438\u044f",
+    "grayscale": "\u0427\u0435\u0440\u043d\u043e-\u0431\u0435\u043b\u043e\u0435",
+}
+
 
 class PhotoRedactorApp(tk.Tk):
     def __init__(self) -> None:
@@ -198,6 +208,7 @@ class PhotoRedactorApp(tk.Tk):
         self._mask_thumb_image: ImageTk.PhotoImage | None = None
         self._select_mask_preview_image: ImageTk.PhotoImage | None = None
         self._filter_stack_preview_image: ImageTk.PhotoImage | None = None
+        self._adjustment_preview_image: ImageTk.PhotoImage | None = None
         self._canvas_image_id: int | None = None
         self._render_after_id: str | None = None
         self._last_render_time = 0.0
@@ -365,6 +376,7 @@ class PhotoRedactorApp(tk.Tk):
         layer.add_command(label="Заблокировать/разблокировать", command=self.toggle_layer_lock)
         layer.add_command(label="Редактировать текстовый слой", command=self.edit_text_layer)
         layer.add_command(label="Редактировать фигуру", command=self.edit_shape_layer)
+        layer.add_command(label="\u0420\u0435\u0434\u0430\u043a\u0442\u0438\u0440\u043e\u0432\u0430\u0442\u044c \u043a\u043e\u0440\u0440\u0435\u043a\u0442\u0438\u0440\u0443\u044e\u0449\u0438\u0439 \u0441\u043b\u043e\u0439", command=self.edit_adjustment_layer)
         layer.add_separator()
         layer.add_command(label="Поднять выше", command=lambda: self.move_layer(1))
         layer.add_command(label="Опустить ниже", command=lambda: self.move_layer(-1))
@@ -402,6 +414,7 @@ class PhotoRedactorApp(tk.Tk):
         adj.add_command(label="Черно-белое", command=self.adjust_grayscale)
         adj.add_separator()
         adj.add_command(label="Добавить корректирующий слой", command=self.add_adjustment_layer)
+        adj.add_command(label="\u0420\u0435\u0434\u0430\u043a\u0442\u0438\u0440\u043e\u0432\u0430\u0442\u044c \u043a\u043e\u0440\u0440\u0435\u043a\u0442\u0438\u0440\u0443\u044e\u0449\u0438\u0439 \u0441\u043b\u043e\u0439", command=self.edit_adjustment_layer)
 
         filters = tk.Menu(menu, tearoff=False)
         menu.add_cascade(label="Фильтр", menu=filters)
@@ -2511,39 +2524,182 @@ class PhotoRedactorApp(tk.Tk):
     def adjust_grayscale(self) -> None:
         self.apply_to_layer("grayscale", lambda arr: self._grayscale(arr))
 
+
     def add_adjustment_layer(self) -> None:
-        raw = simpledialog.askstring(
-            "Adjustment layer",
-            "Type and values:\nbrightness_contrast,b,c\nsaturation,s\nlevels,black,white,gamma\ncurves,shadows,midtones,highlights\ninvert\ngrayscale",
-            initialvalue="brightness_contrast,0,1.1",
-        )
-        if not raw:
+        data = self.adjustment_layer_dialog()
+        if data is None:
             return
-        try:
-            parts = [part.strip() for part in raw.split(",")]
-            kind = parts[0].lower()
-            if kind == "brightness_contrast" and len(parts) == 3:
-                adjustment = {"type": kind, "brightness": int(float(parts[1])), "contrast": float(parts[2])}
-                name = "Brightness/Contrast"
-            elif kind == "saturation" and len(parts) == 2:
-                adjustment = {"type": kind, "saturation": float(parts[1])}
-                name = "Saturation"
-            elif kind == "levels" and len(parts) == 4:
-                adjustment = {"type": kind, "black": int(float(parts[1])), "white": int(float(parts[2])), "gamma": float(parts[3])}
-                name = "Levels"
-            elif kind == "curves" and len(parts) == 4:
-                adjustment = {"type": kind, "shadows": int(float(parts[1])), "midtones": int(float(parts[2])), "highlights": int(float(parts[3]))}
-                name = "Curves"
-            elif kind in {"invert", "grayscale"} and len(parts) == 1:
-                adjustment = {"type": kind}
-                name = "Invert" if kind == "invert" else "Grayscale"
-            else:
-                raise ValueError
-        except ValueError:
-            messagebox.showerror("Adjustment layer", "Invalid adjustment layer parameters.")
-            return
+        adjustment = data["adjustment"]
+        name = data["name"]
         self.run_document_command(f"{name} adjustment layer", lambda: self.doc.add_adjustment_layer(name, adjustment))
         self.refresh()
+
+    def edit_adjustment_layer(self) -> None:
+        layer = self.doc.layer
+        if layer.kind != "adjustment" or layer.adjustment is None:
+            messagebox.showinfo("Adjustment layer", "Select an adjustment layer first.")
+            return
+        data = self.adjustment_layer_dialog(layer.adjustment)
+        if data is None:
+            return
+        adjustment = data["adjustment"]
+        name = data["name"]
+
+        def edit() -> None:
+            active = self.doc.layer
+            active.adjustment = dict(adjustment)
+            active.name = str(name)
+            self.doc.dirty = True
+
+        self.run_document_command("Edit adjustment layer", edit)
+        self.refresh()
+
+    def adjustment_layer_dialog(self, initial: dict | None = None) -> dict | None:
+        initial = dict(initial or {"type": "brightness_contrast", "brightness": 0, "contrast": 1.1})
+        result: dict | None = None
+        dialog = tk.Toplevel(self)
+        dialog.title("\u041a\u043e\u0440\u0440\u0435\u043a\u0442\u0438\u0440\u0443\u044e\u0449\u0438\u0439 \u0441\u043b\u043e\u0439")
+        dialog.transient(self)
+        dialog.resizable(False, False)
+        dialog.grab_set()
+
+        source = self.doc.composite(checker=False)
+        adjustment_type = tk.StringVar(value=str(initial.get("type", "brightness_contrast")))
+        values = [tk.DoubleVar(value=0.0), tk.DoubleVar(value=0.0), tk.DoubleVar(value=0.0)]
+        labels: list[ttk.Label] = []
+        spins: list[ttk.Spinbox] = []
+        updating = False
+
+        preview = ttk.Label(dialog)
+        preview.grid(row=0, column=0, rowspan=7, padx=12, pady=12, sticky="n")
+        ttk.Label(dialog, text="\u0422\u0438\u043f").grid(row=0, column=1, sticky="w", padx=(0, 12), pady=(12, 4))
+        type_box = ttk.Combobox(dialog, textvariable=adjustment_type, values=ADJUSTMENT_TYPES, state="readonly", width=22)
+        type_box.grid(row=0, column=2, sticky="ew", padx=(0, 12), pady=(12, 4))
+        hint = ttk.Label(dialog, text="", wraplength=240, justify=tk.LEFT)
+        hint.grid(row=4, column=1, columnspan=2, sticky="w", padx=(0, 12), pady=(8, 0))
+
+        for index in range(3):
+            label = ttk.Label(dialog, text="")
+            spin = ttk.Spinbox(dialog, textvariable=values[index], from_=0, to=255, increment=1, width=12)
+            label.grid(row=index + 1, column=1, sticky="w", padx=(0, 12), pady=4)
+            spin.grid(row=index + 1, column=2, sticky="ew", padx=(0, 12), pady=4)
+            labels.append(label)
+            spins.append(spin)
+
+        buttons = ttk.Frame(dialog)
+        buttons.grid(row=6, column=1, columnspan=2, sticky="e", padx=12, pady=12)
+
+        def current_adjustment() -> dict:
+            return self.make_adjustment_item(adjustment_type.get(), [value.get() for value in values])
+
+        def set_values_for_kind(kind: str, adjustment: dict | None = None) -> None:
+            nonlocal updating
+            updating = True
+            adjustment = adjustment or {}
+            specs = self.adjustment_specs(kind, adjustment)
+            for index, (label_text, default, from_value, to_value, increment) in enumerate(specs):
+                labels[index].configure(text=label_text)
+                spins[index].configure(from_=from_value, to=to_value, increment=increment)
+                values[index].set(default)
+                labels[index].grid()
+                spins[index].grid()
+            for index in range(len(specs), 3):
+                labels[index].grid_remove()
+                spins[index].grid_remove()
+            hint.configure(text=self.adjustment_hint(kind))
+            updating = False
+
+        def update_preview(*_args) -> None:
+            if updating:
+                return
+            thumb = rgba_array_to_pil(source)
+            thumb.thumbnail((180, 180), Image.Resampling.LANCZOS)
+            arr = np.array(thumb.convert("RGBA"), dtype=np.uint8)
+            shown = self.apply_adjustment_preview(arr, current_adjustment())
+            image = rgba_array_to_pil(shown)
+            canvas = Image.new("RGBA", (180, 180), (44, 46, 52, 255))
+            canvas.alpha_composite(image, ((180 - image.width) // 2, (180 - image.height) // 2))
+            self._adjustment_preview_image = ImageTk.PhotoImage(canvas)
+            preview.configure(image=self._adjustment_preview_image)
+
+        def type_changed(_event=None) -> None:
+            set_values_for_kind(adjustment_type.get())
+            update_preview()
+
+        def accept() -> None:
+            nonlocal result
+            adjustment = current_adjustment()
+            result = {"adjustment": adjustment, "name": self.adjustment_name(adjustment)}
+            dialog.destroy()
+
+        def cancel() -> None:
+            dialog.destroy()
+
+        type_box.bind("<<ComboboxSelected>>", type_changed)
+        for value in values:
+            value.trace_add("write", update_preview)
+        ttk.Button(buttons, text="\u041e\u041a", command=accept).pack(side=tk.RIGHT, padx=(6, 0))
+        ttk.Button(buttons, text="\u041e\u0442\u043c\u0435\u043d\u0430", command=cancel).pack(side=tk.RIGHT)
+        dialog.protocol("WM_DELETE_WINDOW", cancel)
+        set_values_for_kind(adjustment_type.get(), initial)
+        update_preview()
+        dialog.wait_window()
+        return result
+
+    @staticmethod
+    def adjustment_specs(kind: str, adjustment: dict) -> list[tuple[str, float, float, float, float]]:
+        if kind == "brightness_contrast":
+            return [("\u042f\u0440\u043a\u043e\u0441\u0442\u044c", float(adjustment.get("brightness", 0)), -255, 255, 1), ("\u041a\u043e\u043d\u0442\u0440\u0430\u0441\u0442", float(adjustment.get("contrast", 1.0)), 0, 5, 0.05)]
+        if kind == "saturation":
+            return [("\u041d\u0430\u0441\u044b\u0449\u0435\u043d\u043d\u043e\u0441\u0442\u044c", float(adjustment.get("saturation", 1.0)), 0, 5, 0.05)]
+        if kind == "levels":
+            return [("\u0427\u0435\u0440\u043d\u0430\u044f \u0442\u043e\u0447\u043a\u0430", float(adjustment.get("black", 0)), 0, 254, 1), ("\u0411\u0435\u043b\u0430\u044f \u0442\u043e\u0447\u043a\u0430", float(adjustment.get("white", 255)), 1, 255, 1), ("\u0413\u0430\u043c\u043c\u0430", float(adjustment.get("gamma", 1.0)), 0.01, 10, 0.05)]
+        if kind == "curves":
+            return [("\u0422\u0435\u043d\u0438", float(adjustment.get("shadows", 64)), 0, 255, 1), ("\u0421\u0440\u0435\u0434\u043d\u0438\u0435", float(adjustment.get("midtones", 128)), 0, 255, 1), ("\u0421\u0432\u0435\u0442\u0430", float(adjustment.get("highlights", 192)), 0, 255, 1)]
+        return []
+
+    @staticmethod
+    def adjustment_hint(kind: str) -> str:
+        if kind in {"invert", "grayscale"}:
+            return "\u042d\u0442\u043e\u0442 \u0442\u0438\u043f \u043d\u0435 \u0442\u0440\u0435\u0431\u0443\u0435\u0442 \u043f\u0430\u0440\u0430\u043c\u0435\u0442\u0440\u043e\u0432."
+        return "\u0418\u0437\u043c\u0435\u043d\u0435\u043d\u0438\u044f \u043f\u043e\u043a\u0430\u0437\u044b\u0432\u0430\u044e\u0442\u0441\u044f \u0432 \u043f\u0440\u0435\u0434\u043f\u0440\u043e\u0441\u043c\u043e\u0442\u0440\u0435."
+
+    @staticmethod
+    def make_adjustment_item(kind: str, values: list[float]) -> dict:
+        if kind == "brightness_contrast":
+            return {"type": kind, "brightness": int(values[0]), "contrast": float(values[1])}
+        if kind == "saturation":
+            return {"type": kind, "saturation": float(values[0])}
+        if kind == "levels":
+            black = int(values[0])
+            white = max(black + 1, int(values[1]))
+            return {"type": kind, "black": black, "white": min(255, white), "gamma": max(0.01, float(values[2]))}
+        if kind == "curves":
+            return {"type": kind, "shadows": int(values[0]), "midtones": int(values[1]), "highlights": int(values[2])}
+        if kind in {"invert", "grayscale"}:
+            return {"type": kind}
+        return {"type": "brightness_contrast", "brightness": 0, "contrast": 1.0}
+
+    @staticmethod
+    def adjustment_name(adjustment: dict) -> str:
+        kind = str(adjustment.get("type", "brightness_contrast")).lower()
+        return ADJUSTMENT_LABELS.get(kind, "Adjustment")
+
+    def apply_adjustment_preview(self, arr: np.ndarray, adjustment: dict) -> np.ndarray:
+        kind = str(adjustment.get("type", "")).lower()
+        if kind == "brightness_contrast":
+            return adjust_brightness_contrast(arr, int(adjustment.get("brightness", 0)), float(adjustment.get("contrast", 1.0)))
+        if kind == "saturation":
+            return adjust_saturation(arr, float(adjustment.get("saturation", 1.0)))
+        if kind == "levels":
+            return levels(arr, int(adjustment.get("black", 0)), int(adjustment.get("white", 255)), float(adjustment.get("gamma", 1.0)))
+        if kind == "curves":
+            return curves(arr, int(adjustment.get("shadows", 64)), int(adjustment.get("midtones", 128)), int(adjustment.get("highlights", 192)))
+        if kind == "invert":
+            return self._invert(arr)
+        if kind == "grayscale":
+            return self._grayscale(arr)
+        return arr.copy()
 
     @staticmethod
     def _invert(arr):
