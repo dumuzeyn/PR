@@ -1040,6 +1040,16 @@ class Document:
         if np.any(local):
             self.apply_selection_mask(self._layer_mask_to_document(layer, local), mode)
 
+    def select_background(self, layer: Layer, mode: str = "replace") -> None:
+        local = background_selection_mask(layer.pixels)
+        if np.any(local):
+            self.apply_selection_mask(self._layer_mask_to_document(layer, local), mode)
+
+    def select_sky(self, layer: Layer, mode: str = "replace") -> None:
+        local = sky_selection_mask(layer.pixels)
+        if np.any(local):
+            self.apply_selection_mask(self._layer_mask_to_document(layer, local), mode)
+
     def save_selection(self, name: str) -> None:
         if self.selection_mask is None:
             return
@@ -1582,6 +1592,92 @@ def subject_selection_mask(pixels: np.ndarray) -> np.ndarray:
     feather_radius = max(1, min(h, w) // 160)
     soft = cv2.GaussianBlur(subject, (feather_radius * 2 + 1, feather_radius * 2 + 1), feather_radius)
     return np.where(soft >= 96, 255, 0).astype(np.uint8)
+
+
+def background_selection_mask(pixels: np.ndarray) -> np.ndarray:
+    if pixels.size == 0:
+        return np.zeros(pixels.shape[:2], dtype=np.uint8)
+    alpha = pixels[:, :, 3]
+    visible = alpha > 0
+    if not np.any(visible):
+        return np.full(alpha.shape, 255, dtype=np.uint8)
+    coverage = float(np.count_nonzero(visible)) / float(visible.size)
+    if coverage < 0.92:
+        return border_connected_mask(~visible)
+
+    rgb = pixels[:, :, :3].astype(np.uint8)
+    border = np.zeros(alpha.shape, dtype=bool)
+    border[0, :] = True
+    border[-1, :] = True
+    border[:, 0] = True
+    border[:, -1] = True
+    border &= visible
+    if np.count_nonzero(border) < 8:
+        border = visible
+    background = np.median(rgb[border].astype(np.float32), axis=0)
+    diff = np.linalg.norm(rgb.astype(np.float32) - background, axis=2)
+    border_diff = diff[border]
+    tolerance = max(18.0, float(np.percentile(border_diff, 75)) + 14.0)
+    candidates = (diff <= tolerance) & visible
+    mask = border_connected_mask(candidates)
+    radius = max(1, min(mask.shape) // 120)
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (radius * 2 + 1, radius * 2 + 1))
+    return cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel).astype(np.uint8)
+
+
+def sky_selection_mask(pixels: np.ndarray) -> np.ndarray:
+    if pixels.size == 0:
+        return np.zeros(pixels.shape[:2], dtype=np.uint8)
+    alpha = pixels[:, :, 3]
+    visible = alpha > 0
+    if not np.any(visible):
+        return np.zeros(alpha.shape, dtype=np.uint8)
+    rgb = pixels[:, :, :3].astype(np.uint8)
+    hsv = cv2.cvtColor(rgb, cv2.COLOR_RGB2HSV)
+    hue = hsv[:, :, 0]
+    saturation = hsv[:, :, 1]
+    value = hsv[:, :, 2]
+    h, w = alpha.shape
+    yy = np.arange(h)[:, None]
+    upper_weight = yy < max(1, int(h * 0.72))
+    blue_sky = (hue >= 85) & (hue <= 132) & (saturation >= 24) & (value >= 70)
+    pale_sky = (saturation < 55) & (value >= 172) & (rgb[:, :, 2] >= rgb[:, :, 0] - 8)
+    candidates = (blue_sky | pale_sky) & upper_weight & visible
+    connected = top_connected_mask(candidates)
+    if not np.any(connected):
+        return np.zeros(alpha.shape, dtype=np.uint8)
+    radius = max(1, min(h, w) // 100)
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (radius * 2 + 1, radius * 2 + 1))
+    connected = cv2.morphologyEx(connected, cv2.MORPH_CLOSE, kernel)
+    connected = cv2.morphologyEx(connected, cv2.MORPH_OPEN, kernel)
+    return connected.astype(np.uint8)
+
+
+def border_connected_mask(candidates: np.ndarray) -> np.ndarray:
+    binary = candidates.astype(np.uint8)
+    if binary.size == 0 or not np.any(binary):
+        return np.zeros(binary.shape, dtype=np.uint8)
+    num, labels, _, _ = cv2.connectedComponentsWithStats(binary, 8)
+    border_labels = set(np.unique(labels[0, binary[0, :] > 0]).tolist())
+    border_labels.update(np.unique(labels[-1, binary[-1, :] > 0]).tolist())
+    border_labels.update(np.unique(labels[binary[:, 0] > 0, 0]).tolist())
+    border_labels.update(np.unique(labels[binary[:, -1] > 0, -1]).tolist())
+    border_labels.discard(0)
+    if num <= 1 or not border_labels:
+        return np.zeros(binary.shape, dtype=np.uint8)
+    return np.where(np.isin(labels, list(border_labels)), 255, 0).astype(np.uint8)
+
+
+def top_connected_mask(candidates: np.ndarray) -> np.ndarray:
+    binary = candidates.astype(np.uint8)
+    if binary.size == 0 or not np.any(binary):
+        return np.zeros(binary.shape, dtype=np.uint8)
+    num, labels, _, _ = cv2.connectedComponentsWithStats(binary, 8)
+    top_labels = set(np.unique(labels[0, binary[0, :] > 0]).tolist())
+    top_labels.discard(0)
+    if num <= 1 or not top_labels:
+        return np.zeros(binary.shape, dtype=np.uint8)
+    return np.where(np.isin(labels, list(top_labels)), 255, 0).astype(np.uint8)
 
 
 def effective_layer_mask(layer: Layer) -> np.ndarray | None:
