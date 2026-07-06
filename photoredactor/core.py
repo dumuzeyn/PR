@@ -2274,13 +2274,18 @@ def apply_filter_stack(arr: np.ndarray, filters: list[dict[str, Any]]) -> np.nda
         else:
             continue
         opacity = float(np.clip(item.get("opacity", 1.0), 0.0, 1.0))
+        blend_mode = str(item.get("blend_mode", "Normal"))
+        blend_source = filtered
+        if blend_mode != "Normal":
+            blend_source = filtered.copy()
+            blend_source[:, :, :3] = blend_rgb(filtered[:, :, :3].astype(np.float32), before[:, :, :3].astype(np.float32), blend_mode).clip(0, 255).astype(np.uint8)
         mask = filter_mask_from_item(item, out.shape[:2])
         if opacity >= 0.999:
             if mask is None:
-                out = filtered
+                out = blend_source
             else:
                 out = before.copy().astype(np.float32)
-                out[:, :, :3] = before[:, :, :3].astype(np.float32) * (1.0 - mask[:, :, None]) + filtered[:, :, :3].astype(np.float32) * mask[:, :, None]
+                out[:, :, :3] = before[:, :, :3].astype(np.float32) * (1.0 - mask[:, :, None]) + blend_source[:, :, :3].astype(np.float32) * mask[:, :, None]
                 out = np.clip(out, 0, 255).astype(np.uint8)
         elif opacity <= 0.001:
             out = before
@@ -2290,7 +2295,7 @@ def apply_filter_stack(arr: np.ndarray, filters: list[dict[str, Any]]) -> np.nda
             else:
                 mask = np.full(out.shape[:2], opacity, dtype=np.float32)
             out = before.copy().astype(np.float32)
-            out[:, :, :3] = before[:, :, :3].astype(np.float32) * (1.0 - mask[:, :, None]) + filtered[:, :, :3].astype(np.float32) * mask[:, :, None]
+            out[:, :, :3] = before[:, :, :3].astype(np.float32) * (1.0 - mask[:, :, None]) + blend_source[:, :, :3].astype(np.float32) * mask[:, :, None]
             out = np.clip(out, 0, 255).astype(np.uint8)
     return out
 

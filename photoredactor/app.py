@@ -2109,7 +2109,7 @@ class PhotoRedactorApp(tk.Tk):
         dialog.grab_set()
 
         preview = ttk.Label(dialog)
-        preview.grid(row=0, column=0, rowspan=8, padx=12, pady=12, sticky="n")
+        preview.grid(row=0, column=0, rowspan=9, padx=12, pady=12, sticky="n")
         listbox = tk.Listbox(dialog, height=8, width=26, exportselection=False)
         listbox.grid(row=0, column=1, rowspan=6, padx=(0, 8), pady=12, sticky="ns")
 
@@ -2130,8 +2130,12 @@ class PhotoRedactorApp(tk.Tk):
         opacity_var = tk.DoubleVar(value=100.0)
         opacity_spin = ttk.Spinbox(controls, textvariable=opacity_var, from_=0.0, to=100.0, increment=5.0, width=12)
         opacity_spin.grid(row=3, column=1, sticky="ew", pady=(0, 8))
+        ttk.Label(controls, text="Режим").grid(row=4, column=0, sticky="w")
+        filter_blend_mode = tk.StringVar(value="Normal")
+        filter_blend_box = ttk.Combobox(controls, textvariable=filter_blend_mode, values=BLEND_MODES, state="readonly", width=14)
+        filter_blend_box.grid(row=4, column=1, sticky="ew", pady=(0, 8))
         hint = ttk.Label(controls, text="", wraplength=190, justify=tk.LEFT)
-        hint.grid(row=4, column=0, columnspan=2, sticky="w", pady=(0, 8))
+        hint.grid(row=5, column=0, columnspan=2, sticky="w", pady=(0, 8))
 
         buttons = ttk.Frame(dialog)
         buttons.grid(row=6, column=1, columnspan=2, sticky="ew", padx=(0, 12), pady=(0, 8))
@@ -2150,9 +2154,11 @@ class PhotoRedactorApp(tk.Tk):
             value = self.filter_primary_value(item)
             enabled = bool(item.get("enabled", True))
             opacity = int(round(float(item.get("opacity", 1.0)) * 100))
+            blend_mode = str(item.get("blend_mode", "Normal"))
             prefix = "" if enabled else "выкл. "
             mask = ", маска" if item.get("mask") else ""
-            return f"{prefix}{label}: {value:g}, {opacity}%{mask}"
+            blend = "" if blend_mode == "Normal" else f", {blend_mode}"
+            return f"{prefix}{label}: {value:g}, {opacity}%{blend}{mask}"
 
         def refresh_list(select_index: int | None = None) -> None:
             listbox.delete(0, tk.END)
@@ -2195,12 +2201,15 @@ class PhotoRedactorApp(tk.Tk):
             value_var.set(self.filter_primary_value(item))
             enabled_var.set(bool(item.get("enabled", True)))
             opacity_var.set(float(item.get("opacity", 1.0)) * 100.0)
+            blend_mode = str(item.get("blend_mode", "Normal"))
+            filter_blend_mode.set(blend_mode if blend_mode in BLEND_MODES else "Normal")
             updating_controls = False
 
         def current_item(original: dict | None = None) -> dict:
             metadata = dict(original or {})
             metadata["enabled"] = bool(enabled_var.get())
             metadata["opacity"] = float(opacity_var.get()) / 100.0
+            metadata["blend_mode"] = filter_blend_mode.get()
             return self.make_filter_item(filter_type.get(), value_var.get(), metadata)
 
         def apply_current(_event=None) -> None:
@@ -2290,9 +2299,11 @@ class PhotoRedactorApp(tk.Tk):
         value_spin.bind("<FocusOut>", apply_current)
         opacity_spin.bind("<KeyRelease>", apply_current)
         opacity_spin.bind("<FocusOut>", apply_current)
+        filter_blend_box.bind("<<ComboboxSelected>>", apply_current)
         value_var.trace_add("write", lambda *_args: apply_current())
         enabled_var.trace_add("write", lambda *_args: apply_current())
         opacity_var.trace_add("write", lambda *_args: apply_current())
+        filter_blend_mode.trace_add("write", lambda *_args: apply_current())
         dialog.protocol("WM_DELETE_WINDOW", cancel)
         refresh_list(0 if filters else None)
         if not filters:
@@ -2323,6 +2334,8 @@ class PhotoRedactorApp(tk.Tk):
             item = {"type": "emboss", "strength": max(0.0, min(1.0, float(value)))}
         item["enabled"] = bool(original.get("enabled", True))
         item["opacity"] = max(0.0, min(1.0, float(original.get("opacity", 1.0))))
+        blend_mode = str(original.get("blend_mode", "Normal"))
+        item["blend_mode"] = blend_mode if blend_mode in BLEND_MODES else "Normal"
         if isinstance(original.get("mask"), str) and original.get("mask"):
             item["mask"] = original["mask"]
         return item
@@ -2379,18 +2392,26 @@ class PhotoRedactorApp(tk.Tk):
         for item in filters:
             kind = str(item.get("type", "")).lower()
             if kind == "blur":
-                parts.append(f"blur,{item.get('radius', 3)}")
+                parts.append(self.filter_text_chunk("blur", item.get("radius", 3), item))
             elif kind == "sharpen":
-                parts.append(f"sharpen,{item.get('amount', 1.0)}")
+                parts.append(self.filter_text_chunk("sharpen", item.get("amount", 1.0), item))
             elif kind == "noise":
-                parts.append(f"noise,{item.get('amount', 0.03)}")
+                parts.append(self.filter_text_chunk("noise", item.get("amount", 0.03), item))
             elif kind == "median":
-                parts.append(f"median,{item.get('size', 3)}")
+                parts.append(self.filter_text_chunk("median", item.get("size", 3), item))
             elif kind == "edge":
-                parts.append(f"edge,{item.get('strength', 1.0)}")
+                parts.append(self.filter_text_chunk("edge", item.get("strength", 1.0), item))
             elif kind == "emboss":
-                parts.append(f"emboss,{item.get('strength', 1.0)}")
+                parts.append(self.filter_text_chunk("emboss", item.get("strength", 1.0), item))
         return ";".join(parts)
+
+    @staticmethod
+    def filter_text_chunk(kind: str, value: float, item: dict) -> str:
+        opacity = float(item.get("opacity", 1.0))
+        blend_mode = str(item.get("blend_mode", "Normal"))
+        if abs(opacity - 1.0) <= 0.001 and blend_mode == "Normal":
+            return f"{kind},{value}"
+        return f"{kind},{value},{opacity},{blend_mode}"
 
     def parse_filters(self, raw: str) -> list[dict]:
         filters: list[dict] = []
@@ -2401,18 +2422,24 @@ class PhotoRedactorApp(tk.Tk):
             if not parts:
                 continue
             kind = parts[0].lower()
-            if kind == "blur" and len(parts) == 2:
-                filters.append({"type": "blur", "radius": max(1, int(float(parts[1])))})
-            elif kind == "sharpen" and len(parts) == 2:
-                filters.append({"type": "sharpen", "amount": max(0.0, float(parts[1]))})
-            elif kind == "noise" and len(parts) == 2:
-                filters.append({"type": "noise", "amount": max(0.0, min(1.0, float(parts[1])))})
-            elif kind == "median" and len(parts) == 2:
-                filters.append({"type": "median", "size": max(3, int(float(parts[1])) | 1)})
-            elif kind == "edge" and len(parts) == 2:
-                filters.append({"type": "edge", "strength": max(0.0, min(1.0, float(parts[1])))})
-            elif kind == "emboss" and len(parts) == 2:
-                filters.append({"type": "emboss", "strength": max(0.0, min(1.0, float(parts[1])))})
+            if len(parts) not in {2, 4}:
+                raise ValueError
+            metadata: dict[str, object] = {}
+            if len(parts) == 4:
+                metadata["opacity"] = max(0.0, min(1.0, float(parts[2])))
+                metadata["blend_mode"] = parts[3] if parts[3] in BLEND_MODES else "Normal"
+            if kind == "blur":
+                filters.append(self.make_filter_item("blur", max(1, int(float(parts[1]))), metadata))
+            elif kind == "sharpen":
+                filters.append(self.make_filter_item("sharpen", max(0.0, float(parts[1])), metadata))
+            elif kind == "noise":
+                filters.append(self.make_filter_item("noise", max(0.0, min(1.0, float(parts[1]))), metadata))
+            elif kind == "median":
+                filters.append(self.make_filter_item("median", max(3, int(float(parts[1])) | 1), metadata))
+            elif kind == "edge":
+                filters.append(self.make_filter_item("edge", max(0.0, min(1.0, float(parts[1]))), metadata))
+            elif kind == "emboss":
+                filters.append(self.make_filter_item("emboss", max(0.0, min(1.0, float(parts[1]))), metadata))
             else:
                 raise ValueError
         return filters
