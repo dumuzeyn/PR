@@ -153,6 +153,26 @@ FILTER_LABELS = {
     "emboss": "Тиснение",
 }
 
+FILTER_STACK_PRESETS = {
+    "Портрет мягко": [
+        {"type": "median", "size": 3, "opacity": 0.28, "blend_mode": "Normal"},
+        {"type": "blur", "radius": 2, "opacity": 0.18, "blend_mode": "Soft Light"},
+        {"type": "sharpen", "amount": 0.7, "opacity": 0.35, "blend_mode": "Normal"},
+    ],
+    "Детальная резкость": [
+        {"type": "sharpen", "amount": 1.8, "opacity": 0.75, "blend_mode": "Normal"},
+        {"type": "edge", "strength": 0.28, "opacity": 0.22, "blend_mode": "Overlay"},
+    ],
+    "Чистый скан": [
+        {"type": "median", "size": 3, "opacity": 0.8, "blend_mode": "Normal"},
+        {"type": "sharpen", "amount": 0.9, "opacity": 0.55, "blend_mode": "Normal"},
+    ],
+    "Графичные края": [
+        {"type": "edge", "strength": 0.75, "opacity": 0.6, "blend_mode": "Multiply"},
+        {"type": "emboss", "strength": 0.35, "opacity": 0.25, "blend_mode": "Overlay"},
+    ],
+}
+
 ADJUSTMENT_TYPES = [
     "brightness_contrast",
     "saturation",
@@ -2109,33 +2129,38 @@ class PhotoRedactorApp(tk.Tk):
         dialog.grab_set()
 
         preview = ttk.Label(dialog)
-        preview.grid(row=0, column=0, rowspan=9, padx=12, pady=12, sticky="n")
+        preview.grid(row=0, column=0, rowspan=10, padx=12, pady=12, sticky="n")
         listbox = tk.Listbox(dialog, height=8, width=26, exportselection=False)
         listbox.grid(row=0, column=1, rowspan=6, padx=(0, 8), pady=12, sticky="ns")
 
         controls = ttk.Frame(dialog)
         controls.grid(row=0, column=2, padx=(0, 12), pady=12, sticky="new")
-        ttk.Label(controls, text="Тип").grid(row=0, column=0, sticky="w")
+        ttk.Label(controls, text="Пресет").grid(row=0, column=0, sticky="w")
+        filter_preset = tk.StringVar(value=next(iter(FILTER_STACK_PRESETS)))
+        preset_box = ttk.Combobox(controls, textvariable=filter_preset, values=list(FILTER_STACK_PRESETS), state="readonly", width=14)
+        preset_box.grid(row=0, column=1, sticky="ew", pady=(0, 6))
+        ttk.Button(controls, text="Применить", command=lambda: apply_preset()).grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 10))
+        ttk.Label(controls, text="Тип").grid(row=2, column=0, sticky="w")
         filter_type = tk.StringVar(value=FILTER_TYPES[0])
         type_box = ttk.Combobox(controls, textvariable=filter_type, values=FILTER_TYPES, state="readonly", width=14)
-        type_box.grid(row=0, column=1, sticky="ew", pady=(0, 6))
-        ttk.Label(controls, text="Параметр").grid(row=1, column=0, sticky="w")
+        type_box.grid(row=2, column=1, sticky="ew", pady=(0, 6))
+        ttk.Label(controls, text="Параметр").grid(row=3, column=0, sticky="w")
         value_var = tk.DoubleVar(value=3.0)
         value_spin = ttk.Spinbox(controls, textvariable=value_var, from_=0.0, to=500.0, increment=1.0, width=12)
-        value_spin.grid(row=1, column=1, sticky="ew", pady=(0, 8))
+        value_spin.grid(row=3, column=1, sticky="ew", pady=(0, 8))
         enabled_var = tk.BooleanVar(value=True)
         enabled_check = ttk.Checkbutton(controls, text="Включен", variable=enabled_var)
-        enabled_check.grid(row=2, column=0, columnspan=2, sticky="w", pady=(0, 6))
-        ttk.Label(controls, text="Opacity").grid(row=3, column=0, sticky="w")
+        enabled_check.grid(row=4, column=0, columnspan=2, sticky="w", pady=(0, 6))
+        ttk.Label(controls, text="Opacity").grid(row=5, column=0, sticky="w")
         opacity_var = tk.DoubleVar(value=100.0)
         opacity_spin = ttk.Spinbox(controls, textvariable=opacity_var, from_=0.0, to=100.0, increment=5.0, width=12)
-        opacity_spin.grid(row=3, column=1, sticky="ew", pady=(0, 8))
-        ttk.Label(controls, text="Режим").grid(row=4, column=0, sticky="w")
+        opacity_spin.grid(row=5, column=1, sticky="ew", pady=(0, 8))
+        ttk.Label(controls, text="Режим").grid(row=6, column=0, sticky="w")
         filter_blend_mode = tk.StringVar(value="Normal")
         filter_blend_box = ttk.Combobox(controls, textvariable=filter_blend_mode, values=BLEND_MODES, state="readonly", width=14)
-        filter_blend_box.grid(row=4, column=1, sticky="ew", pady=(0, 8))
+        filter_blend_box.grid(row=6, column=1, sticky="ew", pady=(0, 8))
         hint = ttk.Label(controls, text="", wraplength=190, justify=tk.LEFT)
-        hint.grid(row=5, column=0, columnspan=2, sticky="w", pady=(0, 8))
+        hint.grid(row=7, column=0, columnspan=2, sticky="w", pady=(0, 8))
 
         buttons = ttk.Frame(dialog)
         buttons.grid(row=6, column=1, columnspan=2, sticky="ew", padx=(0, 12), pady=(0, 8))
@@ -2241,6 +2266,17 @@ class PhotoRedactorApp(tk.Tk):
                 return
             filters[index], filters[target] = filters[target], filters[index]
             refresh_list(target)
+
+        def apply_preset() -> None:
+            preset = FILTER_STACK_PRESETS.get(filter_preset.get())
+            if preset is None:
+                return
+            filters.clear()
+            for item in preset:
+                normalized = self.normalize_filter_item(item)
+                if normalized is not None:
+                    filters.append(normalized)
+            refresh_list(0 if filters else None)
 
         def set_filter_mask_from_selection() -> None:
             index = selected_index()
