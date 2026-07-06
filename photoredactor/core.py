@@ -2362,6 +2362,32 @@ def content_aware_fill(arr: np.ndarray, selection_mask: np.ndarray | None, radiu
     return out
 
 
+def edge_aware_cleanup(arr: np.ndarray, selection_mask: np.ndarray | None, radius: int = 3, strength: float = 0.65) -> np.ndarray:
+    if selection_mask is None or not np.any(selection_mask):
+        return arr.copy()
+    radius = max(1, int(radius))
+    strength = float(np.clip(strength, 0.0, 1.0))
+    if strength <= 0:
+        return arr.copy()
+    mask = (selection_mask > 0).astype(np.uint8) * 255
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (radius * 2 + 1, radius * 2 + 1))
+    outer = cv2.dilate(mask, kernel)
+    inner = cv2.erode(mask, kernel)
+    edge_band = cv2.subtract(outer, inner)
+    if not np.any(edge_band):
+        return arr.copy()
+    feather = cv2.GaussianBlur(edge_band, (radius * 2 + 1, radius * 2 + 1), radius).astype(np.float32) / 255.0
+    feather = np.clip(feather * strength, 0.0, 1.0)
+    out = arr.copy().astype(np.float32)
+    diameter = max(3, radius * 2 + 1)
+    smooth_rgb = cv2.bilateralFilter(arr[:, :, :3], diameter, 24 + radius * 8, 12 + radius * 4).astype(np.float32)
+    smooth_alpha = cv2.bilateralFilter(arr[:, :, 3], diameter, 24 + radius * 8, 12 + radius * 4).astype(np.float32)
+    alpha = feather[:, :, None]
+    out[:, :, :3] = out[:, :, :3] * (1.0 - alpha) + smooth_rgb * alpha
+    out[:, :, 3] = out[:, :, 3] * (1.0 - feather) + smooth_alpha * feather
+    return np.clip(out, 0, 255).astype(np.uint8)
+
+
 def reduce_red_eye(arr: np.ndarray, selection_mask: np.ndarray | None = None, strength: float = 0.85) -> np.ndarray:
     out = arr.copy().astype(np.float32)
     rgb = out[:, :, :3]

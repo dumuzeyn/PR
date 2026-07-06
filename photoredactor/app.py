@@ -33,6 +33,7 @@ from .core import (
     draw_mask_brush,
     draw_brush,
     encode_png,
+    edge_aware_cleanup,
     flood_fill,
     image_statistics,
     effective_layer_mask,
@@ -464,6 +465,7 @@ class PhotoRedactorApp(tk.Tk):
         filters.add_command(label="Шум", command=self.filter_noise)
         filters.add_separator()
         filters.add_command(label="Заливка с учетом содержимого", command=self.filter_content_aware_fill)
+        filters.add_command(label="Очистка краев выделения", command=self.filter_edge_cleanup)
         filters.add_command(label="Удаление красных глаз", command=self.filter_red_eye)
         filters.add_command(label="Заплатка из источника", command=self.filter_patch_selection)
 
@@ -3030,6 +3032,19 @@ class PhotoRedactorApp(tk.Tk):
         radius = simpledialog.askinteger("Content-aware fill", "Search radius:", initialvalue=3, minvalue=1, maxvalue=30)
         if radius:
             self.apply_to_layer("content-aware fill", lambda arr: content_aware_fill(arr, selection_mask, radius))
+
+    def filter_edge_cleanup(self) -> None:
+        layer = self.doc.layer
+        selection_mask = self.doc.layer_selection_mask(layer)
+        if selection_mask is None or not np.any(selection_mask):
+            messagebox.showinfo("Очистка краев", "Сначала создайте выделение на активном слое.")
+            return
+        radius = simpledialog.askinteger("Очистка краев", "Радиус края:", initialvalue=3, minvalue=1, maxvalue=40)
+        if radius is None:
+            return
+        strength = simpledialog.askfloat("Очистка краев", "Сила 0..1:", initialvalue=0.65, minvalue=0.0, maxvalue=1.0)
+        if strength is not None:
+            self.apply_to_layer("edge-aware cleanup", lambda arr: edge_aware_cleanup(arr, selection_mask, radius, strength))
 
     def filter_red_eye(self) -> None:
         selection_mask = self.doc.layer_selection_mask(self.doc.layer)
