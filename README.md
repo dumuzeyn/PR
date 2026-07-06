@@ -24,7 +24,7 @@ This repository starts with a real working editor and an architecture intended t
 - recovery autosave and manual recovery opening
 - simple action recording to JSON logs
 - metadata/EXIF view, histogram, image statistics and eyedropper
-- non-destructive adjustment layers for brightness/contrast, saturation, hue/saturation, exposure, color balance, levels, curves, threshold, posterize, invert and grayscale
+- non-destructive adjustment layers with presets for brightness/contrast, saturation, hue/saturation, exposure, color balance, levels, curves, threshold, posterize, invert and grayscale
 - undo/redo
 - command-based undo for strokes, moves and layer edits
 - `.prdx` projects with `manifest.json` and separate layer PNG files, without Base64-packed layers

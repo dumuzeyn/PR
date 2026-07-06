@@ -200,6 +200,15 @@ ADJUSTMENT_LABELS = {
     "grayscale": "\u0427\u0435\u0440\u043d\u043e-\u0431\u0435\u043b\u043e\u0435",
 }
 
+ADJUSTMENT_PRESETS = {
+    "Яркий портрет": {"type": "brightness_contrast", "brightness": 12, "contrast": 1.18},
+    "Теплый тон": {"type": "color_balance", "red": 12, "green": 4, "blue": -10},
+    "Кино-контраст": {"type": "curves", "shadows": 48, "midtones": 128, "highlights": 210},
+    "Мягкая экспозиция": {"type": "exposure", "exposure": 0.25, "offset": 0.0, "gamma": 1.08},
+    "Холодные тени": {"type": "color_balance", "red": -8, "green": 0, "blue": 14},
+    "Чистый черно-белый": {"type": "grayscale"},
+}
+
 
 class PhotoRedactorApp(tk.Tk):
     def __init__(self) -> None:
@@ -2948,23 +2957,28 @@ class PhotoRedactorApp(tk.Tk):
         updating = False
 
         preview = ttk.Label(dialog)
-        preview.grid(row=0, column=0, rowspan=7, padx=12, pady=12, sticky="n")
-        ttk.Label(dialog, text="\u0422\u0438\u043f").grid(row=0, column=1, sticky="w", padx=(0, 12), pady=(12, 4))
+        preview.grid(row=0, column=0, rowspan=8, padx=12, pady=12, sticky="n")
+        ttk.Label(dialog, text="Пресет").grid(row=0, column=1, sticky="w", padx=(0, 12), pady=(12, 4))
+        adjustment_preset = tk.StringVar(value=next(iter(ADJUSTMENT_PRESETS)))
+        preset_box = ttk.Combobox(dialog, textvariable=adjustment_preset, values=list(ADJUSTMENT_PRESETS), state="readonly", width=22)
+        preset_box.grid(row=0, column=2, sticky="ew", padx=(0, 12), pady=(12, 4))
+        ttk.Button(dialog, text="Применить пресет", command=lambda: apply_adjustment_preset()).grid(row=1, column=1, columnspan=2, sticky="ew", padx=(0, 12), pady=(0, 8))
+        ttk.Label(dialog, text="\u0422\u0438\u043f").grid(row=2, column=1, sticky="w", padx=(0, 12), pady=(4, 4))
         type_box = ttk.Combobox(dialog, textvariable=adjustment_type, values=ADJUSTMENT_TYPES, state="readonly", width=22)
-        type_box.grid(row=0, column=2, sticky="ew", padx=(0, 12), pady=(12, 4))
+        type_box.grid(row=2, column=2, sticky="ew", padx=(0, 12), pady=(4, 4))
         hint = ttk.Label(dialog, text="", wraplength=240, justify=tk.LEFT)
-        hint.grid(row=4, column=1, columnspan=2, sticky="w", padx=(0, 12), pady=(8, 0))
+        hint.grid(row=6, column=1, columnspan=2, sticky="w", padx=(0, 12), pady=(8, 0))
 
         for index in range(3):
             label = ttk.Label(dialog, text="")
             spin = ttk.Spinbox(dialog, textvariable=values[index], from_=0, to=255, increment=1, width=12)
-            label.grid(row=index + 1, column=1, sticky="w", padx=(0, 12), pady=4)
-            spin.grid(row=index + 1, column=2, sticky="ew", padx=(0, 12), pady=4)
+            label.grid(row=index + 3, column=1, sticky="w", padx=(0, 12), pady=4)
+            spin.grid(row=index + 3, column=2, sticky="ew", padx=(0, 12), pady=4)
             labels.append(label)
             spins.append(spin)
 
         buttons = ttk.Frame(dialog)
-        buttons.grid(row=6, column=1, columnspan=2, sticky="e", padx=12, pady=12)
+        buttons.grid(row=7, column=1, columnspan=2, sticky="e", padx=12, pady=12)
 
         def current_adjustment() -> dict:
             return self.make_adjustment_item(adjustment_type.get(), [value.get() for value in values])
@@ -3001,6 +3015,17 @@ class PhotoRedactorApp(tk.Tk):
 
         def type_changed(_event=None) -> None:
             set_values_for_kind(adjustment_type.get())
+            update_preview()
+
+        def apply_adjustment_preset() -> None:
+            preset = ADJUSTMENT_PRESETS.get(adjustment_preset.get())
+            if preset is None:
+                return
+            kind = str(preset.get("type", "brightness_contrast"))
+            if kind not in ADJUSTMENT_TYPES:
+                return
+            adjustment_type.set(kind)
+            set_values_for_kind(kind, preset)
             update_preview()
 
         def accept() -> None:

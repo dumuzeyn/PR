@@ -21,7 +21,7 @@
 - UI: Russian main menu/tool labels and hover explanations for tools.
 - Analysis: eyedropper, metadata/EXIF viewer, histogram and image statistics.
 - Recovery and automation: autosave recovery file, manual recovery opening and action recording to JSON logs.
-- Adjustments: destructive and previewable non-destructive brightness, contrast, saturation, hue/saturation, exposure, color balance, levels, curves, threshold, posterize, grayscale and invert.
+- Adjustments: destructive and previewable non-destructive brightness, contrast, saturation, hue/saturation, exposure, color balance, levels, curves, threshold, posterize, grayscale and invert, with adjustment presets.
 - Filters: Gaussian blur, sharpen, noise, median, edge detect, emboss, content-aware fill and red-eye reduction.
 - History: undo and redo snapshots.
 - Automation: simple batch resize/convert.
@@ -33,7 +33,7 @@
 
 1. Selection engine: better quick-selection refinement and richer Select and Mask previews.
 2. Editable masks: stronger mask edge controls.
-3. Non-destructive editing: richer editable adjustment controls, preset libraries and adjustment presets.
+3. Non-destructive editing: richer editable adjustment controls and preset libraries.
 4. Free Transform: transform handles and richer warp preview controls.
 5. Text engine: text-on-path, OpenType-style controls and editable transform handles for text boxes.
 6. Shapes and paths: custom shapes and richer Bezier point editing.
