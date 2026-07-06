@@ -417,6 +417,7 @@ class PhotoRedactorApp(tk.Tk):
         select.add_command(label="Сжать", command=self.shrink_selection)
         select.add_command(label="Граница", command=self.border_selection)
         select.add_command(label="Уточнить край", command=self.refine_selection)
+        select.add_command(label="Умная очистка края", command=self.cleanup_selection_edges)
         select.add_command(label="Выделить и маска", command=self.select_and_mask_workspace)
         select.add_separator()
         select.add_command(label="Сохранить выделение", command=self.save_selection)
@@ -1505,6 +1506,18 @@ class PhotoRedactorApp(tk.Tk):
             messagebox.showerror("Refine selection", "Use: smooth,feather,contrast,shift")
             return
         self.run_selection_command("Refine selection", lambda: self.doc.refine_selection(smooth, feather, contrast, shift))
+
+    def cleanup_selection_edges(self) -> None:
+        if self.doc.selection_mask is None:
+            messagebox.showinfo("Умная очистка края", "Сначала создайте выделение.")
+            return
+        radius = simpledialog.askinteger("Умная очистка края", "Радиус края:", initialvalue=3, minvalue=1, maxvalue=40)
+        if radius is None:
+            return
+        strength = simpledialog.askfloat("Умная очистка края", "Сила 0..1:", initialvalue=0.7, minvalue=0.0, maxvalue=1.0)
+        if strength is None:
+            return
+        self.run_selection_command("Умная очистка края", lambda: self.doc.cleanup_selection_edges(radius, strength))
 
     def select_and_mask_workspace(self) -> None:
         if self.doc.selection_mask is None:

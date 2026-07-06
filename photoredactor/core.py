@@ -1137,6 +1137,13 @@ class Document:
         self.selection_mask = mask if np.any(mask) else None
         self.dirty = True
 
+    def cleanup_selection_edges(self, radius: int = 3, strength: float = 0.7) -> None:
+        if self.selection_mask is None:
+            return
+        mask = cleanup_selection_edges(self.selection_mask, self.composite(False), radius, strength)
+        self.selection_mask = mask if np.any(mask) else None
+        self.dirty = True
+
     def selection_bounds(self) -> tuple[int, int, int, int] | None:
         if self.selection_mask is None or not np.any(self.selection_mask):
             return None
@@ -1483,6 +1490,31 @@ def refine_selection_mask(mask: np.ndarray, smooth: int = 0, feather: int = 0, c
         work = (work - 127.5) * max(0.0, float(contrast)) + 127.5
         out = np.clip(work, 0, 255).astype(np.uint8)
     return out
+
+
+def cleanup_selection_edges(mask: np.ndarray, image: np.ndarray, radius: int = 3, strength: float = 0.7) -> np.ndarray:
+    if mask is None:
+        return np.zeros((0, 0), dtype=np.uint8)
+    if not np.any(mask):
+        return np.zeros_like(mask, dtype=np.uint8)
+    radius = max(1, int(radius))
+    strength = float(np.clip(strength, 0.0, 1.0))
+    binary = np.where(mask > 0, 255, 0).astype(np.uint8)
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (radius * 2 + 1, radius * 2 + 1))
+    cleaned = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
+    cleaned = cv2.morphologyEx(cleaned, cv2.MORPH_OPEN, kernel)
+    soft = cv2.GaussianBlur(cleaned, (radius * 2 + 1, radius * 2 + 1), radius).astype(np.float32)
+
+    gray = cv2.cvtColor(image[:, :, :3], cv2.COLOR_RGB2GRAY)
+    gray = np.where(image[:, :, 3] > 0, gray, 0).astype(np.uint8)
+    edges = cv2.Canny(cv2.GaussianBlur(gray, (3, 3), 0), 40, 120)
+    edge_band = cv2.dilate(edges, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (radius * 2 + 1, radius * 2 + 1)))
+    boundary = cv2.subtract(cv2.dilate(binary, kernel), cv2.erode(binary, kernel))
+    preserve = (edge_band.astype(np.float32) / 255.0) * (boundary.astype(np.float32) / 255.0) * strength
+
+    mixed = soft * (1.0 - preserve) + binary.astype(np.float32) * preserve
+    mixed = (mixed - 127.5) * (1.0 + strength * 1.5) + 127.5
+    return np.where(np.clip(mixed, 0, 255) >= 128, 255, 0).astype(np.uint8)
 
 
 def effective_layer_mask(layer: Layer) -> np.ndarray | None:
