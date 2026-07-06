@@ -1035,6 +1035,11 @@ class Document:
         local = (layer.pixels[:, :, 3] > 0).astype(np.uint8) * 255
         self.apply_selection_mask(self._layer_mask_to_document(layer, local), mode)
 
+    def select_subject(self, layer: Layer, mode: str = "replace") -> None:
+        local = subject_selection_mask(layer.pixels)
+        if np.any(local):
+            self.apply_selection_mask(self._layer_mask_to_document(layer, local), mode)
+
     def save_selection(self, name: str) -> None:
         if self.selection_mask is None:
             return
@@ -1515,6 +1520,68 @@ def cleanup_selection_edges(mask: np.ndarray, image: np.ndarray, radius: int = 3
     mixed = soft * (1.0 - preserve) + binary.astype(np.float32) * preserve
     mixed = (mixed - 127.5) * (1.0 + strength * 1.5) + 127.5
     return np.where(np.clip(mixed, 0, 255) >= 128, 255, 0).astype(np.uint8)
+
+
+def subject_selection_mask(pixels: np.ndarray) -> np.ndarray:
+    if pixels.size == 0:
+        return np.zeros(pixels.shape[:2], dtype=np.uint8)
+    alpha = pixels[:, :, 3]
+    visible = alpha > 0
+    if not np.any(visible):
+        return np.zeros(alpha.shape, dtype=np.uint8)
+    coverage = float(np.count_nonzero(visible)) / float(visible.size)
+    if coverage < 0.92:
+        seed = visible.astype(np.uint8) * 255
+    else:
+        rgb = pixels[:, :, :3].astype(np.uint8)
+        border = np.zeros(alpha.shape, dtype=bool)
+        border[0, :] = True
+        border[-1, :] = True
+        border[:, 0] = True
+        border[:, -1] = True
+        border &= visible
+        if np.count_nonzero(border) < 8:
+            border = visible
+        background = np.median(rgb[border].astype(np.float32), axis=0)
+        diff = np.linalg.norm(rgb.astype(np.float32) - background, axis=2)
+        diff = np.where(visible, diff, 0.0).astype(np.float32)
+        diff_u8 = cv2.normalize(diff, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+        threshold, _ = cv2.threshold(diff_u8[visible], 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        seed = np.where((diff_u8 >= max(12, int(threshold))) & visible, 255, 0).astype(np.uint8)
+
+    h, w = seed.shape
+    radius = max(1, min(h, w) // 80)
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (radius * 2 + 1, radius * 2 + 1))
+    seed = cv2.morphologyEx(seed, cv2.MORPH_CLOSE, kernel)
+    seed = cv2.morphologyEx(seed, cv2.MORPH_OPEN, kernel)
+    num, labels, stats, _ = cv2.connectedComponentsWithStats(seed, 8)
+    if num <= 1:
+        return seed
+
+    yy, xx = np.indices(seed.shape)
+    cx = (w - 1) * 0.5
+    cy = (h - 1) * 0.5
+    diagonal = max(1.0, float(np.hypot(w, h)))
+    best_label = 0
+    best_score = -1.0
+    for label in range(1, num):
+        area = float(stats[label, cv2.CC_STAT_AREA])
+        if area < 4:
+            continue
+        component = labels == label
+        component_cx = float(xx[component].mean())
+        component_cy = float(yy[component].mean())
+        center_bonus = 1.0 - min(1.0, float(np.hypot(component_cx - cx, component_cy - cy)) / diagonal)
+        score = area * (0.65 + center_bonus)
+        if score > best_score:
+            best_score = score
+            best_label = label
+    if best_label == 0:
+        return np.zeros_like(seed)
+    subject = np.where(labels == best_label, 255, 0).astype(np.uint8)
+    feather_radius = max(1, min(h, w) // 160)
+    soft = cv2.GaussianBlur(subject, (feather_radius * 2 + 1, feather_radius * 2 + 1), feather_radius)
+    return np.where(soft >= 96, 255, 0).astype(np.uint8)
 
 
 def effective_layer_mask(layer: Layer) -> np.ndarray | None:

@@ -408,6 +408,7 @@ class PhotoRedactorApp(tk.Tk):
         select.add_command(label="Снять выделение", command=self.clear_selection)
         select.add_separator()
         select.add_command(label="Выделить непрозрачные пиксели", command=self.select_opaque_pixels)
+        select.add_command(label="Выделить объект", command=self.select_subject)
         select.add_command(label="Одна строка", command=self.single_row_selection)
         select.add_command(label="Один столбец", command=self.single_column_selection)
         select.add_separator()
@@ -1664,6 +1665,9 @@ class PhotoRedactorApp(tk.Tk):
 
     def select_opaque_pixels(self) -> None:
         self.run_selection_command("Select opaque pixels", lambda: self.doc.select_opaque_pixels(self.doc.layer))
+
+    def select_subject(self) -> None:
+        self.run_selection_command("Выделить объект", lambda: self.doc.select_subject(self.doc.layer))
 
     def single_row_selection(self) -> None:
         y = simpledialog.askinteger("Single row", "Y coordinate:", initialvalue=self.doc.height // 2, minvalue=0, maxvalue=max(0, self.doc.height - 1))
