@@ -108,6 +108,7 @@ TOOL_DEFINITIONS = [
     ("Затемнитель", "burn", "Затемняет область под кистью."),
     ("Штамп", "clone", "Копирует пиксели из источника. Alt+клик задает источник."),
     ("Лечение", "healing", "Копирует источник и подгоняет цвет под место назначения."),
+    ("Заплатка", "patch", "Перетащите активное выделение на область-источник для ретуши."),
     ("Заливка", "fill", "Заполняет связанную область выбранным цветом."),
     ("Градиент", "gradient", "Растягивает переход от переднего цвета к фоновому."),
     ("Текст", "text", "Создает редактируемый текстовый слой."),
@@ -232,6 +233,8 @@ class PhotoRedactorApp(tk.Tk):
         self._clone_source: tuple[int, int] | None = None
         self._clone_anchor_target: tuple[int, int] | None = None
         self._clone_anchor_source: tuple[int, int] | None = None
+        self._patch_start_bounds: tuple[int, int, int, int] | None = None
+        self._patch_preview_id: int | None = None
         self._guide_doc_lines: list[tuple[str, int]] = []
         self._overlay_ids: list[int] = []
         self._preview_image: ImageTk.PhotoImage | None = None
@@ -965,6 +968,8 @@ class PhotoRedactorApp(tk.Tk):
             self._quick_points = [point]
             self._quick_mode = self.selection_mode_from_event(event)
             self.status_text("Кисть быстрого выделения")
+        elif tool == "patch":
+            self.begin_patch_drag(point)
         elif tool == "eyedropper":
             self.pick_color_from_document(point)
         elif tool == "text":
@@ -1032,6 +1037,8 @@ class PhotoRedactorApp(tk.Tk):
         elif tool == "quick_selection" and self.drag_start:
             self._quick_points.append(point)
             self.status_text(f"Точек быстрого выделения: {len(self._quick_points)}")
+        elif tool == "patch" and self.drag_start:
+            self.draw_patch_preview(point)
 
     def pointer_up(self, event) -> None:
         if self._panning:
@@ -1082,6 +1089,8 @@ class PhotoRedactorApp(tk.Tk):
             tolerance = int(self.tolerance.get())
             self.run_selection_command("Quick selection", lambda: self.doc.quick_selection_brush(self.doc.layer, points, radius, tolerance, mode))
             self._quick_points.clear()
+        elif tool == "patch" and self.drag_start:
+            self.finish_patch_drag(point)
         self.drag_start = None
         self.last_point = None
 
@@ -1231,6 +1240,72 @@ class PhotoRedactorApp(tk.Tk):
             self._clone_anchor_source[0] + point[0] - self._clone_anchor_target[0],
             self._clone_anchor_source[1] + point[1] - self._clone_anchor_target[1],
         )
+
+    def begin_patch_drag(self, point: tuple[int, int]) -> None:
+        if self.doc.layer.locked:
+            self.status_text("Слой заблокирован")
+            self.drag_start = None
+            return
+        if self.doc.selection_mask is None or not np.any(self.doc.selection_mask):
+            self.status_text("Сначала создайте выделение для инструмента Заплатка")
+            self.drag_start = None
+            return
+        x, y = point
+        if x < 0 or y < 0 or x >= self.doc.width or y >= self.doc.height or self.doc.selection_mask[y, x] == 0:
+            self.status_text("Начните перетаскивание внутри активного выделения")
+            self.drag_start = None
+            return
+        self._patch_start_bounds = self.doc.selection_bounds()
+        self.draw_patch_preview(point)
+        self.status_text("Перетащите выделение на область-источник")
+
+    def patch_source_bounds_for_point(self, point: tuple[int, int]) -> tuple[int, int, int, int] | None:
+        if self.drag_start is None or self._patch_start_bounds is None:
+            return None
+        dx = point[0] - self.drag_start[0]
+        dy = point[1] - self.drag_start[1]
+        x1, y1, x2, y2 = self._patch_start_bounds
+        return x1 + dx, y1 + dy, x2 + dx, y2 + dy
+
+    def patch_source_in_active_layer(self, bounds: tuple[int, int, int, int]) -> bool:
+        layer = self.doc.layer
+        x1, y1, x2, y2 = bounds
+        return x1 >= layer.x and y1 >= layer.y and x2 <= layer.x + layer.pixels.shape[1] and y2 <= layer.y + layer.pixels.shape[0]
+
+    def draw_patch_preview(self, point: tuple[int, int]) -> None:
+        bounds = self.patch_source_bounds_for_point(point)
+        if bounds is None:
+            return
+        scale = self.zoom.get()
+        coords = [v * scale for v in bounds]
+        valid = self.patch_source_in_active_layer(bounds)
+        color = "#ffb000" if valid else "#ff4a4a"
+        if self._patch_preview_id is None:
+            self._patch_preview_id = self.canvas.create_rectangle(*coords, outline=color, dash=(6, 3), width=2)
+        else:
+            self.canvas.coords(self._patch_preview_id, *coords)
+            self.canvas.itemconfigure(self._patch_preview_id, outline=color)
+        self.canvas.tag_raise(self._patch_preview_id)
+
+    def clear_patch_preview(self) -> None:
+        if self._patch_preview_id is not None:
+            self.canvas.delete(self._patch_preview_id)
+            self._patch_preview_id = None
+        self._patch_start_bounds = None
+
+    def finish_patch_drag(self, point: tuple[int, int]) -> None:
+        bounds = self.patch_source_bounds_for_point(point)
+        if bounds is None:
+            self.clear_patch_preview()
+            return
+        if not self.patch_source_in_active_layer(bounds):
+            self.status_text("Источник заплатки должен полностью попадать в активный слой")
+            self.clear_patch_preview()
+            return
+        source_x, source_y = bounds[0], bounds[1]
+        self.run_document_command("Интерактивная заплатка", lambda: self.doc.patch_active_selection(source_x, source_y, True))
+        self.clear_patch_preview()
+        self.refresh()
 
     def draw_selection(self, start: tuple[int, int] | None, end: tuple[int, int]) -> None:
         if not start:

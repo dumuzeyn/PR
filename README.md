@@ -15,7 +15,7 @@ This repository starts with a real working editor and an architecture intended t
 - non-destructive per-layer filter stack with a visual editor, preview, reorder controls, per-filter enable/opacity/masks and blur, sharpen, noise, median, edge and emboss filters
 - real selection mask with select all, invert, feather, smooth, grow, shrink, border/refine, Select and Mask output, opaque-pixel selection, single row/column selection, magnetic edge snapping and saved alpha selections
 - numeric Free Transform, selected-pixel transform, perspective transform and warp presets
-- local retouch tools and presets: blur, sharpen, dodge, burn, clone stamp and healing brush
+- local retouch tools and presets: blur, sharpen, dodge, burn, clone stamp, healing brush and interactive patch tool
 - content-aware fill for selected areas, patch selection and red-eye reduction
 - editable shape layers for rectangles, ellipses, lines, Bezier curves, polygons, stars and boolean shape combinations
 - text layer font, size, block width, wrapping, alignment, line-spacing and tracking controls
