@@ -2129,7 +2129,7 @@ class PhotoRedactorApp(tk.Tk):
         dialog.grab_set()
 
         preview = ttk.Label(dialog)
-        preview.grid(row=0, column=0, rowspan=10, padx=12, pady=12, sticky="n")
+        preview.grid(row=0, column=0, rowspan=11, padx=12, pady=12, sticky="n")
         listbox = tk.Listbox(dialog, height=8, width=26, exportselection=False)
         listbox.grid(row=0, column=1, rowspan=6, padx=(0, 8), pady=12, sticky="ns")
 
@@ -2166,8 +2166,10 @@ class PhotoRedactorApp(tk.Tk):
         buttons.grid(row=6, column=1, columnspan=2, sticky="ew", padx=(0, 12), pady=(0, 8))
         mask_buttons = ttk.Frame(dialog)
         mask_buttons.grid(row=7, column=1, columnspan=2, sticky="ew", padx=(0, 12), pady=(0, 8))
+        preset_file_buttons = ttk.Frame(dialog)
+        preset_file_buttons.grid(row=8, column=1, columnspan=2, sticky="ew", padx=(0, 12), pady=(0, 8))
         bottom = ttk.Frame(dialog)
-        bottom.grid(row=8, column=1, columnspan=2, sticky="e", padx=(0, 12), pady=(0, 12))
+        bottom.grid(row=9, column=1, columnspan=2, sticky="e", padx=(0, 12), pady=(0, 12))
 
         def selected_index() -> int | None:
             selection = listbox.curselection()
@@ -2278,6 +2280,52 @@ class PhotoRedactorApp(tk.Tk):
                     filters.append(normalized)
             refresh_list(0 if filters else None)
 
+        def load_preset_file() -> None:
+            path = filedialog.askopenfilename(filetypes=[("PhotoRedactor filter preset", "*.json"), ("JSON", "*.json")])
+            if not path:
+                return
+            try:
+                data = json.loads(Path(path).read_text(encoding="utf-8"))
+                raw_filters = data.get("filters") if isinstance(data, dict) else data
+                if not isinstance(raw_filters, list):
+                    raise ValueError
+                loaded = []
+                for item in raw_filters:
+                    if isinstance(item, dict):
+                        normalized = self.normalize_filter_item(item)
+                        if normalized is not None:
+                            loaded.append(normalized)
+                if not loaded:
+                    raise ValueError
+            except Exception:
+                messagebox.showerror("Пресет фильтров", "Не удалось загрузить пресет фильтров.")
+                return
+            filters.clear()
+            filters.extend(loaded)
+            refresh_list(0)
+
+        def save_preset_file() -> None:
+            apply_current()
+            normalized_filters = []
+            for item in filters:
+                normalized = self.normalize_filter_item(item)
+                if normalized is not None:
+                    normalized_filters.append(normalized)
+            if not normalized_filters:
+                messagebox.showinfo("Пресет фильтров", "Добавьте хотя бы один фильтр перед сохранением пресета.")
+                return
+            path = filedialog.asksaveasfilename(defaultextension=".json", filetypes=[("PhotoRedactor filter preset", "*.json"), ("JSON", "*.json")])
+            if not path:
+                return
+            name = Path(path).stem
+            data = {"format": "PhotoRedactor filter preset", "version": 1, "name": name, "filters": normalized_filters}
+            try:
+                Path(path).write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            except Exception as exc:
+                messagebox.showerror("Пресет фильтров", str(exc))
+                return
+            self.status_text(f"Пресет фильтров сохранен: {name}")
+
         def set_filter_mask_from_selection() -> None:
             index = selected_index()
             if index is None:
@@ -2327,6 +2375,8 @@ class PhotoRedactorApp(tk.Tk):
         ttk.Button(buttons, text="Вниз", command=lambda: move_filter(1)).pack(side=tk.LEFT)
         ttk.Button(mask_buttons, text="Маска из выделения", command=set_filter_mask_from_selection).pack(side=tk.LEFT, padx=(0, 4))
         ttk.Button(mask_buttons, text="Удалить маску", command=clear_filter_mask).pack(side=tk.LEFT)
+        ttk.Button(preset_file_buttons, text="Загрузить пресет", command=load_preset_file).pack(side=tk.LEFT, padx=(0, 4))
+        ttk.Button(preset_file_buttons, text="Сохранить пресет", command=save_preset_file).pack(side=tk.LEFT)
         ttk.Button(bottom, text="ОК", command=accept).pack(side=tk.RIGHT, padx=(6, 0))
         ttk.Button(bottom, text="Отмена", command=cancel).pack(side=tk.RIGHT)
         listbox.bind("<<ListboxSelect>>", load_selected)
