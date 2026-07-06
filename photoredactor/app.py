@@ -143,6 +143,11 @@ MASK_PREVIEW_OVERLAY = "Красное перекрытие"
 MASK_PREVIEW_CHANNEL = "Черно-белая маска"
 MASK_PREVIEW_MODES = [MASK_PREVIEW_NORMAL, MASK_PREVIEW_OVERLAY, MASK_PREVIEW_CHANNEL]
 
+SELECT_MASK_PREVIEW_CHANNEL = "Канал маски"
+SELECT_MASK_PREVIEW_OVERLAY = "Красное перекрытие"
+SELECT_MASK_PREVIEW_CUTOUT = "Вырез на прозрачности"
+SELECT_MASK_PREVIEW_MODES = [SELECT_MASK_PREVIEW_CHANNEL, SELECT_MASK_PREVIEW_OVERLAY, SELECT_MASK_PREVIEW_CUTOUT]
+
 FILTER_TYPES = ["blur", "sharpen", "noise", "median", "edge", "emboss"]
 FILTER_LABELS = {
     "blur": "Размытие",
@@ -1541,31 +1546,24 @@ class PhotoRedactorApp(tk.Tk):
         contrast = tk.DoubleVar(value=1.25)
         shift = tk.IntVar(value=0)
         output = tk.StringVar(value="Выделение")
+        preview_mode = tk.StringVar(value=SELECT_MASK_PREVIEW_CHANNEL)
         result: dict[str, object] | None = None
 
         preview = ttk.Label(dialog)
-        preview.grid(row=0, column=0, rowspan=7, padx=12, pady=12, sticky="n")
+        preview.grid(row=0, column=0, rowspan=8, padx=12, pady=12, sticky="n")
         stats = ttk.Label(dialog, text="", justify=tk.LEFT)
-        stats.grid(row=7, column=0, padx=12, pady=(0, 12), sticky="w")
+        stats.grid(row=8, column=0, padx=12, pady=(0, 12), sticky="w")
 
         def current_mask() -> np.ndarray:
             return refine_selection_mask(source, int(smooth.get()), int(feather.get()), float(contrast.get()), int(shift.get()))
 
         def update_preview(*_args) -> None:
             mask = current_mask()
-            image = Image.fromarray(mask.astype(np.uint8), "L")
-            image.thumbnail((160, 160), Image.Resampling.NEAREST)
-            canvas = Image.new("RGBA", (160, 160), (44, 46, 52, 255))
-            gray = Image.new("L", (160, 160), 72)
-            x = (160 - image.width) // 2
-            y = (160 - image.height) // 2
-            gray.paste(image, (x, y))
-            rgba = Image.merge("RGBA", (gray, gray, gray, Image.new("L", (160, 160), 255)))
-            canvas.alpha_composite(rgba)
+            canvas = self.render_select_mask_preview(self.doc.composite(checker=False), mask, preview_mode.get(), 160)
             self._select_mask_preview_image = ImageTk.PhotoImage(canvas)
             preview.configure(image=self._select_mask_preview_image)
             selected = int(np.count_nonzero(mask))
-            stats.configure(text=f"Активных пикселей: {selected}\nГраницы: {self.doc.selection_bounds() or '-'}")
+            stats.configure(text=f"Активных пикселей: {selected}\nГраницы: {self.mask_bounds(mask) or '-'}")
 
         def add_spin(row: int, label: str, variable, from_: float, to: float, increment: float = 1.0) -> None:
             ttk.Label(dialog, text=label).grid(row=row, column=1, sticky="w", padx=(0, 12), pady=(8, 0))
@@ -1579,9 +1577,12 @@ class PhotoRedactorApp(tk.Tk):
         ttk.Label(dialog, text="Результат").grid(row=4, column=1, sticky="w", padx=(0, 12), pady=(8, 0))
         output_box = ttk.Combobox(dialog, textvariable=output, values=["Выделение", "Маска слоя"], state="readonly", width=14)
         output_box.grid(row=4, column=2, sticky="ew", padx=(0, 12), pady=(8, 0))
+        ttk.Label(dialog, text="Просмотр").grid(row=5, column=1, sticky="w", padx=(0, 12), pady=(8, 0))
+        preview_box = ttk.Combobox(dialog, textvariable=preview_mode, values=SELECT_MASK_PREVIEW_MODES, state="readonly", width=18)
+        preview_box.grid(row=5, column=2, sticky="ew", padx=(0, 12), pady=(8, 0))
 
         buttons = ttk.Frame(dialog)
-        buttons.grid(row=6, column=1, columnspan=2, sticky="e", padx=12, pady=12)
+        buttons.grid(row=7, column=1, columnspan=2, sticky="e", padx=12, pady=12)
 
         def accept() -> None:
             nonlocal result
@@ -1599,12 +1600,54 @@ class PhotoRedactorApp(tk.Tk):
 
         ttk.Button(buttons, text="ОК", command=accept).pack(side=tk.RIGHT, padx=(6, 0))
         ttk.Button(buttons, text="Отмена", command=cancel).pack(side=tk.RIGHT)
+        preview_box.bind("<<ComboboxSelected>>", update_preview)
         for variable in [smooth, feather, contrast, shift]:
             variable.trace_add("write", update_preview)
         dialog.protocol("WM_DELETE_WINDOW", cancel)
         update_preview()
         dialog.wait_window()
         return result
+
+    @staticmethod
+    def mask_bounds(mask: np.ndarray) -> tuple[int, int, int, int] | None:
+        if mask is None or not np.any(mask):
+            return None
+        ys, xs = np.where(mask > 0)
+        return int(xs.min()), int(ys.min()), int(xs.max() + 1), int(ys.max() + 1)
+
+    @staticmethod
+    def render_select_mask_preview(composite: np.ndarray, mask: np.ndarray, mode: str, size: int = 160) -> Image.Image:
+        preview_size = (size, size)
+        mask_image = Image.fromarray(mask.astype(np.uint8), "L")
+        source = rgba_array_to_pil(composite)
+        source.thumbnail(preview_size, Image.Resampling.LANCZOS)
+        mask_image.thumbnail(preview_size, Image.Resampling.NEAREST)
+        x = (size - source.width) // 2
+        y = (size - source.height) // 2
+        if mode == SELECT_MASK_PREVIEW_OVERLAY:
+            canvas = Image.new("RGBA", preview_size, (44, 46, 52, 255))
+            canvas.alpha_composite(source, (x, y))
+            overlay = Image.new("RGBA", source.size, (255, 36, 68, 0))
+            overlay.putalpha(mask_image.point(lambda value: int(value * 0.55)))
+            canvas.alpha_composite(overlay, (x, y))
+            return canvas
+        if mode == SELECT_MASK_PREVIEW_CUTOUT:
+            checker = Image.new("RGBA", preview_size, (44, 46, 52, 255))
+            tile = 8
+            for cy in range(0, size, tile):
+                for cx in range(0, size, tile):
+                    color = (90, 92, 98, 255) if ((cx // tile) + (cy // tile)) % 2 else (58, 60, 66, 255)
+                    checker.paste(color, (cx, cy, min(cx + tile, size), min(cy + tile, size)))
+            cutout = source.copy()
+            cutout.putalpha(mask_image)
+            checker.alpha_composite(cutout, (x, y))
+            return checker
+        canvas = Image.new("RGBA", preview_size, (44, 46, 52, 255))
+        gray = Image.new("L", preview_size, 72)
+        gray.paste(mask_image, ((size - mask_image.width) // 2, (size - mask_image.height) // 2))
+        rgba = Image.merge("RGBA", (gray, gray, gray, Image.new("L", preview_size, 255)))
+        canvas.alpha_composite(rgba)
+        return canvas
 
     def select_opaque_pixels(self) -> None:
         self.run_selection_command("Select opaque pixels", lambda: self.doc.select_opaque_pixels(self.doc.layer))
