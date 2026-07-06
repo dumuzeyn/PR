@@ -129,6 +129,13 @@ TOOL_DEFINITIONS = [
     ("Кадрирование", "crop", "Задает область обрезки документа."),
 ]
 
+RETOUCH_PRESETS = {
+    "Мягкая ретушь": {"brush_size": 18, "opacity": 0.22, "tolerance": 18},
+    "Средняя ретушь": {"brush_size": 34, "opacity": 0.45, "tolerance": 28},
+    "Сильная ретушь": {"brush_size": 58, "opacity": 0.72, "tolerance": 44},
+    "Детальная ретушь": {"brush_size": 9, "opacity": 0.34, "tolerance": 12},
+}
+
 MASK_PREVIEW_NORMAL = "Обычный"
 MASK_PREVIEW_OVERLAY = "Красное перекрытие"
 MASK_PREVIEW_CHANNEL = "Черно-белая маска"
@@ -190,6 +197,7 @@ class PhotoRedactorApp(tk.Tk):
         self.recorded_actions: list[str] = []
         self.tool = tk.StringVar(value="brush")
         self.paint_target = tk.StringVar(value="pixels")
+        self.retouch_preset = tk.StringVar(value="Средняя ретушь")
         self.zoom = tk.DoubleVar(value=1.0)
         self.brush_size = tk.IntVar(value=28)
         self.opacity = tk.DoubleVar(value=1.0)
@@ -515,6 +523,12 @@ class PhotoRedactorApp(tk.Tk):
         ToolTip(self.paint_target_box, "pixels рисует по слою, mask рисует по маске активного слоя.")
         ttk.Label(parent, text="Допуск").pack()
         ttk.Scale(parent, from_=0, to=128, variable=self.tolerance, orient=tk.HORIZONTAL).pack(fill=tk.X, padx=8)
+        ttk.Label(parent, text="Пресет ретуши").pack()
+        self.retouch_preset_box = ttk.Combobox(parent, textvariable=self.retouch_preset, values=list(RETOUCH_PRESETS), state="readonly")
+        self.retouch_preset_box.pack(fill=tk.X, padx=8, pady=(0, 2))
+        self.retouch_preset_box.bind("<<ComboboxSelected>>", lambda _event: self.apply_retouch_preset())
+        ToolTip(self.retouch_preset_box, "Быстро настраивает размер кисти, непрозрачность и допуск для локальной ретуши.")
+        ttk.Button(parent, text="Применить пресет", command=self.apply_retouch_preset).pack(fill=tk.X, padx=8, pady=(0, 8))
 
     def _build_canvas(self, parent: ttk.Frame) -> None:
         toolbar = ttk.Frame(parent)
@@ -545,6 +559,17 @@ class PhotoRedactorApp(tk.Tk):
         self.canvas.bind("<B2-Motion>", self.pan_drag)
         self.canvas.bind("<ButtonRelease-2>", self.pan_up)
         self.canvas.bind("<MouseWheel>", self.mouse_wheel)
+
+    def apply_retouch_preset(self) -> None:
+        preset = RETOUCH_PRESETS.get(self.retouch_preset.get())
+        if preset is None:
+            return
+        self.brush_size.set(int(preset["brush_size"]))
+        self.opacity.set(float(preset["opacity"]))
+        self.tolerance.set(int(preset["tolerance"]))
+        if self.tool.get() not in {"blur_tool", "sharpen_tool", "dodge", "burn", "clone", "healing"}:
+            self.tool.set("healing")
+        self.status_text(f"Пресет ретуши: {self.retouch_preset.get()}")
 
     def _build_panels(self, parent: ttk.Frame) -> None:
         ttk.Label(parent, text="Слои").pack(anchor=tk.W, padx=8, pady=(8, 4))
