@@ -459,6 +459,7 @@ class PhotoRedactorApp(tk.Tk):
         select.add_command(label="Граница", command=self.border_selection)
         select.add_command(label="Уточнить край", command=self.refine_selection)
         select.add_command(label="Умная очистка края", command=self.cleanup_selection_edges)
+        select.add_command(label="Коррекция края по уверенности", command=self.correct_selection_edges)
         select.add_command(label="Выделить и маска", command=self.select_and_mask_workspace)
         select.add_separator()
         select.add_command(label="Сохранить выделение", command=self.save_selection)
@@ -1647,6 +1648,21 @@ class PhotoRedactorApp(tk.Tk):
         if strength is None:
             return
         self.run_selection_command("Умная очистка края", lambda: self.doc.cleanup_selection_edges(radius, strength))
+
+    def correct_selection_edges(self) -> None:
+        if self.doc.selection_mask is None:
+            messagebox.showinfo("Коррекция края", "Сначала создайте выделение.")
+            return
+        radius = simpledialog.askinteger("Коррекция края", "Радиус анализа:", initialvalue=3, minvalue=1, maxvalue=40)
+        if radius is None:
+            return
+        strength = simpledialog.askfloat("Коррекция края", "Сила 0..1:", initialvalue=0.65, minvalue=0.0, maxvalue=1.0)
+        if strength is None:
+            return
+        threshold = simpledialog.askinteger("Коррекция края", "Порог уверенности 0..255:", initialvalue=96, minvalue=0, maxvalue=255)
+        if threshold is None:
+            return
+        self.run_selection_command("Коррекция края по уверенности", lambda: self.doc.correct_selection_edges(radius, strength, threshold))
 
     def select_and_mask_workspace(self) -> None:
         if self.doc.selection_mask is None:

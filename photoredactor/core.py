@@ -1159,6 +1159,13 @@ class Document:
         self.selection_mask = mask if np.any(mask) else None
         self.dirty = True
 
+    def correct_selection_edges(self, radius: int = 3, strength: float = 0.65, threshold: int = 96) -> None:
+        if self.selection_mask is None:
+            return
+        mask = correct_selection_edges(self.selection_mask, self.composite(False), radius, strength, threshold)
+        self.selection_mask = mask if np.any(mask) else None
+        self.dirty = True
+
     def selection_bounds(self) -> tuple[int, int, int, int] | None:
         if self.selection_mask is None or not np.any(self.selection_mask):
             return None
@@ -1558,6 +1565,36 @@ def selection_edge_confidence(mask: np.ndarray, image: np.ndarray, radius: int =
     confidence = np.maximum(edge_band, magnitude)
     confidence = cv2.GaussianBlur(confidence, (radius * 2 + 1, radius * 2 + 1), radius)
     return np.where(boundary > 0, np.clip(confidence * 255.0, 0, 255), 0).astype(np.uint8)
+
+
+def correct_selection_edges(mask: np.ndarray, image: np.ndarray, radius: int = 3, strength: float = 0.65, threshold: int = 96) -> np.ndarray:
+    if mask is None or mask.size == 0:
+        return np.zeros((0, 0), dtype=np.uint8)
+    if not np.any(mask):
+        return np.zeros_like(mask, dtype=np.uint8)
+    radius = max(1, int(radius))
+    strength = float(np.clip(strength, 0.0, 1.0))
+    threshold = int(np.clip(threshold, 0, 255))
+    binary = np.where(mask > 0, 255, 0).astype(np.uint8)
+    confidence = selection_edge_confidence(binary, image, radius)
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (radius * 2 + 1, radius * 2 + 1))
+    outer = cv2.dilate(binary, kernel)
+    inner = cv2.erode(binary, kernel)
+    boundary = cv2.subtract(outer, inner)
+    if not np.any(boundary):
+        return binary
+
+    trusted = (confidence >= threshold) & (boundary > 0)
+    weak = (confidence < threshold) & (boundary > 0)
+    edge_locked = np.where(trusted, binary, 0).astype(np.uint8)
+    candidate = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
+    candidate = cv2.morphologyEx(candidate, cv2.MORPH_OPEN, kernel)
+    relaxed = cv2.GaussianBlur(candidate, (radius * 2 + 1, radius * 2 + 1), radius)
+    relaxed = np.where(relaxed >= 128, 255, 0).astype(np.uint8)
+    mixed = np.where(weak, relaxed, binary).astype(np.uint8)
+    sharpened = np.where(edge_locked > 0, 255, mixed).astype(np.uint8)
+    blend = binary.astype(np.float32) * (1.0 - strength) + sharpened.astype(np.float32) * strength
+    return np.where(blend >= 128, 255, 0).astype(np.uint8)
 
 
 def subject_selection_mask(pixels: np.ndarray) -> np.ndarray:
