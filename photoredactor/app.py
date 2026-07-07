@@ -43,6 +43,7 @@ from .core import (
     refine_selection_mask,
     rgba_array_to_pil,
     reduce_red_eye,
+    selection_edge_confidence,
     union_rect,
     sharpen,
 )
@@ -148,7 +149,8 @@ MASK_PREVIEW_MODES = [MASK_PREVIEW_NORMAL, MASK_PREVIEW_OVERLAY, MASK_PREVIEW_CH
 SELECT_MASK_PREVIEW_CHANNEL = "Канал маски"
 SELECT_MASK_PREVIEW_OVERLAY = "Красное перекрытие"
 SELECT_MASK_PREVIEW_CUTOUT = "Вырез на прозрачности"
-SELECT_MASK_PREVIEW_MODES = [SELECT_MASK_PREVIEW_CHANNEL, SELECT_MASK_PREVIEW_OVERLAY, SELECT_MASK_PREVIEW_CUTOUT]
+SELECT_MASK_PREVIEW_EDGE_CONFIDENCE = "Уверенность края"
+SELECT_MASK_PREVIEW_MODES = [SELECT_MASK_PREVIEW_CHANNEL, SELECT_MASK_PREVIEW_OVERLAY, SELECT_MASK_PREVIEW_CUTOUT, SELECT_MASK_PREVIEW_EDGE_CONFIDENCE]
 
 FILTER_TYPES = ["blur", "sharpen", "noise", "median", "edge", "emboss"]
 FILTER_LABELS = {
@@ -1782,6 +1784,25 @@ class PhotoRedactorApp(tk.Tk):
             cutout.putalpha(mask_image)
             checker.alpha_composite(cutout, (x, y))
             return checker
+        if mode == SELECT_MASK_PREVIEW_EDGE_CONFIDENCE:
+            confidence = selection_edge_confidence(mask, composite, 3)
+            confidence_image = Image.fromarray(confidence.astype(np.uint8), "L")
+            confidence_image.thumbnail(preview_size, Image.Resampling.NEAREST)
+            canvas = Image.new("RGBA", preview_size, (44, 46, 52, 255))
+            dimmed = source.copy()
+            shade = Image.new("RGBA", dimmed.size, (0, 0, 0, 96))
+            dimmed.alpha_composite(shade)
+            canvas.alpha_composite(dimmed, (x, y))
+            conf = np.array(confidence_image, dtype=np.uint8)
+            overlay = np.zeros((confidence_image.height, confidence_image.width, 4), dtype=np.uint8)
+            weak = (conf > 0) & (conf < 85)
+            medium = (conf >= 85) & (conf < 170)
+            strong = conf >= 170
+            overlay[weak] = [255, 68, 68, 230]
+            overlay[medium] = [255, 190, 64, 230]
+            overlay[strong] = [64, 220, 110, 230]
+            canvas.alpha_composite(Image.fromarray(overlay, "RGBA"), ((size - confidence_image.width) // 2, (size - confidence_image.height) // 2))
+            return canvas
         canvas = Image.new("RGBA", preview_size, (44, 46, 52, 255))
         gray = Image.new("L", preview_size, 72)
         gray.paste(mask_image, ((size - mask_image.width) // 2, (size - mask_image.height) // 2))

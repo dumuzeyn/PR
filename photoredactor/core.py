@@ -1532,6 +1532,34 @@ def cleanup_selection_edges(mask: np.ndarray, image: np.ndarray, radius: int = 3
     return np.where(np.clip(mixed, 0, 255) >= 128, 255, 0).astype(np.uint8)
 
 
+def selection_edge_confidence(mask: np.ndarray, image: np.ndarray, radius: int = 3) -> np.ndarray:
+    if mask is None or mask.size == 0:
+        return np.zeros((0, 0), dtype=np.uint8)
+    if not np.any(mask):
+        return np.zeros_like(mask, dtype=np.uint8)
+    radius = max(1, int(radius))
+    binary = np.where(mask > 0, 255, 0).astype(np.uint8)
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (radius * 2 + 1, radius * 2 + 1))
+    boundary = cv2.subtract(cv2.dilate(binary, kernel), cv2.erode(binary, kernel))
+    if not np.any(boundary):
+        return np.zeros_like(binary, dtype=np.uint8)
+
+    gray = cv2.cvtColor(image[:, :, :3], cv2.COLOR_RGB2GRAY)
+    if image.shape[2] > 3:
+        gray = np.where(image[:, :, 3] > 0, gray, 0).astype(np.uint8)
+    blurred = cv2.GaussianBlur(gray, (3, 3), 0)
+    edges = cv2.Canny(blurred, 40, 130)
+    grad_x = cv2.Sobel(blurred, cv2.CV_32F, 1, 0, ksize=3)
+    grad_y = cv2.Sobel(blurred, cv2.CV_32F, 0, 1, ksize=3)
+    magnitude = cv2.magnitude(grad_x, grad_y)
+    if float(magnitude.max()) > 0.0:
+        magnitude = magnitude / float(magnitude.max())
+    edge_band = cv2.dilate(edges, kernel).astype(np.float32) / 255.0
+    confidence = np.maximum(edge_band, magnitude)
+    confidence = cv2.GaussianBlur(confidence, (radius * 2 + 1, radius * 2 + 1), radius)
+    return np.where(boundary > 0, np.clip(confidence * 255.0, 0, 255), 0).astype(np.uint8)
+
+
 def subject_selection_mask(pixels: np.ndarray) -> np.ndarray:
     if pixels.size == 0:
         return np.zeros(pixels.shape[:2], dtype=np.uint8)
