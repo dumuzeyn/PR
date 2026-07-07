@@ -272,6 +272,8 @@ class PhotoRedactorApp(tk.Tk):
         self._magnetic_edges: np.ndarray | None = None
         self._quick_points: list[tuple[int, int]] = []
         self._quick_mode = "replace"
+        self._brush_preview_ids: list[int] = []
+        self._last_pointer_event = None
         self._clone_source: tuple[int, int] | None = None
         self._clone_anchor_target: tuple[int, int] | None = None
         self._clone_anchor_source: tuple[int, int] | None = None
@@ -295,6 +297,7 @@ class PhotoRedactorApp(tk.Tk):
 
         self._build_ui()
         self.tool.trace_add("write", self.tool_changed)
+        self.brush_size.trace_add("write", self.brush_size_changed)
         self.load_settings()
         self.refresh_recent_menu()
         self.refresh()
@@ -630,6 +633,10 @@ class PhotoRedactorApp(tk.Tk):
         if hasattr(self, "tool_options_panel"):
             self.tool_options_panel.render()
         self.refresh_tool_menu()
+        if self.tool.get() not in self.brush_preview_tools():
+            self.clear_brush_preview()
+        elif self._last_pointer_event is not None:
+            self.update_brush_preview(self._last_pointer_event)
         label = self.tool_label(self.tool.get())
         if label:
             self.status_text(f"Инструмент: {label}")
@@ -713,6 +720,8 @@ class PhotoRedactorApp(tk.Tk):
         self.canvas.bind("<ButtonPress-2>", self.pan_down)
         self.canvas.bind("<B2-Motion>", self.pan_drag)
         self.canvas.bind("<ButtonRelease-2>", self.pan_up)
+        self.canvas.bind("<Motion>", self.pointer_motion)
+        self.canvas.bind("<Leave>", self.pointer_leave)
         self.canvas.bind("<MouseWheel>", self.mouse_wheel)
 
     def apply_retouch_preset(self) -> None:
@@ -909,6 +918,8 @@ class PhotoRedactorApp(tk.Tk):
         self._view_dirty = False
         self.update_selection_overlay()
         self.update_grid_and_guides()
+        if self._last_pointer_event is not None:
+            self.update_brush_preview(self._last_pointer_event)
 
     def _channel_display(self, composite: np.ndarray) -> np.ndarray:
         channel = self.view_channel.get() if hasattr(self, "view_channel") else "RGB"
@@ -1070,6 +1081,67 @@ class PhotoRedactorApp(tk.Tk):
             return "subtract"
         return "replace"
 
+    @staticmethod
+    def brush_preview_tools() -> set[str]:
+        return {"brush", "eraser", "blur_tool", "sharpen_tool", "dodge", "burn", "clone", "healing", "quick_selection"}
+
+    def pointer_motion(self, event) -> None:
+        self._last_pointer_event = event
+        if not self._panning:
+            self.update_brush_preview(event)
+
+    def pointer_leave(self, _event) -> None:
+        self._last_pointer_event = None
+        self.clear_brush_preview()
+
+    def brush_size_changed(self, *_args) -> None:
+        if self._last_pointer_event is not None:
+            self.update_brush_preview(self._last_pointer_event)
+
+    def update_brush_preview(self, event) -> None:
+        tool = self.tool.get()
+        if tool not in self.brush_preview_tools():
+            self.clear_brush_preview()
+            return
+        point = self.canvas_to_doc(event)
+        if point[0] < 0 or point[1] < 0 or point[0] >= self.doc.width or point[1] >= self.doc.height:
+            self.clear_brush_preview()
+            return
+        cx, cy = self.doc_to_canvas(point[0] + 0.5, point[1] + 0.5)
+        radius = max(1.0, float(self.brush_size.get()) * float(self.zoom.get()))
+        mode = self.selection_mode_from_event(event) if tool == "quick_selection" else "replace"
+        color_by_mode = {"replace": "#50e3ff", "add": "#59f28a", "subtract": "#ff6262", "intersect": "#ffd166"}
+        label_by_mode = {"replace": "new", "add": "+", "subtract": "-", "intersect": "x"}
+        outline = color_by_mode.get(mode, "#50e3ff")
+        coords = [cx - radius, cy - radius, cx + radius, cy + radius]
+        if not self._brush_preview_ids:
+            fill_id = self.canvas.create_oval(*coords, outline="", fill=outline, stipple="gray25")
+            ring_id = self.canvas.create_oval(*coords, outline=outline, width=2)
+            cross_h = self.canvas.create_line(cx - 6, cy, cx + 6, cy, fill=outline, width=1)
+            cross_v = self.canvas.create_line(cx, cy - 6, cx, cy + 6, fill=outline, width=1)
+            text_id = self.canvas.create_text(cx, cy + radius + 12, text=label_by_mode.get(mode, ""), fill=outline, font=("Segoe UI", 9, "bold"))
+            self._brush_preview_ids = [fill_id, ring_id, cross_h, cross_v, text_id]
+        else:
+            fill_id, ring_id, cross_h, cross_v, text_id = self._brush_preview_ids
+            self.canvas.coords(fill_id, *coords)
+            self.canvas.coords(ring_id, *coords)
+            self.canvas.coords(cross_h, cx - 6, cy, cx + 6, cy)
+            self.canvas.coords(cross_v, cx, cy - 6, cx, cy + 6)
+            self.canvas.coords(text_id, cx, cy + radius + 12)
+        fill_id, ring_id, cross_h, cross_v, text_id = self._brush_preview_ids
+        self.canvas.itemconfigure(fill_id, fill=outline)
+        self.canvas.itemconfigure(ring_id, outline=outline)
+        self.canvas.itemconfigure(cross_h, fill=outline)
+        self.canvas.itemconfigure(cross_v, fill=outline)
+        self.canvas.itemconfigure(text_id, text=label_by_mode.get(mode, ""), fill=outline, state=tk.NORMAL if tool == "quick_selection" else tk.HIDDEN)
+        for item_id in self._brush_preview_ids:
+            self.canvas.tag_raise(item_id)
+
+    def clear_brush_preview(self) -> None:
+        for item_id in self._brush_preview_ids:
+            self.canvas.delete(item_id)
+        self._brush_preview_ids.clear()
+
     def space_down(self, _event) -> None:
         self._space_down = True
         self.canvas.configure(cursor="fleur")
@@ -1087,6 +1159,8 @@ class PhotoRedactorApp(tk.Tk):
     def pan_drag(self, event) -> None:
         if self._panning:
             self.canvas.scan_dragto(event.x, event.y, gain=1)
+            if self._last_pointer_event is not None:
+                self.update_brush_preview(self._last_pointer_event)
 
     def pan_up(self, _event) -> None:
         self._panning = False
@@ -1173,6 +1247,8 @@ class PhotoRedactorApp(tk.Tk):
             self.status_text(f"Магнитное лассо: {snapped[0]}, {snapped[1]}")
 
     def pointer_drag(self, event) -> None:
+        self._last_pointer_event = event
+        self.update_brush_preview(event)
         if self._panning:
             self.pan_drag(event)
             return

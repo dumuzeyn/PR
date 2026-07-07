@@ -12,7 +12,7 @@
 - Raster selections: rectangular, elliptical, freehand lasso, magnetic lasso, polygon lasso, quick selection brush, magic wand, color range, single row/column, opaque pixels, subject/background/sky selection, select all, invert, feather, smooth, grow, shrink, border/refine, smart edge cleanup/correction, richer Select and Mask previews/output including edge confidence, saved alpha selections.
 - Raster layer masks: reveal all, hide all, from selection, mask thumbnails, thumbnail-click mask channel editing, red-overlay/black-white mask preview, linked/unlinked movement, paint on mask, density, feather, invert, toggle, apply, delete.
 - Blend modes: Normal, Multiply, Screen, Overlay, Soft Light, Darken, Lighten, Difference, Color, Luminosity.
-- Tools: move, brush, eraser, fill, gradient, editable text, rectangular/elliptical/lasso/magnetic/polygon selection, magic wand, color range, interactive patch and crop.
+- Tools: move, brush, eraser, fill, gradient, editable text, rectangular/elliptical/lasso/magnetic/polygon selection, magic wand, color range, brush/quick-selection canvas previews, interactive patch and crop.
 - Text layers: font selection, multiline editing, paragraph width, word wrapping, alignment, line spacing and tracking.
 - Local retouching: blur, sharpen, dodge, burn, clone stamp, healing brush, retouch presets, interactive patch selection, edge-aware cleanup, red-eye reduction and content-aware fill.
 - Layer import: place embedded images, place linked images, update/relink linked layers and load several image files as layers.
@@ -31,7 +31,7 @@
 
 ## Next milestones toward the full list
 
-1. Selection engine: better quick-selection refinement and selection brush previews.
+1. Selection engine: better quick-selection refinement and live selection mask previews.
 2. Editable masks: stronger mask edge controls.
 3. Non-destructive editing: richer editable adjustment controls and preset libraries.
 4. Free Transform: transform handles and richer warp preview controls.
