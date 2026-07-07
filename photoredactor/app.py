@@ -47,6 +47,8 @@ from .core import (
     sharpen,
 )
 from .history import DocumentStateCommand, History, LayerBlendModeCommand, LayerMoveCommand, LayerOpacityCommand, MaskPatchCommand, PixelPatchCommand, SelectionMaskCommand
+from .ui.tool_options import ToolOptionsPanel
+from .ui.tool_palette import ToolPalette, ToolPaletteDialog, normalize_tool_order, normalize_visible_tools
 
 
 class ToolTip:
@@ -232,6 +234,9 @@ class PhotoRedactorApp(tk.Tk):
         self.action_recording = False
         self.recorded_actions: list[str] = []
         self.tool = tk.StringVar(value="brush")
+        self.tool_order = [value for _label, value, _description in TOOL_DEFINITIONS]
+        self.visible_tools = list(self.tool_order)
+        self.tool_pane_position = 360
         self.paint_target = tk.StringVar(value="pixels")
         self.retouch_preset = tk.StringVar(value="Средняя ретушь")
         self.zoom = tk.DoubleVar(value=1.0)
@@ -279,6 +284,7 @@ class PhotoRedactorApp(tk.Tk):
         self._filter_stack_preview_image: ImageTk.PhotoImage | None = None
         self._adjustment_preview_image: ImageTk.PhotoImage | None = None
         self._canvas_image_id: int | None = None
+        self._canvas_origin = (0, 0)
         self._render_after_id: str | None = None
         self._last_render_time = 0.0
         self._composite_cache = None
@@ -286,6 +292,7 @@ class PhotoRedactorApp(tk.Tk):
         self._view_dirty = True
 
         self._build_ui()
+        self.tool.trace_add("write", self.tool_changed)
         self.load_settings()
         self.refresh_recent_menu()
         self.refresh()
@@ -303,13 +310,38 @@ class PhotoRedactorApp(tk.Tk):
             if self.settings_path.exists():
                 data = json.loads(self.settings_path.read_text(encoding="utf-8"))
                 self.recent_files = [str(path) for path in data.get("recent_files", []) if Path(path).exists()]
+                self.tool_order = normalize_tool_order(data.get("tool_order"), TOOL_DEFINITIONS)
+                self.visible_tools = normalize_visible_tools(data.get("visible_tools"), self.tool_order)
+                self.tool_pane_position = int(data.get("tool_pane_position", self.tool_pane_position))
+                if self.tool.get() not in self.tool_order:
+                    self.tool.set(self.visible_tools[0])
+                if hasattr(self, "tool_palette"):
+                    self.tool_palette.set_configuration(self.tool_order, self.visible_tools)
+                if hasattr(self, "tool_split"):
+                    self.after_idle(self.apply_tool_pane_position)
+                self.refresh_tool_menu()
         except Exception:
             self.recent_files = []
+            self.tool_order = normalize_tool_order(None, TOOL_DEFINITIONS)
+            self.visible_tools = normalize_visible_tools(None, self.tool_order)
 
     def save_settings(self) -> None:
         try:
             self.app_data_dir.mkdir(parents=True, exist_ok=True)
-            self.settings_path.write_text(json.dumps({"recent_files": self.recent_files[:12]}, ensure_ascii=False, indent=2), encoding="utf-8")
+            self.capture_tool_pane_position()
+            self.settings_path.write_text(
+                json.dumps(
+                    {
+                        "recent_files": self.recent_files[:12],
+                        "tool_order": self.tool_order,
+                        "visible_tools": self.visible_tools,
+                        "tool_pane_position": self.tool_pane_position,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
         except Exception:
             pass
 
@@ -344,7 +376,7 @@ class PhotoRedactorApp(tk.Tk):
         root = ttk.PanedWindow(self, orient=tk.HORIZONTAL)
         root.pack(fill=tk.BOTH, expand=True)
 
-        left = ttk.Frame(root, width=88)
+        left = ttk.Frame(root, width=250)
         center = ttk.Frame(root)
         right = ttk.Frame(root, width=280)
         root.add(left, weight=0)
@@ -400,6 +432,10 @@ class PhotoRedactorApp(tk.Tk):
         edit.add_command(label="Повторить", command=self.redo, accelerator="Ctrl+Y")
         edit.add_separator()
         edit.add_command(label="Снять выделение", command=self.clear_selection)
+
+        self.tools_menu = tk.Menu(menu, tearoff=False)
+        menu.add_cascade(label="Инструменты", menu=self.tools_menu)
+        self.refresh_tool_menu()
 
         select = tk.Menu(menu, tearoff=False)
         menu.add_cascade(label="Выделение", menu=select)
@@ -542,36 +578,109 @@ class PhotoRedactorApp(tk.Tk):
         view.add_command(label="Добавить вертикальную направляющую", command=self.add_vertical_guide)
         view.add_command(label="Очистить направляющие", command=self.clear_guides)
 
+        view.add_separator()
+        view.add_command(label="Настроить панель инструментов...", command=self.configure_tool_palette)
+
     def _build_tools(self, parent: ttk.Frame) -> None:
-        ttk.Label(parent, text="Инструменты").pack(pady=(8, 4))
-        for text, value, description in TOOL_DEFINITIONS:
-            button = ttk.Radiobutton(parent, text=text, value=value, variable=self.tool)
-            button.pack(fill=tk.X, padx=8, pady=2)
-            ToolTip(button, description)
-        ttk.Separator(parent).pack(fill=tk.X, pady=8)
-        fg_button = ttk.Button(parent, text="Передний цвет", command=self.pick_foreground)
-        fg_button.pack(fill=tk.X, padx=8, pady=2)
-        ToolTip(fg_button, "Цвет, которым рисуют кисть, заливка и фигуры.")
-        bg_button = ttk.Button(parent, text="Фон", command=self.pick_background)
-        bg_button.pack(fill=tk.X, padx=8, pady=2)
-        ToolTip(bg_button, "Второй цвет для градиента и фоновых операций.")
-        ttk.Label(parent, text="Размер").pack()
-        ttk.Scale(parent, from_=1, to=220, variable=self.brush_size, orient=tk.HORIZONTAL).pack(fill=tk.X, padx=8)
-        ttk.Label(parent, text="Непрозрачность").pack()
-        ttk.Scale(parent, from_=0.01, to=1.0, variable=self.opacity, orient=tk.HORIZONTAL).pack(fill=tk.X, padx=8)
-        ttk.Label(parent, text="Куда рисовать").pack()
-        self.paint_target_box = ttk.Combobox(parent, textvariable=self.paint_target, values=["pixels", "mask"], state="readonly")
-        self.paint_target_box.pack(fill=tk.X, padx=8)
-        self.paint_target_box.bind("<<ComboboxSelected>>", lambda _event: self.set_paint_target())
-        ToolTip(self.paint_target_box, "pixels рисует по слою, mask рисует по маске активного слоя.")
-        ttk.Label(parent, text="Допуск").pack()
-        ttk.Scale(parent, from_=0, to=128, variable=self.tolerance, orient=tk.HORIZONTAL).pack(fill=tk.X, padx=8)
-        ttk.Label(parent, text="Пресет ретуши").pack()
-        self.retouch_preset_box = ttk.Combobox(parent, textvariable=self.retouch_preset, values=list(RETOUCH_PRESETS), state="readonly")
-        self.retouch_preset_box.pack(fill=tk.X, padx=8, pady=(0, 2))
-        self.retouch_preset_box.bind("<<ComboboxSelected>>", lambda _event: self.apply_retouch_preset())
-        ToolTip(self.retouch_preset_box, "Быстро настраивает размер кисти, непрозрачность и допуск для локальной ретуши.")
-        ttk.Button(parent, text="Применить пресет", command=self.apply_retouch_preset).pack(fill=tk.X, padx=8, pady=(0, 8))
+        parent.configure(width=250)
+        self.tool_split = ttk.PanedWindow(parent, orient=tk.VERTICAL)
+        self.tool_split.pack(fill=tk.BOTH, expand=True)
+        tool_area = ttk.Frame(self.tool_split)
+        options_area = ttk.Frame(self.tool_split)
+        self.tool_split.add(tool_area, weight=1)
+        self.tool_split.add(options_area, weight=1)
+        self.tool_palette = ToolPalette(
+            tool_area,
+            definitions=TOOL_DEFINITIONS,
+            tool_var=self.tool,
+            order=self.tool_order,
+            visible=self.visible_tools,
+            select_tool=self.select_tool,
+            configure_tools=self.configure_tool_palette,
+            tooltip_factory=ToolTip,
+        )
+        self.tool_palette.pack(fill=tk.BOTH, expand=True)
+        self.tool_options_panel = ToolOptionsPanel(
+            options_area,
+            tool_var=self.tool,
+            definitions=TOOL_DEFINITIONS,
+            brush_size=self.brush_size,
+            opacity=self.opacity,
+            tolerance=self.tolerance,
+            paint_target=self.paint_target,
+            retouch_preset=self.retouch_preset,
+            retouch_presets=RETOUCH_PRESETS,
+            pick_foreground=self.pick_foreground,
+            pick_background=self.pick_background,
+            set_paint_target=self.set_paint_target,
+            apply_retouch_preset=self.apply_retouch_preset,
+            tooltip_factory=ToolTip,
+        )
+        self.tool_options_panel.pack(fill=tk.BOTH, expand=True)
+        self.after_idle(self.apply_tool_pane_position)
+
+    def select_tool(self, value: str) -> None:
+        if value in self.tool_order:
+            self.tool.set(value)
+
+    def tool_changed(self, *_args) -> None:
+        if hasattr(self, "tool_options_panel"):
+            self.tool_options_panel.render()
+        self.refresh_tool_menu()
+        label = self.tool_label(self.tool.get())
+        if label:
+            self.status_text(f"Инструмент: {label}")
+
+    def tool_label(self, value: str) -> str:
+        for label, tool_id, _description in TOOL_DEFINITIONS:
+            if tool_id == value:
+                return label
+        return value
+
+    def refresh_tool_menu(self) -> None:
+        if not hasattr(self, "tools_menu"):
+            return
+        self.tools_menu.delete(0, tk.END)
+        by_id = {value: (label, description) for label, value, description in TOOL_DEFINITIONS}
+        for value in self.tool_order:
+            if value not in by_id:
+                continue
+            label, _description = by_id[value]
+            self.tools_menu.add_radiobutton(label=label, value=value, variable=self.tool, command=lambda v=value: self.select_tool(v))
+        self.tools_menu.add_separator()
+        self.tools_menu.add_command(label="Настроить панель инструментов...", command=self.configure_tool_palette)
+
+    def configure_tool_palette(self) -> None:
+        dialog = ToolPaletteDialog(self, definitions=TOOL_DEFINITIONS, order=self.tool_order, visible=self.visible_tools)
+        self.wait_window(dialog)
+        if dialog.result is None:
+            return
+        order, visible = dialog.result
+        self.tool_order = normalize_tool_order(order, TOOL_DEFINITIONS)
+        self.visible_tools = normalize_visible_tools(visible, self.tool_order)
+        if self.tool.get() not in self.visible_tools:
+            self.tool.set(self.visible_tools[0])
+        self.tool_palette.set_configuration(self.tool_order, self.visible_tools)
+        self.refresh_tool_menu()
+        self.save_settings()
+
+    def capture_tool_pane_position(self) -> None:
+        if not hasattr(self, "tool_split"):
+            return
+        try:
+            self.tool_pane_position = int(self.tool_split.sashpos(0))
+        except Exception:
+            pass
+
+    def apply_tool_pane_position(self) -> None:
+        if not hasattr(self, "tool_split"):
+            return
+        try:
+            height = max(1, self.tool_split.winfo_height())
+            position = max(160, min(int(self.tool_pane_position), max(160, height - 180)))
+            self.tool_split.sashpos(0, position)
+        except Exception:
+            pass
 
     def _build_canvas(self, parent: ttk.Frame) -> None:
         toolbar = ttk.Frame(parent)
@@ -783,11 +892,15 @@ class PhotoRedactorApp(tk.Tk):
             resample = Image.Resampling.NEAREST if scale >= 4 else Image.Resampling.BILINEAR
             image = image.resize((max(1, int(image.width * scale)), max(1, int(image.height * scale))), resample)
         self._preview_image = ImageTk.PhotoImage(image)
+        pad_x = max(40, self.canvas.winfo_width() // 2)
+        pad_y = max(40, self.canvas.winfo_height() // 2)
+        self._canvas_origin = (pad_x, pad_y)
         if self._canvas_image_id is None:
-            self._canvas_image_id = self.canvas.create_image(0, 0, image=self._preview_image, anchor=tk.NW)
+            self._canvas_image_id = self.canvas.create_image(pad_x, pad_y, image=self._preview_image, anchor=tk.NW)
         else:
             self.canvas.itemconfigure(self._canvas_image_id, image=self._preview_image)
-        self.canvas.configure(scrollregion=(0, 0, image.width, image.height))
+            self.canvas.coords(self._canvas_image_id, pad_x, pad_y)
+        self.canvas.configure(scrollregion=(0, 0, image.width + pad_x * 2, image.height + pad_y * 2))
         self.zoom_label.configure(text=f"{round(scale * 100)}%")
         self._last_render_time = time.perf_counter()
         self._view_dirty = False
@@ -932,9 +1045,15 @@ class PhotoRedactorApp(tk.Tk):
         future.add_done_callback(lambda _future: self.after(0, complete))
 
     def canvas_to_doc(self, event) -> tuple[int, int]:
-        x = int(self.canvas.canvasx(event.x) / self.zoom.get())
-        y = int(self.canvas.canvasy(event.y) / self.zoom.get())
+        ox, oy = self._canvas_origin
+        x = int((self.canvas.canvasx(event.x) - ox) / self.zoom.get())
+        y = int((self.canvas.canvasy(event.y) - oy) / self.zoom.get())
         return x, y
+
+    def doc_to_canvas(self, x: float, y: float) -> tuple[float, float]:
+        ox, oy = self._canvas_origin
+        scale = self.zoom.get()
+        return ox + x * scale, oy + y * scale
 
     @staticmethod
     def selection_mode_from_event(event) -> str:
@@ -1316,8 +1435,9 @@ class PhotoRedactorApp(tk.Tk):
         bounds = self.patch_source_bounds_for_point(point)
         if bounds is None:
             return
-        scale = self.zoom.get()
-        coords = [v * scale for v in bounds]
+        x1, y1 = self.doc_to_canvas(bounds[0], bounds[1])
+        x2, y2 = self.doc_to_canvas(bounds[2], bounds[3])
+        coords = [x1, y1, x2, y2]
         valid = self.patch_source_in_active_layer(bounds)
         color = "#ffb000" if valid else "#ff4a4a"
         if self._patch_preview_id is None:
@@ -1350,8 +1470,9 @@ class PhotoRedactorApp(tk.Tk):
     def draw_selection(self, start: tuple[int, int] | None, end: tuple[int, int]) -> None:
         if not start:
             return
-        scale = self.zoom.get()
-        coords = [v * scale for v in (*start, *end)]
+        x1, y1 = self.doc_to_canvas(start[0], start[1])
+        x2, y2 = self.doc_to_canvas(end[0], end[1])
+        coords = [x1, y1, x2, y2]
         if self.selection_id is None:
             self.selection_id = self.canvas.create_rectangle(*coords, outline="#50e3ff", dash=(5, 4), width=2)
         else:
@@ -1361,18 +1482,17 @@ class PhotoRedactorApp(tk.Tk):
         self.delete_lasso_overlay()
         if len(self._lasso_points) < 2:
             return
-        scale = self.zoom.get()
-        coords = [coord * scale for point in self._lasso_points for coord in point]
+        coords = [coord for point in self._lasso_points for xy in [self.doc_to_canvas(point[0], point[1])] for coord in xy]
         self._polygon_ids.append(self.canvas.create_line(*coords, fill="#50e3ff", dash=(4, 3), width=2, smooth=True))
 
     def draw_polygon_lasso(self) -> None:
         self.delete_lasso_overlay()
-        scale = self.zoom.get()
         if len(self._polygon_points) >= 2:
-            coords = [coord * scale for point in self._polygon_points for coord in point]
+            coords = [coord for point in self._polygon_points for xy in [self.doc_to_canvas(point[0], point[1])] for coord in xy]
             self._polygon_ids.append(self.canvas.create_line(*coords, fill="#50e3ff", dash=(4, 3), width=2))
         for x, y in self._polygon_points:
-            self._polygon_ids.append(self.canvas.create_oval(x * scale - 3, y * scale - 3, x * scale + 3, y * scale + 3, fill="#50e3ff", outline=""))
+            cx, cy = self.doc_to_canvas(x, y)
+            self._polygon_ids.append(self.canvas.create_oval(cx - 3, cy - 3, cx + 3, cy + 3, fill="#50e3ff", outline=""))
 
     def clear_lasso_overlay(self) -> None:
         self.delete_lasso_overlay()
@@ -1397,8 +1517,9 @@ class PhotoRedactorApp(tk.Tk):
                 self.canvas.delete(self.selection_id)
                 self.selection_id = None
             return
-        scale = self.zoom.get()
-        coords = [v * scale for v in bounds]
+        x1, y1 = self.doc_to_canvas(bounds[0], bounds[1])
+        x2, y2 = self.doc_to_canvas(bounds[2], bounds[3])
+        coords = [x1, y1, x2, y2]
         if self.selection_id is None:
             self.selection_id = self.canvas.create_rectangle(*coords, outline="#50e3ff", dash=(5, 4), width=2)
         else:
@@ -1410,20 +1531,23 @@ class PhotoRedactorApp(tk.Tk):
         for item_id in self._overlay_ids:
             self.canvas.delete(item_id)
         self._overlay_ids.clear()
-        scale = self.zoom.get()
+        ox, oy = self._canvas_origin
+        right, bottom = self.doc_to_canvas(self.doc.width, self.doc.height)
         if self.grid_visible.get():
             spacing = max(4, int(self.grid_spacing.get()))
-            width = int(self.doc.width * scale)
-            height = int(self.doc.height * scale)
             for x in range(spacing, self.doc.width, spacing):
-                self._overlay_ids.append(self.canvas.create_line(x * scale, 0, x * scale, height, fill="#3b3f48", dash=(2, 6)))
+                cx, _ = self.doc_to_canvas(x, 0)
+                self._overlay_ids.append(self.canvas.create_line(cx, oy, cx, bottom, fill="#3b3f48", dash=(2, 6)))
             for y in range(spacing, self.doc.height, spacing):
-                self._overlay_ids.append(self.canvas.create_line(0, y * scale, width, y * scale, fill="#3b3f48", dash=(2, 6)))
+                _, cy = self.doc_to_canvas(0, y)
+                self._overlay_ids.append(self.canvas.create_line(ox, cy, right, cy, fill="#3b3f48", dash=(2, 6)))
         for orientation, value in self._guide_doc_lines:
             if orientation == "h":
-                self._overlay_ids.append(self.canvas.create_line(0, value * scale, self.doc.width * scale, value * scale, fill="#ff4fd8", width=1))
+                _, cy = self.doc_to_canvas(0, value)
+                self._overlay_ids.append(self.canvas.create_line(ox, cy, right, cy, fill="#ff4fd8", width=1))
             else:
-                self._overlay_ids.append(self.canvas.create_line(value * scale, 0, value * scale, self.doc.height * scale, fill="#ff4fd8", width=1))
+                cx, _ = self.doc_to_canvas(value, 0)
+                self._overlay_ids.append(self.canvas.create_line(cx, oy, cx, bottom, fill="#ff4fd8", width=1))
         for item_id in self._overlay_ids:
             self.canvas.tag_raise(item_id)
 
@@ -3315,15 +3439,35 @@ class PhotoRedactorApp(tk.Tk):
         self.status_text("Рисование по маске активного слоя")
 
     def set_zoom(self, value: float) -> None:
+        old_zoom = max(0.0001, float(self.zoom.get()))
+        ox, oy = self._canvas_origin
+        center_x = self.canvas.canvasx(max(1, self.canvas.winfo_width()) / 2)
+        center_y = self.canvas.canvasy(max(1, self.canvas.winfo_height()) / 2)
+        doc_center_x = (center_x - ox) / old_zoom
+        doc_center_y = (center_y - oy) / old_zoom
         self.zoom.set(max(0.05, min(16.0, value)))
         self.invalidate_view()
         self.refresh_canvas()
+        self.center_canvas_on_doc(doc_center_x, doc_center_y)
+
+    def center_canvas_on_doc(self, doc_x: float, doc_y: float) -> None:
+        bbox = self.canvas.bbox("all")
+        if bbox is None:
+            return
+        target_x, target_y = self.doc_to_canvas(doc_x, doc_y)
+        width = max(1, self.canvas.winfo_width())
+        height = max(1, self.canvas.winfo_height())
+        scroll_w = max(1, bbox[2] - bbox[0])
+        scroll_h = max(1, bbox[3] - bbox[1])
+        self.canvas.xview_moveto(max(0.0, min(1.0, (target_x - width / 2 - bbox[0]) / scroll_w)))
+        self.canvas.yview_moveto(max(0.0, min(1.0, (target_y - height / 2 - bbox[1]) / scroll_h)))
 
     def fit_to_screen(self) -> None:
         self.update_idletasks()
         w = max(1, self.canvas.winfo_width() - 20)
         h = max(1, self.canvas.winfo_height() - 20)
         self.set_zoom(min(w / self.doc.width, h / self.doc.height))
+        self.center_canvas_on_doc(self.doc.width / 2, self.doc.height / 2)
 
     def set_grid_spacing(self) -> None:
         spacing = simpledialog.askinteger("Grid", "Spacing px:", initialvalue=int(self.grid_spacing.get()), minvalue=4, maxvalue=5000)

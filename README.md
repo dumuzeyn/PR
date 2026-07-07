@@ -47,6 +47,14 @@ This repository starts with a real working editor and an architecture intended t
 
 The executable will be created in `dist\PhotoRedactor.exe`.
 
+## Tool panel
+
+- The left side is split into a scrollable tool palette and a contextual tool-options panel.
+- `Инструменты -> Настроить панель инструментов...` changes visible tools and their order.
+- Hidden tools stay available from the main `Инструменты` menu.
+- Tool-panel order, visibility and splitter position are saved in `settings.json`.
+- The options panel only shows controls that belong to the active tool, such as brush size, opacity, tolerance, paint target, colors or retouch presets.
+
 ## Navigation
 
 - Mouse wheel scrolls vertically.
@@ -54,6 +62,8 @@ The executable will be created in `dist\PhotoRedactor.exe`.
 - Middle mouse button drags the canvas.
 - `Space` + left mouse button drags the canvas.
 - The `Hand` tool also drags the canvas.
+- Canvas scrollbars move the same viewport state as mouse-wheel and drag panning.
+- Zoom keeps the current viewport center, and Fit centers the document in the available work area.
 - In Clone/Healing tools, `Alt` + click sets the source point.
 - Polygon lasso is finished with a double click.
 
