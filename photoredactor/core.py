@@ -968,7 +968,7 @@ class Document:
         local = (diff <= int(tolerance)).astype(np.uint8) * 255
         self.apply_selection_mask(self._layer_mask_to_document(layer, local), mode)
 
-    def quick_selection_brush(self, layer: Layer, points: list[tuple[int, int]], radius: int, tolerance: int, mode: str = "replace") -> None:
+    def _quick_selection_mask(self, layer: Layer, points: list[tuple[int, int]], radius: int, tolerance: int) -> np.ndarray:
         local_union = np.zeros(layer.pixels.shape[:2], dtype=np.uint8)
         radius = max(1, int(radius))
         tolerance = max(0, int(tolerance))
@@ -994,8 +994,29 @@ class Document:
             brush_gate = np.zeros_like(component)
             cv2.circle(brush_gate, (lx, ly), radius * 3, 255, -1)
             local_union = np.maximum(local_union, np.where(brush_gate > 0, component, 0).astype(np.uint8))
-        if np.any(local_union):
-            self.apply_selection_mask(self._layer_mask_to_document(layer, local_union), mode)
+        return self._layer_mask_to_document(layer, local_union)
+
+    def preview_quick_selection_brush(
+        self, layer: Layer, points: list[tuple[int, int]], radius: int, tolerance: int, mode: str = "replace"
+    ) -> np.ndarray | None:
+        mask = self._quick_selection_mask(layer, points, radius, tolerance)
+        if not np.any(mask):
+            return None if self.selection_mask is None else self.selection_mask.copy()
+        current = self.selection_mask
+        if mode == "add" and current is not None:
+            return np.maximum(current, mask)
+        if mode == "subtract" and current is not None:
+            result = np.where(mask > 0, 0, current).astype(np.uint8)
+            return result if np.any(result) else None
+        if mode == "intersect" and current is not None:
+            result = np.minimum(current, mask)
+            return result if np.any(result) else None
+        return mask
+
+    def quick_selection_brush(self, layer: Layer, points: list[tuple[int, int]], radius: int, tolerance: int, mode: str = "replace") -> None:
+        mask = self._quick_selection_mask(layer, points, radius, tolerance)
+        if np.any(mask):
+            self.apply_selection_mask(mask, mode)
 
     def magnetic_edge_map(self) -> np.ndarray:
         composite = self.composite(False)

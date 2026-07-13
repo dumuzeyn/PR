@@ -8,7 +8,7 @@ This repository starts with a real working editor and an architecture intended t
 - custom project format (`.prdx`)
 - PNG/JPEG/WebP/BMP/TIFF import and export
 - document presets, recent files, embedded and linked image placement, linked layer update/relink, loading several files as layers and layer export
-- brush, eraser, fill, gradient, editable paragraph text layers, crop, rectangular/elliptical/freehand/magnetic/polygon selection, quick selection brush with canvas preview, magic wand, color range, move
+- brush, eraser, fill, gradient, editable paragraph text layers, crop, rectangular/elliptical/freehand/magnetic/polygon selection, quick selection brush with live result-mask and cursor previews, magic wand, color range, move
 - layer opacity, visibility, duplication, merge, flatten
 - layer locks, raster layer masks, mask thumbnails, thumbnail-click mask channel editing, red-overlay/black-white mask preview, linked/unlinked mask movement, mask painting, mask density/feather controls and blend modes
 - clipping masks, adjustment-layer clipping and basic layer styles: stroke, drop shadow and outer glow

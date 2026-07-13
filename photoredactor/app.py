@@ -272,6 +272,9 @@ class PhotoRedactorApp(tk.Tk):
         self._magnetic_edges: np.ndarray | None = None
         self._quick_points: list[tuple[int, int]] = []
         self._quick_mode = "replace"
+        self._quick_preview_id: int | None = None
+        self._quick_preview_image: ImageTk.PhotoImage | None = None
+        self._last_quick_preview_time = 0.0
         self._brush_preview_ids: list[int] = []
         self._last_pointer_event = None
         self._clone_source: tuple[int, int] | None = None
@@ -298,6 +301,7 @@ class PhotoRedactorApp(tk.Tk):
         self._build_ui()
         self.tool.trace_add("write", self.tool_changed)
         self.brush_size.trace_add("write", self.brush_size_changed)
+        self.tolerance.trace_add("write", self.quick_preview_settings_changed)
         self.load_settings()
         self.refresh_recent_menu()
         self.refresh()
@@ -637,6 +641,9 @@ class PhotoRedactorApp(tk.Tk):
             self.clear_brush_preview()
         elif self._last_pointer_event is not None:
             self.update_brush_preview(self._last_pointer_event)
+        if self.tool.get() != "quick_selection":
+            self._quick_points.clear()
+            self.clear_quick_selection_preview()
         label = self.tool_label(self.tool.get())
         if label:
             self.status_text(f"Инструмент: {label}")
@@ -918,6 +925,8 @@ class PhotoRedactorApp(tk.Tk):
         self._view_dirty = False
         self.update_selection_overlay()
         self.update_grid_and_guides()
+        if self.tool.get() == "quick_selection" and self._quick_points:
+            self.update_quick_selection_preview(force=True)
         if self._last_pointer_event is not None:
             self.update_brush_preview(self._last_pointer_event)
 
@@ -1097,6 +1106,11 @@ class PhotoRedactorApp(tk.Tk):
     def brush_size_changed(self, *_args) -> None:
         if self._last_pointer_event is not None:
             self.update_brush_preview(self._last_pointer_event)
+        self.quick_preview_settings_changed()
+
+    def quick_preview_settings_changed(self, *_args) -> None:
+        if self.tool.get() == "quick_selection" and self._quick_points:
+            self.update_quick_selection_preview(force=True)
 
     def update_brush_preview(self, event) -> None:
         tool = self.tool.get()
@@ -1141,6 +1155,58 @@ class PhotoRedactorApp(tk.Tk):
         for item_id in self._brush_preview_ids:
             self.canvas.delete(item_id)
         self._brush_preview_ids.clear()
+
+    def update_quick_selection_preview(self, force: bool = False) -> None:
+        if self.tool.get() != "quick_selection" or not self._quick_points:
+            self.clear_quick_selection_preview()
+            return
+        now = time.perf_counter()
+        if not force and now - self._last_quick_preview_time < 0.075:
+            return
+        self._last_quick_preview_time = now
+        mask = self.doc.preview_quick_selection_brush(
+            self.doc.layer,
+            self._quick_points,
+            max(2, int(self.brush_size.get())),
+            int(self.tolerance.get()),
+            self._quick_mode,
+        )
+        if mask is None or not np.any(mask):
+            self.clear_quick_selection_preview()
+            return
+        mask_image = Image.fromarray(mask, mode="L")
+        scale = self.zoom.get()
+        if scale != 1.0:
+            mask_image = mask_image.resize(
+                (max(1, int(self.doc.width * scale)), max(1, int(self.doc.height * scale))),
+                Image.Resampling.NEAREST,
+            )
+        color_by_mode = {
+            "replace": (45, 205, 255),
+            "add": (55, 225, 120),
+            "subtract": (255, 80, 80),
+            "intersect": (255, 195, 60),
+        }
+        color = color_by_mode.get(self._quick_mode, color_by_mode["replace"])
+        alpha = mask_image.point(lambda value: 78 if value else 0)
+        overlay = Image.new("RGBA", mask_image.size, (*color, 0))
+        overlay.putalpha(alpha)
+        self._quick_preview_image = ImageTk.PhotoImage(overlay)
+        ox, oy = self._canvas_origin
+        if self._quick_preview_id is None:
+            self._quick_preview_id = self.canvas.create_image(ox, oy, image=self._quick_preview_image, anchor=tk.NW)
+        else:
+            self.canvas.itemconfigure(self._quick_preview_id, image=self._quick_preview_image)
+            self.canvas.coords(self._quick_preview_id, ox, oy)
+        self.canvas.tag_raise(self._quick_preview_id)
+        for item_id in self._brush_preview_ids:
+            self.canvas.tag_raise(item_id)
+
+    def clear_quick_selection_preview(self) -> None:
+        if self._quick_preview_id is not None:
+            self.canvas.delete(self._quick_preview_id)
+            self._quick_preview_id = None
+        self._quick_preview_image = None
 
     def space_down(self, _event) -> None:
         self._space_down = True
@@ -1203,6 +1269,7 @@ class PhotoRedactorApp(tk.Tk):
         elif tool == "quick_selection":
             self._quick_points = [point]
             self._quick_mode = self.selection_mode_from_event(event)
+            self.update_quick_selection_preview(force=True)
             self.status_text("Кисть быстрого выделения")
         elif tool == "patch":
             self.begin_patch_drag(point)
@@ -1273,7 +1340,11 @@ class PhotoRedactorApp(tk.Tk):
                 self._lasso_points.append(snapped)
                 self.draw_lasso()
         elif tool == "quick_selection" and self.drag_start:
-            self._quick_points.append(point)
+            spacing = max(1, int(self.brush_size.get()) // 2)
+            previous = self._quick_points[-1]
+            if (point[0] - previous[0]) ** 2 + (point[1] - previous[1]) ** 2 >= spacing ** 2:
+                self._quick_points.append(point)
+                self.update_quick_selection_preview()
             self.status_text(f"Точек быстрого выделения: {len(self._quick_points)}")
         elif tool == "patch" and self.drag_start:
             self.draw_patch_preview(point)
@@ -1325,8 +1396,9 @@ class PhotoRedactorApp(tk.Tk):
             mode = self._quick_mode
             radius = max(2, int(self.brush_size.get()))
             tolerance = int(self.tolerance.get())
-            self.run_selection_command("Quick selection", lambda: self.doc.quick_selection_brush(self.doc.layer, points, radius, tolerance, mode))
             self._quick_points.clear()
+            self.clear_quick_selection_preview()
+            self.run_selection_command("Quick selection", lambda: self.doc.quick_selection_brush(self.doc.layer, points, radius, tolerance, mode))
         elif tool == "patch" and self.drag_start:
             self.finish_patch_drag(point)
         self.drag_start = None
