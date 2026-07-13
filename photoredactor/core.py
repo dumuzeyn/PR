@@ -1256,6 +1256,54 @@ class Document:
             layer.mask_feather = max(0.0, float(radius))
             self.dirty = True
 
+    def preview_active_mask_refinement(
+        self,
+        smooth: int = 0,
+        feather: int = 0,
+        contrast: float = 1.0,
+        shift: int = 0,
+        edge_radius: int = 0,
+        edge_strength: float = 0.0,
+        confidence_threshold: int = 96,
+    ) -> np.ndarray | None:
+        layer = self.layer
+        if layer.mask is None:
+            return None
+        return refine_layer_mask(
+            layer.mask,
+            layer.pixels,
+            smooth,
+            feather,
+            contrast,
+            shift,
+            edge_radius,
+            edge_strength,
+            confidence_threshold,
+        )
+
+    def refine_active_mask(
+        self,
+        smooth: int = 0,
+        feather: int = 0,
+        contrast: float = 1.0,
+        shift: int = 0,
+        edge_radius: int = 0,
+        edge_strength: float = 0.0,
+        confidence_threshold: int = 96,
+    ) -> None:
+        mask = self.preview_active_mask_refinement(
+            smooth,
+            feather,
+            contrast,
+            shift,
+            edge_radius,
+            edge_strength,
+            confidence_threshold,
+        )
+        if mask is not None:
+            self.layer.mask = mask
+            self.dirty = True
+
     def delete_active_mask(self) -> None:
         self.layer.mask = None
         self.layer.mask_linked = True
@@ -1533,6 +1581,25 @@ def refine_selection_mask(mask: np.ndarray, smooth: int = 0, feather: int = 0, c
         work = (work - 127.5) * max(0.0, float(contrast)) + 127.5
         out = np.clip(work, 0, 255).astype(np.uint8)
     return out
+
+
+def refine_layer_mask(
+    mask: np.ndarray,
+    image: np.ndarray,
+    smooth: int = 0,
+    feather: int = 0,
+    contrast: float = 1.0,
+    shift: int = 0,
+    edge_radius: int = 0,
+    edge_strength: float = 0.0,
+    confidence_threshold: int = 96,
+) -> np.ndarray:
+    out = refine_selection_mask(mask, max(0, int(smooth)), 0, 1.0, int(shift))
+    radius = max(0, int(edge_radius))
+    strength = float(np.clip(edge_strength, 0.0, 1.0))
+    if radius > 0 and strength > 0.0 and np.any(out):
+        out = correct_selection_edges(out, image, radius, strength, confidence_threshold)
+    return refine_selection_mask(out, 0, max(0, int(feather)), max(0.0, float(contrast)), 0)
 
 
 def cleanup_selection_edges(mask: np.ndarray, image: np.ndarray, radius: int = 3, strength: float = 0.7) -> np.ndarray:

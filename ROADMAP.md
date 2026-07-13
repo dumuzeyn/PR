@@ -10,7 +10,7 @@
 - Layer compositing: clipping masks including adjustment-layer clipping, basic layer styles, opacity and blend modes.
 - Non-destructive filters: per-layer editable filter stack with visual editor, built-in/importable/exportable presets, preview, reordering, per-filter enable/opacity/blend modes/masks, blur, sharpen, noise, median, edge detect and emboss.
 - Raster selections: rectangular, elliptical, freehand lasso, magnetic lasso, polygon lasso, quick selection brush with a live result-mask preview, magic wand, color range, single row/column, opaque pixels, subject/background/sky selection, select all, invert, feather, smooth, grow, shrink, border/refine, smart edge cleanup/correction, richer Select and Mask previews/output including edge confidence, saved alpha selections.
-- Raster layer masks: reveal all, hide all, from selection, mask thumbnails, thumbnail-click mask channel editing, red-overlay/black-white mask preview, linked/unlinked movement, paint on mask, density, feather, invert, toggle, apply, delete.
+- Raster layer masks: reveal all, hide all, from selection, mask thumbnails, thumbnail-click mask channel editing, red-overlay/black-white mask preview, linked/unlinked movement, paint on mask, density, feather, live edge refinement with smooth/contrast/shift and smart image-aware correction, invert, toggle, apply, delete.
 - Blend modes: Normal, Multiply, Screen, Overlay, Soft Light, Darken, Lighten, Difference, Color, Luminosity.
 - Tools: move, brush, eraser, fill, gradient, editable text, rectangular/elliptical/lasso/magnetic/polygon selection, magic wand, color range, brush/quick-selection canvas previews, interactive patch and crop.
 - Text layers: font selection, multiline editing, paragraph width, word wrapping, alignment, line spacing and tracking.
@@ -32,14 +32,13 @@
 ## Next milestones toward the full list
 
 1. Selection engine: better quick-selection refinement and add/subtract tuning.
-2. Editable masks: stronger mask edge controls.
-3. Non-destructive editing: richer editable adjustment controls and preset libraries.
-4. Free Transform: transform handles and richer warp preview controls.
-5. Text engine: text-on-path, OpenType-style controls and editable transform handles for text boxes.
-6. Shapes and paths: custom shapes and richer Bezier point editing.
-7. Retouching: frequency separation, spot removal presets and more portrait-oriented cleanup controls.
-8. Smart objects: re-editable transforms, embedded payload management and richer linked-file status/conflict handling.
-9. RAW/color management: ICC profiles, 16/32-bit channels, Lab/CMYK workflows and richer metadata editing.
-10. GPU/tiled rendering: tile cache, dirty-region recomposition, scratch disk, background save.
-11. Plugin API and actions: replayable command actions, batch execution, external filters.
-12. Advanced AI/generative tools: content-aware fill and generative expand.
+2. Non-destructive editing: richer editable adjustment controls and preset libraries.
+3. Free Transform: transform handles and richer warp preview controls.
+4. Text engine: text-on-path, OpenType-style controls and editable transform handles for text boxes.
+5. Shapes and paths: custom shapes and richer Bezier point editing.
+6. Retouching: frequency separation, spot removal presets and more portrait-oriented cleanup controls.
+7. Smart objects: re-editable transforms, embedded payload management and richer linked-file status/conflict handling.
+8. RAW/color management: ICC profiles, 16/32-bit channels, Lab/CMYK workflows and richer metadata editing.
+9. GPU/tiled rendering: tile cache, dirty-region recomposition, scratch disk, background save.
+10. Plugin API and actions: replayable command actions, batch execution, external filters.
+11. Advanced AI/generative tools: content-aware fill and generative expand.

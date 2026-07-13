@@ -288,6 +288,7 @@ class PhotoRedactorApp(tk.Tk):
         self._layer_thumb_image: ImageTk.PhotoImage | None = None
         self._mask_thumb_image: ImageTk.PhotoImage | None = None
         self._select_mask_preview_image: ImageTk.PhotoImage | None = None
+        self._mask_edge_preview_image: ImageTk.PhotoImage | None = None
         self._filter_stack_preview_image: ImageTk.PhotoImage | None = None
         self._adjustment_preview_image: ImageTk.PhotoImage | None = None
         self._canvas_image_id: int | None = None
@@ -522,6 +523,7 @@ class PhotoRedactorApp(tk.Tk):
         layer.add_command(label="Связать/отвязать маску", command=self.toggle_layer_mask_link)
         layer.add_command(label="Плотность маски", command=self.set_mask_density)
         layer.add_command(label="Растушевка маски", command=self.set_mask_feather)
+        layer.add_command(label="Уточнить край маски", command=self.refine_layer_mask)
         layer.add_command(label="Применить маску", command=self.apply_layer_mask)
         layer.add_command(label="Удалить маску", command=self.delete_layer_mask)
 
@@ -2970,6 +2972,112 @@ class PhotoRedactorApp(tk.Tk):
         if value is not None:
             self.run_document_command("Mask feather", lambda: self.doc.set_active_mask_feather(value))
             self.refresh()
+
+    def refine_layer_mask(self) -> None:
+        if self.doc.layer.mask is None:
+            messagebox.showinfo("Уточнить край маски", "У активного слоя нет маски.")
+            return
+        data = self.refine_layer_mask_dialog()
+        if data is None:
+            return
+        self.run_document_command(
+            "Уточнить край маски",
+            lambda: self.doc.refine_active_mask(
+                int(data["smooth"]),
+                int(data["feather"]),
+                float(data["contrast"]),
+                int(data["shift"]),
+                int(data["edge_radius"]),
+                float(data["edge_strength"]),
+                int(data["confidence_threshold"]),
+            ),
+        )
+        self.refresh()
+
+    def refine_layer_mask_dialog(self) -> dict[str, object] | None:
+        layer = self.doc.layer
+        dialog = tk.Toplevel(self)
+        dialog.title("Уточнить край маски")
+        dialog.transient(self)
+        dialog.resizable(False, False)
+        dialog.grab_set()
+
+        smooth = tk.IntVar(value=2)
+        feather = tk.IntVar(value=1)
+        contrast = tk.DoubleVar(value=1.15)
+        shift = tk.IntVar(value=0)
+        edge_radius = tk.IntVar(value=3)
+        edge_strength = tk.DoubleVar(value=0.65)
+        confidence_threshold = tk.IntVar(value=96)
+        preview_mode = tk.StringVar(value=SELECT_MASK_PREVIEW_CHANNEL)
+        result: dict[str, object] | None = None
+
+        preview = ttk.Label(dialog)
+        preview.grid(row=0, column=0, rowspan=9, padx=12, pady=12, sticky="n")
+        stats = ttk.Label(dialog, text="", justify=tk.LEFT)
+        stats.grid(row=9, column=0, padx=12, pady=(0, 12), sticky="w")
+
+        def values() -> dict[str, object]:
+            return {
+                "smooth": max(0, int(smooth.get())),
+                "feather": max(0, int(feather.get())),
+                "contrast": max(0.0, float(contrast.get())),
+                "shift": int(shift.get()),
+                "edge_radius": max(0, int(edge_radius.get())),
+                "edge_strength": float(np.clip(edge_strength.get(), 0.0, 1.0)),
+                "confidence_threshold": int(np.clip(confidence_threshold.get(), 0, 255)),
+            }
+
+        def update_preview(*_args) -> None:
+            try:
+                current = values()
+            except (tk.TclError, ValueError):
+                return
+            mask = self.doc.preview_active_mask_refinement(**current)
+            if mask is None:
+                return
+            canvas = self.render_select_mask_preview(layer.pixels, mask, preview_mode.get(), 180)
+            self._mask_edge_preview_image = ImageTk.PhotoImage(canvas)
+            preview.configure(image=self._mask_edge_preview_image)
+            active = int(np.count_nonzero(mask))
+            stats.configure(text=f"Активных пикселей: {active}\nГраницы: {self.mask_bounds(mask) or '-'}")
+
+        def add_spin(row: int, label: str, variable, from_: float, to: float, increment: float = 1.0) -> None:
+            ttk.Label(dialog, text=label).grid(row=row, column=1, sticky="w", padx=(0, 12), pady=(8, 0))
+            spin = ttk.Spinbox(dialog, textvariable=variable, from_=from_, to=to, increment=increment, width=10, command=update_preview)
+            spin.grid(row=row, column=2, sticky="ew", padx=(0, 12), pady=(8, 0))
+
+        add_spin(0, "Сглаживание", smooth, 0, 100)
+        add_spin(1, "Растушёвка", feather, 0, 500)
+        add_spin(2, "Контраст", contrast, 0.0, 5.0, 0.05)
+        add_spin(3, "Сдвиг края", shift, -500, 500)
+        add_spin(4, "Радиус анализа", edge_radius, 0, 40)
+        add_spin(5, "Сила привязки", edge_strength, 0.0, 1.0, 0.05)
+        add_spin(6, "Порог уверенности", confidence_threshold, 0, 255)
+        ttk.Label(dialog, text="Просмотр").grid(row=7, column=1, sticky="w", padx=(0, 12), pady=(8, 0))
+        preview_box = ttk.Combobox(dialog, textvariable=preview_mode, values=SELECT_MASK_PREVIEW_MODES, state="readonly", width=18)
+        preview_box.grid(row=7, column=2, sticky="ew", padx=(0, 12), pady=(8, 0))
+
+        buttons = ttk.Frame(dialog)
+        buttons.grid(row=8, column=1, columnspan=2, sticky="e", padx=12, pady=12)
+
+        def accept() -> None:
+            nonlocal result
+            try:
+                result = values()
+            except (tk.TclError, ValueError):
+                return
+            dialog.destroy()
+
+        ttk.Button(buttons, text="ОК", command=accept).pack(side=tk.RIGHT, padx=(6, 0))
+        ttk.Button(buttons, text="Отмена", command=dialog.destroy).pack(side=tk.RIGHT)
+        preview_box.bind("<<ComboboxSelected>>", update_preview)
+        for variable in [smooth, feather, contrast, shift, edge_radius, edge_strength, confidence_threshold]:
+            variable.trace_add("write", update_preview)
+        dialog.protocol("WM_DELETE_WINDOW", dialog.destroy)
+        update_preview()
+        dialog.wait_window()
+        return result
 
     def apply_layer_mask(self) -> None:
         self.run_document_command("Apply mask", self.doc.apply_active_mask)
