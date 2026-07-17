@@ -21,6 +21,10 @@ class ToolOptionsPanel(ttk.Frame):
         brush_size: tk.IntVar,
         opacity: tk.DoubleVar,
         tolerance: tk.IntVar,
+        selection_mode: tk.StringVar,
+        quick_smooth: tk.IntVar,
+        quick_edge_radius: tk.IntVar,
+        quick_edge_strength: tk.DoubleVar,
         paint_target: tk.StringVar,
         retouch_preset: tk.StringVar,
         retouch_presets: dict,
@@ -38,6 +42,10 @@ class ToolOptionsPanel(ttk.Frame):
         self.brush_size = brush_size
         self.opacity = opacity
         self.tolerance = tolerance
+        self.selection_mode = selection_mode
+        self.quick_smooth = quick_smooth
+        self.quick_edge_radius = quick_edge_radius
+        self.quick_edge_strength = quick_edge_strength
         self.paint_target = paint_target
         self.retouch_preset = retouch_preset
         self.retouch_presets = retouch_presets
@@ -79,10 +87,16 @@ class ToolOptionsPanel(ttk.Frame):
         if tool in TOLERANCE_TOOLS:
             self._add_scale("Допуск", self.tolerance, 0, 128)
             shown = True
+        if tool == "quick_selection":
+            self._add_scale("Сглаживание края", self.quick_smooth, 0, 12)
+            self._add_scale("Радиус анализа", self.quick_edge_radius, 0, 12)
+            self._add_scale("Привязка к краю", self.quick_edge_strength, 0.0, 1.0)
+            shown = True
         if tool in RETOUCH_TOOLS:
             self._add_retouch_preset()
             shown = True
         if tool in SELECTION_TOOLS:
+            self._add_selection_mode()
             text = ttk.Label(self.body, text="Shift добавляет к выделению, Ctrl вычитает, Shift+Ctrl пересекает.", wraplength=220, justify=tk.LEFT)
             text.pack(fill=tk.X, padx=8, pady=(4, 8))
             shown = True
@@ -108,6 +122,22 @@ class ToolOptionsPanel(ttk.Frame):
             self.tooltip_factory(fg, "Цвет кисти, заливки, текста и фигур.")
             self.tooltip_factory(bg, "Второй цвет для градиента и обводки фигур.")
 
+    def _add_selection_mode(self) -> None:
+        ttk.Label(self.body, text="Режим выделения").pack(anchor=tk.W, padx=8, pady=(6, 2))
+        row = ttk.Frame(self.body)
+        row.pack(fill=tk.X, padx=8)
+        definitions = [
+            ("Н", "replace", "Создать новое выделение."),
+            ("+", "add", "Добавить область к текущему выделению."),
+            ("−", "subtract", "Вычесть область из текущего выделения."),
+            ("∩", "intersect", "Оставить пересечение с текущим выделением."),
+        ]
+        for label, value, description in definitions:
+            button = ttk.Radiobutton(row, text=label, value=value, variable=self.selection_mode, style="Toolbutton", width=3)
+            button.pack(side=tk.LEFT, fill=tk.X, expand=True)
+            if self.tooltip_factory is not None:
+                self.tooltip_factory(button, description)
+
     def _add_paint_target(self) -> None:
         ttk.Label(self.body, text="Куда рисовать").pack(anchor=tk.W, padx=8, pady=(6, 0))
         box = ttk.Combobox(self.body, textvariable=self.paint_target, values=["pixels", "mask"], state="readonly")
@@ -122,4 +152,3 @@ class ToolOptionsPanel(ttk.Frame):
         box.pack(fill=tk.X, padx=8, pady=(0, 4))
         box.bind("<<ComboboxSelected>>", lambda _event: self.apply_retouch_preset())
         ttk.Button(self.body, text="Применить пресет", command=self.apply_retouch_preset).pack(fill=tk.X, padx=8, pady=(0, 8))
-

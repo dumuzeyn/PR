@@ -240,11 +240,15 @@ class PhotoRedactorApp(tk.Tk):
         self.visible_tools = list(self.tool_order)
         self.tool_pane_position = 360
         self.paint_target = tk.StringVar(value="pixels")
+        self.selection_mode = tk.StringVar(value="replace")
         self.retouch_preset = tk.StringVar(value="Средняя ретушь")
         self.zoom = tk.DoubleVar(value=1.0)
         self.brush_size = tk.IntVar(value=28)
         self.opacity = tk.DoubleVar(value=1.0)
         self.tolerance = tk.IntVar(value=24)
+        self.quick_smooth = tk.IntVar(value=1)
+        self.quick_edge_radius = tk.IntVar(value=2)
+        self.quick_edge_strength = tk.DoubleVar(value=0.5)
         self.grid_visible = tk.BooleanVar(value=False)
         self.grid_spacing = tk.IntVar(value=64)
         self.view_channel = tk.StringVar(value="RGB")
@@ -303,6 +307,10 @@ class PhotoRedactorApp(tk.Tk):
         self.tool.trace_add("write", self.tool_changed)
         self.brush_size.trace_add("write", self.brush_size_changed)
         self.tolerance.trace_add("write", self.quick_preview_settings_changed)
+        self.quick_smooth.trace_add("write", self.quick_preview_settings_changed)
+        self.quick_edge_radius.trace_add("write", self.quick_preview_settings_changed)
+        self.quick_edge_strength.trace_add("write", self.quick_preview_settings_changed)
+        self.selection_mode.trace_add("write", self.selection_mode_changed)
         self.load_settings()
         self.refresh_recent_menu()
         self.refresh()
@@ -619,6 +627,10 @@ class PhotoRedactorApp(tk.Tk):
             brush_size=self.brush_size,
             opacity=self.opacity,
             tolerance=self.tolerance,
+            selection_mode=self.selection_mode,
+            quick_smooth=self.quick_smooth,
+            quick_edge_radius=self.quick_edge_radius,
+            quick_edge_strength=self.quick_edge_strength,
             paint_target=self.paint_target,
             retouch_preset=self.retouch_preset,
             retouch_presets=RETOUCH_PRESETS,
@@ -1080,8 +1092,7 @@ class PhotoRedactorApp(tk.Tk):
         scale = self.zoom.get()
         return ox + x * scale, oy + y * scale
 
-    @staticmethod
-    def selection_mode_from_event(event) -> str:
+    def selection_mode_from_event(self, event) -> str:
         shift = bool(event.state & 0x0001)
         ctrl = bool(event.state & 0x0004)
         if shift and ctrl:
@@ -1090,7 +1101,8 @@ class PhotoRedactorApp(tk.Tk):
             return "add"
         if ctrl:
             return "subtract"
-        return "replace"
+        mode = self.selection_mode.get()
+        return mode if mode in {"replace", "add", "subtract", "intersect"} else "replace"
 
     @staticmethod
     def brush_preview_tools() -> set[str]:
@@ -1113,6 +1125,19 @@ class PhotoRedactorApp(tk.Tk):
     def quick_preview_settings_changed(self, *_args) -> None:
         if self.tool.get() == "quick_selection" and self._quick_points:
             self.update_quick_selection_preview(force=True)
+
+    def selection_mode_changed(self, *_args) -> None:
+        if self._last_pointer_event is not None and self.tool.get() in {
+            "select",
+            "ellipse_select",
+            "lasso",
+            "magnetic_lasso",
+            "polygon_lasso",
+            "quick_selection",
+            "magic_wand",
+            "color_range",
+        }:
+            self.update_brush_preview(self._last_pointer_event)
 
     def update_brush_preview(self, event) -> None:
         tool = self.tool.get()
@@ -1172,6 +1197,9 @@ class PhotoRedactorApp(tk.Tk):
             max(2, int(self.brush_size.get())),
             int(self.tolerance.get()),
             self._quick_mode,
+            int(self.quick_smooth.get()),
+            int(self.quick_edge_radius.get()),
+            float(self.quick_edge_strength.get()),
         )
         if mask is None or not np.any(mask):
             self.clear_quick_selection_preview()
@@ -1398,9 +1426,24 @@ class PhotoRedactorApp(tk.Tk):
             mode = self._quick_mode
             radius = max(2, int(self.brush_size.get()))
             tolerance = int(self.tolerance.get())
+            smooth = int(self.quick_smooth.get())
+            edge_radius = int(self.quick_edge_radius.get())
+            edge_strength = float(self.quick_edge_strength.get())
             self._quick_points.clear()
             self.clear_quick_selection_preview()
-            self.run_selection_command("Quick selection", lambda: self.doc.quick_selection_brush(self.doc.layer, points, radius, tolerance, mode))
+            self.run_selection_command(
+                "Quick selection",
+                lambda: self.doc.quick_selection_brush(
+                    self.doc.layer,
+                    points,
+                    radius,
+                    tolerance,
+                    mode,
+                    smooth,
+                    edge_radius,
+                    edge_strength,
+                ),
+            )
         elif tool == "patch" and self.drag_start:
             self.finish_patch_drag(point)
         self.drag_start = None

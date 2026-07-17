@@ -968,7 +968,16 @@ class Document:
         local = (diff <= int(tolerance)).astype(np.uint8) * 255
         self.apply_selection_mask(self._layer_mask_to_document(layer, local), mode)
 
-    def _quick_selection_mask(self, layer: Layer, points: list[tuple[int, int]], radius: int, tolerance: int) -> np.ndarray:
+    def _quick_selection_mask(
+        self,
+        layer: Layer,
+        points: list[tuple[int, int]],
+        radius: int,
+        tolerance: int,
+        smooth: int = 0,
+        edge_radius: int = 0,
+        edge_strength: float = 0.0,
+    ) -> np.ndarray:
         local_union = np.zeros(layer.pixels.shape[:2], dtype=np.uint8)
         radius = max(1, int(radius))
         tolerance = max(0, int(tolerance))
@@ -984,22 +993,43 @@ class Document:
                 seed = sample[:, :, :3][opaque].mean(axis=0)
             else:
                 seed = layer.pixels[ly, lx, :3].astype(np.float32)
-            diff = np.abs(layer.pixels[:, :, :3].astype(np.float32) - seed).max(axis=2)
-            candidates = ((diff <= tolerance) & (layer.pixels[:, :, 3] > 0)).astype(np.uint8)
+            gate_radius = radius * 3
+            gx1, gy1 = max(0, lx - gate_radius), max(0, ly - gate_radius)
+            gx2 = min(layer.pixels.shape[1], lx + gate_radius + 1)
+            gy2 = min(layer.pixels.shape[0], ly + gate_radius + 1)
+            region = layer.pixels[gy1:gy2, gx1:gx2]
+            diff = np.abs(region[:, :, :3].astype(np.float32) - seed).max(axis=2)
+            candidates = ((diff <= tolerance) & (region[:, :, 3] > 0)).astype(np.uint8)
             _, labels, _, _ = cv2.connectedComponentsWithStats(candidates, 4)
-            label = labels[ly, lx]
-            if label == 0 and candidates[ly, lx] == 0:
+            rx, ry = lx - gx1, ly - gy1
+            label = labels[ry, rx]
+            if label == 0 and candidates[ry, rx] == 0:
                 continue
             component = (labels == label).astype(np.uint8) * 255
             brush_gate = np.zeros_like(component)
-            cv2.circle(brush_gate, (lx, ly), radius * 3, 255, -1)
-            local_union = np.maximum(local_union, np.where(brush_gate > 0, component, 0).astype(np.uint8))
+            cv2.circle(brush_gate, (rx, ry), gate_radius, 255, -1)
+            gated = np.where(brush_gate > 0, component, 0).astype(np.uint8)
+            local_union[gy1:gy2, gx1:gx2] = np.maximum(local_union[gy1:gy2, gx1:gx2], gated)
+        if np.any(local_union):
+            local_union = refine_selection_mask(local_union, max(0, int(smooth)), 0, 1.0, 0)
+            edge_radius = max(0, int(edge_radius))
+            edge_strength = float(np.clip(edge_strength, 0.0, 1.0))
+            if edge_radius > 0 and edge_strength > 0.0:
+                local_union = correct_selection_edges(local_union, layer.pixels, edge_radius, edge_strength, 96)
         return self._layer_mask_to_document(layer, local_union)
 
     def preview_quick_selection_brush(
-        self, layer: Layer, points: list[tuple[int, int]], radius: int, tolerance: int, mode: str = "replace"
+        self,
+        layer: Layer,
+        points: list[tuple[int, int]],
+        radius: int,
+        tolerance: int,
+        mode: str = "replace",
+        smooth: int = 0,
+        edge_radius: int = 0,
+        edge_strength: float = 0.0,
     ) -> np.ndarray | None:
-        mask = self._quick_selection_mask(layer, points, radius, tolerance)
+        mask = self._quick_selection_mask(layer, points, radius, tolerance, smooth, edge_radius, edge_strength)
         if not np.any(mask):
             return None if self.selection_mask is None else self.selection_mask.copy()
         current = self.selection_mask
@@ -1013,8 +1043,18 @@ class Document:
             return result if np.any(result) else None
         return mask
 
-    def quick_selection_brush(self, layer: Layer, points: list[tuple[int, int]], radius: int, tolerance: int, mode: str = "replace") -> None:
-        mask = self._quick_selection_mask(layer, points, radius, tolerance)
+    def quick_selection_brush(
+        self,
+        layer: Layer,
+        points: list[tuple[int, int]],
+        radius: int,
+        tolerance: int,
+        mode: str = "replace",
+        smooth: int = 0,
+        edge_radius: int = 0,
+        edge_strength: float = 0.0,
+    ) -> None:
+        mask = self._quick_selection_mask(layer, points, radius, tolerance, smooth, edge_radius, edge_strength)
         if np.any(mask):
             self.apply_selection_mask(mask, mode)
 
