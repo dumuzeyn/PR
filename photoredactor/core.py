@@ -575,6 +575,13 @@ class Document:
         align: str = "left",
         line_spacing: int | None = None,
         tracking: int = 0,
+        bold: bool = False,
+        italic: bool = False,
+        underline: bool = False,
+        path_mode: str = "none",
+        path_amount: int = 0,
+        baseline_shift: int = 0,
+        rotation: float = 0.0,
     ) -> None:
         layer = Layer(
             name=f"Text: {text[:24]}",
@@ -591,6 +598,13 @@ class Document:
                 "align": align,
                 "line_spacing": int(line_spacing if line_spacing is not None else max(2, int(size) // 5)),
                 "tracking": int(tracking),
+                "bold": bool(bold),
+                "italic": bool(italic),
+                "underline": bool(underline),
+                "path_mode": path_mode if path_mode in {"none", "arc", "wave"} else "none",
+                "path_amount": int(path_amount),
+                "baseline_shift": int(baseline_shift),
+                "rotation": float(rotation),
             },
         )
         render_text_layer(layer)
@@ -608,6 +622,7 @@ class Document:
         sides: int = 5,
         inner_ratio: float = 0.5,
         control_points: list[tuple[float, float]] | None = None,
+        custom_points: list[tuple[float, float]] | None = None,
     ) -> None:
         shape_box = normalized_box(box)
         if shape == "bezier" and control_points is None:
@@ -626,6 +641,7 @@ class Document:
                 "sides": int(sides),
                 "inner_ratio": float(inner_ratio),
                 "control_points": None if control_points is None else [[float(x), float(y)] for x, y in control_points],
+                "custom_points": None if custom_points is None else [[float(x), float(y)] for x, y in custom_points],
             },
         )
         render_shape_layer(layer)
@@ -642,6 +658,7 @@ class Document:
         sides: int | None = None,
         inner_ratio: float | None = None,
         control_points: list[tuple[float, float]] | None = None,
+        custom_points: list[tuple[float, float]] | None = None,
     ) -> None:
         layer = self.layer
         if layer.locked or layer.kind != "shape" or layer.shape_data is None:
@@ -661,6 +678,8 @@ class Document:
             layer.shape_data["inner_ratio"] = float(np.clip(inner_ratio, 0.05, 0.95))
         if control_points is not None:
             layer.shape_data["control_points"] = [[float(x), float(y)] for x, y in control_points]
+        if custom_points is not None:
+            layer.shape_data["custom_points"] = [[float(x), float(y)] for x, y in custom_points]
         render_shape_layer(layer)
         self.dirty = True
 
@@ -707,6 +726,13 @@ class Document:
         align: str | None = None,
         line_spacing: int | None = None,
         tracking: int | None = None,
+        bold: bool | None = None,
+        italic: bool | None = None,
+        underline: bool | None = None,
+        path_mode: str | None = None,
+        path_amount: int | None = None,
+        baseline_shift: int | None = None,
+        rotation: float | None = None,
     ) -> None:
         layer = self.layer
         if layer.locked or layer.kind != "text" or layer.text_data is None:
@@ -728,8 +754,57 @@ class Document:
             layer.text_data["line_spacing"] = max(0, int(line_spacing))
         if tracking is not None:
             layer.text_data["tracking"] = int(tracking)
+        if bold is not None:
+            layer.text_data["bold"] = bool(bold)
+        if italic is not None:
+            layer.text_data["italic"] = bool(italic)
+        if underline is not None:
+            layer.text_data["underline"] = bool(underline)
+        if path_mode is not None:
+            layer.text_data["path_mode"] = path_mode if path_mode in {"none", "arc", "wave"} else "none"
+        if path_amount is not None:
+            layer.text_data["path_amount"] = int(path_amount)
+        if baseline_shift is not None:
+            layer.text_data["baseline_shift"] = int(baseline_shift)
+        if rotation is not None:
+            layer.text_data["rotation"] = float(rotation)
         render_text_layer(layer)
         self.dirty = True
+
+    def transform_active_text_box(
+        self,
+        x: int,
+        y: int,
+        width: int,
+        height: int,
+        angle: float = 0.0,
+        flip_horizontal: bool = False,
+        flip_vertical: bool = False,
+    ) -> bool:
+        layer = self.layer
+        if layer.locked or layer.kind != "text" or layer.text_data is None or not np.any(layer.pixels[:, :, 3]):
+            return False
+        ys, xs = np.where(layer.pixels[:, :, 3] > 0)
+        x1, y1, x2, y2 = int(xs.min()), int(ys.min()), int(xs.max() + 1), int(ys.max() + 1)
+        old_width, old_height = max(1, x2 - x1), max(1, y2 - y1)
+        scale_x = max(1, int(width)) / old_width
+        scale_y = max(1, int(height)) / old_height
+        data = layer.text_data
+        data["x"] = int(data.get("x", 0)) + int(x) - x1
+        data["y"] = int(data.get("y", 0)) + int(y) - y1
+        data["size"] = max(4, round(int(data.get("size", 48)) * scale_y))
+        if int(data.get("box_width", 0) or 0) > 0:
+            data["box_width"] = max(1, round(int(data["box_width"]) * scale_x))
+        data["line_spacing"] = max(0, round(int(data.get("line_spacing", 0)) * scale_y))
+        data["tracking"] = round(int(data.get("tracking", 0)) * scale_x)
+        data["rotation"] = float(data.get("rotation", 0.0)) + float(angle)
+        if flip_horizontal:
+            data["flip_horizontal"] = not bool(data.get("flip_horizontal", False))
+        if flip_vertical:
+            data["flip_vertical"] = not bool(data.get("flip_vertical", False))
+        render_text_layer(layer)
+        self.dirty = True
+        return True
 
     def add_adjustment_layer(self, name: str, adjustment: dict[str, Any]) -> None:
         layer = Layer(
@@ -2319,7 +2394,10 @@ def render_text_layer(layer: Layer) -> None:
     pil = rgba_array_to_pil(layer.pixels)
     draw = ImageDraw.Draw(pil)
     data = layer.text_data
-    font = load_text_font(str(data.get("font_family", "arial.ttf")), int(data.get("size", 48)))
+    bold = bool(data.get("bold", False))
+    italic = bool(data.get("italic", False))
+    underline = bool(data.get("underline", False))
+    font = load_text_font(str(data.get("font_family", "arial.ttf")), int(data.get("size", 48)), bold, italic)
     color = tuple(int(v) for v in data.get("color", [255, 255, 255, 255]))
     x = int(data.get("x", 0))
     y = int(data.get("y", 0))
@@ -2328,6 +2406,9 @@ def render_text_layer(layer: Layer) -> None:
     spacing = max(0, int(data.get("line_spacing", max(2, size // 5))))
     tracking = int(data.get("tracking", 0))
     align = str(data.get("align", "left")).lower()
+    path_mode = str(data.get("path_mode", "none")).lower()
+    path_amount = int(data.get("path_amount", 0))
+    baseline_shift = int(data.get("baseline_shift", 0))
     lines = wrapped_text_lines(draw, str(data.get("text", "")), font, box_width, tracking)
     line_y = y
     for line in lines:
@@ -2338,9 +2419,39 @@ def render_text_layer(layer: Layer) -> None:
             dx = max(0, (box_width - line_width) // 2)
         elif box_width > 0 and align == "right":
             dx = max(0, box_width - line_width)
-        draw_text_with_tracking(draw, (x + dx, line_y), line, fill=color, font=font, tracking=tracking)
+        draw_text_styled(
+            draw,
+            (x + dx, line_y - baseline_shift),
+            line,
+            fill=color,
+            font=font,
+            tracking=tracking,
+            bold=bold,
+            underline=underline,
+            path_mode=path_mode,
+            path_amount=path_amount,
+        )
         line_y += max(1, bbox[3] - bbox[1]) + spacing
-    layer.pixels = pil_to_rgba_array(pil)
+    rendered = pil_to_rgba_array(pil)
+    rotation = float(data.get("rotation", 0.0))
+    flip_horizontal = bool(data.get("flip_horizontal", False))
+    flip_vertical = bool(data.get("flip_vertical", False))
+    if (abs(rotation) > 0.001 or flip_horizontal or flip_vertical) and np.any(rendered[:, :, 3]):
+        ys, xs = np.where(rendered[:, :, 3] > 0)
+        x1, y1, x2, y2 = int(xs.min()), int(ys.min()), int(xs.max() + 1), int(ys.max() + 1)
+        patch = rendered[y1:y2, x1:x2]
+        if flip_horizontal:
+            patch = cv2.flip(patch, 1)
+        if flip_vertical:
+            patch = cv2.flip(patch, 0)
+        if abs(rotation) > 0.001:
+            patch = rotate_bound(patch, rotation, cv2.INTER_CUBIC)
+        rotated = np.zeros_like(rendered)
+        px = round((x1 + x2 - patch.shape[1]) / 2)
+        py = round((y1 + y2 - patch.shape[0]) / 2)
+        alpha_blend_inplace(rotated, patch, px, py, 1.0)
+        rendered = rotated
+    layer.pixels = rendered
 
 
 def wrapped_text_lines(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont, box_width: int, tracking: int = 0) -> list[str]:
@@ -2382,11 +2493,49 @@ def draw_text_with_tracking(draw: ImageDraw.ImageDraw, xy: tuple[int, int], text
         x += max(0, bbox[2] - bbox[0]) + int(tracking)
 
 
-def load_text_font(font_family: str, size: int) -> ImageFont.ImageFont:
+def draw_text_styled(
+    draw: ImageDraw.ImageDraw,
+    xy: tuple[int, int],
+    text: str,
+    fill: tuple[int, int, int, int],
+    font: ImageFont.ImageFont,
+    tracking: int = 0,
+    bold: bool = False,
+    underline: bool = False,
+    path_mode: str = "none",
+    path_amount: int = 0,
+) -> None:
+    x, y = xy
+    total_width = max(1, text_line_width(draw, text or " ", font, tracking))
+    cursor = 0.0
+    for char in text:
+        bbox = draw.textbbox((0, 0), char or " ", font=font)
+        char_width = max(1, bbox[2] - bbox[0])
+        center = cursor + char_width / 2.0
+        offset = 0.0
+        if path_mode == "arc":
+            normalized = center / total_width * 2.0 - 1.0
+            offset = -float(path_amount) * (1.0 - normalized * normalized)
+        elif path_mode == "wave":
+            offset = float(path_amount) * math.sin(center / total_width * math.pi * 2.0)
+        draw.text((x + cursor, y + offset), char, fill=fill, font=font, stroke_width=1 if bold else 0, stroke_fill=fill)
+        cursor += char_width + int(tracking)
+    if underline and text:
+        underline_y = y + max(1, int(getattr(font, "size", 12) * 1.05))
+        draw.line((x, underline_y, x + total_width, underline_y), fill=fill, width=max(1, int(getattr(font, "size", 12) / 16)))
+
+
+def load_text_font(font_family: str, size: int, bold: bool = False, italic: bool = False) -> ImageFont.ImageFont:
     family = font_family.strip() or "arial.ttf"
-    candidates = [family]
+    candidates: list[str] = []
+    compact = family.lower().replace(" ", "").removesuffix(".ttf")
+    if compact == "arial":
+        candidates.append("arialbi.ttf" if bold and italic else "arialbd.ttf" if bold else "ariali.ttf" if italic else "arial.ttf")
+    if not Path(family).suffix and (bold or italic):
+        suffix = " Bold Italic" if bold and italic else " Bold" if bold else " Italic"
+        candidates.extend([f"{family}{suffix}.ttf", f"{compact}{'bi' if bold and italic else 'bd' if bold else 'i'}.ttf"])
+    candidates.append(family)
     if not Path(family).suffix:
-        compact = family.lower().replace(" ", "")
         candidates.extend([f"{family}.ttf", f"{compact}.ttf"])
     for candidate in candidates:
         try:
@@ -2428,6 +2577,11 @@ def render_shape_layer(layer: Layer) -> None:
         points = star_points(box, max(3, int(data.get("sides", 5))), float(data.get("inner_ratio", 0.5)))
         draw.polygon(points, fill=fill)
         if outline is not None and stroke_width > 0:
+            draw.line(points + [points[0]], fill=outline, width=stroke_width)
+    elif shape == "custom":
+        points = custom_shape_points(data.get("custom_points"), box)
+        draw.polygon(points, fill=fill)
+        if outline is not None and stroke_width > 0 and points:
             draw.line(points + [points[0]], fill=outline, width=stroke_width)
     else:
         draw.rectangle(box, fill=fill, outline=outline, width=stroke_width)
@@ -2496,6 +2650,8 @@ def shape_data_to_mask(data: dict[str, Any], shape: tuple[int, int]) -> np.ndarr
         draw.polygon(regular_polygon_points(box, max(3, int(data.get("sides", 5)))), fill=255)
     elif kind == "star":
         draw.polygon(star_points(box, max(3, int(data.get("sides", 5))), float(data.get("inner_ratio", 0.5))), fill=255)
+    elif kind == "custom":
+        draw.polygon(custom_shape_points(data.get("custom_points"), box), fill=255)
     else:
         draw.rectangle(box, fill=255)
     return np.array(pil, dtype=np.uint8)
@@ -2520,6 +2676,21 @@ def bezier_curve_points(raw_points: Any, box: tuple[int, int, int, int], steps: 
         y = mt**3 * p0[1] + 3 * mt * mt * t * p1[1] + 3 * mt * t * t * p2[1] + t**3 * p3[1]
         coords.append((x, y))
     return coords
+
+
+def custom_shape_points(raw_points: Any, box: tuple[int, int, int, int]) -> list[tuple[float, float]]:
+    if not isinstance(raw_points, list) or len(raw_points) < 3:
+        raw_points = [[0.5, 0.0], [1.0, 0.5], [0.5, 1.0], [0.0, 0.5]]
+    x1, y1, x2, y2 = normalized_box(box)
+    width, height = x2 - x1, y2 - y1
+    points: list[tuple[float, float]] = []
+    for point in raw_points:
+        try:
+            px, py = float(point[0]), float(point[1])
+        except (TypeError, ValueError, IndexError):
+            continue
+        points.append((x1 + np.clip(px, 0.0, 1.0) * width, y1 + np.clip(py, 0.0, 1.0) * height))
+    return points if len(points) >= 3 else [(x1, y1), (x2, y1), (x2, y2), (x1, y2)]
 
 
 def regular_polygon_points(box: tuple[int, int, int, int], sides: int) -> list[tuple[float, float]]:
@@ -2556,6 +2727,32 @@ def adjust_saturation(arr: np.ndarray, saturation: float) -> np.ndarray:
     hsv[:, :, 1] = np.clip(hsv[:, :, 1] * saturation, 0, 255)
     out = arr.copy()
     out[:, :, :3] = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2RGB)
+    return out
+
+
+def adjust_vibrance(arr: np.ndarray, vibrance: float = 0.0, saturation: float = 1.0) -> np.ndarray:
+    out = arr.copy()
+    hsv = cv2.cvtColor(out[:, :, :3], cv2.COLOR_RGB2HSV).astype(np.float32)
+    sat = hsv[:, :, 1] / 255.0
+    amount = float(np.clip(vibrance, -1.0, 1.0))
+    if amount >= 0.0:
+        sat = sat + (1.0 - sat) * (1.0 - sat) * amount
+    else:
+        sat = sat * (1.0 + amount)
+    hsv[:, :, 1] = np.clip(sat * max(0.0, float(saturation)), 0.0, 1.0) * 255.0
+    out[:, :, :3] = cv2.cvtColor(np.clip(hsv, 0, 255).astype(np.uint8), cv2.COLOR_HSV2RGB)
+    return out
+
+
+def adjust_temperature_tint(arr: np.ndarray, temperature: float = 0.0, tint: float = 0.0) -> np.ndarray:
+    out = arr.copy()
+    rgb = out[:, :, :3].astype(np.float32)
+    temperature = float(np.clip(temperature, -100.0, 100.0))
+    tint = float(np.clip(tint, -100.0, 100.0))
+    rgb[:, :, 0] += temperature * 0.72 + tint * 0.18
+    rgb[:, :, 1] += tint * 0.52 - abs(temperature) * 0.06
+    rgb[:, :, 2] -= temperature * 0.72 + tint * 0.18
+    out[:, :, :3] = np.clip(rgb, 0, 255).astype(np.uint8)
     return out
 
 
@@ -2834,6 +3031,10 @@ def apply_adjustment_layer(out: np.ndarray, layer: Layer, clipping_mask: np.ndar
         adjusted = adjust_brightness_contrast(out, int(layer.adjustment.get("brightness", 0)), float(layer.adjustment.get("contrast", 1.0)))
     elif kind == "saturation":
         adjusted = adjust_saturation(out, float(layer.adjustment.get("saturation", 1.0)))
+    elif kind == "vibrance":
+        adjusted = adjust_vibrance(out, float(layer.adjustment.get("vibrance", 0.0)), float(layer.adjustment.get("saturation", 1.0)))
+    elif kind == "temperature_tint":
+        adjusted = adjust_temperature_tint(out, float(layer.adjustment.get("temperature", 0.0)), float(layer.adjustment.get("tint", 0.0)))
     elif kind == "hue_saturation":
         adjusted = adjust_hue_saturation(out, int(layer.adjustment.get("hue", 0)), float(layer.adjustment.get("saturation", 1.0)), int(layer.adjustment.get("lightness", 0)))
     elif kind == "exposure":

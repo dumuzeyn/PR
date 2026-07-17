@@ -21,23 +21,22 @@
 - UI: Russian main menu/tool labels, hover explanations, scrollable configurable tool palette, contextual tool options and centered canvas viewport navigation.
 - Analysis: eyedropper, metadata/EXIF viewer, histogram and image statistics.
 - Recovery and automation: autosave recovery file, manual recovery opening and action recording to JSON logs.
-- Adjustments: destructive and previewable non-destructive brightness, contrast, saturation, hue/saturation, exposure, color balance, levels, curves, threshold, posterize, grayscale and invert, with adjustment presets.
+- Adjustments: destructive and previewable non-destructive brightness, contrast, saturation, vibrance, temperature/tint, hue/saturation, exposure, color balance, levels, curves, threshold, posterize, grayscale and invert, with importable/exportable preset libraries.
 - Filters: Gaussian blur, sharpen, noise, median, edge detect, emboss, content-aware fill and red-eye reduction.
 - History: undo and redo snapshots.
 - Automation: simple batch resize/convert.
-- Transform: numeric Free Transform for scale, rotate, position, flips, selected pixels, perspective corner transforms and warp presets.
-- Performance baseline: numpy arrays, OpenCV filters, cached composite preview.
+- Transform: visual Free Transform with eight handles for scale/move, rotate, position, flips, selected pixels, perspective corner transforms and live warp previews.
+- Text: editable paragraph and path text, bold/italic/underline, baseline shift, tracking and transform handles that preserve editability.
+- Shapes: custom-shape presets and visual four-point Bezier editing with live handles.
+- Tool previews: real ellipse, line, polygon, star, custom shape and Bezier previews before creation.
+- Performance baseline: numpy arrays, OpenCV filters, cached composite preview, cached per-stroke selection masks and optimized brush spacing.
 - Export: PNG, JPEG, WebP, BMP, TIFF, plus `.prdx` project files.
 
 ## Next milestones toward the full list
 
-1. Non-destructive editing: richer editable adjustment controls and preset libraries.
-2. Free Transform: transform handles and richer warp preview controls.
-3. Text engine: text-on-path, OpenType-style controls and editable transform handles for text boxes.
-4. Shapes and paths: custom shapes and richer Bezier point editing.
-5. Retouching: frequency separation, spot removal presets and more portrait-oriented cleanup controls.
-6. Smart objects: re-editable transforms, embedded payload management and richer linked-file status/conflict handling.
-7. RAW/color management: ICC profiles, 16/32-bit channels, Lab/CMYK workflows and richer metadata editing.
-8. GPU/tiled rendering: tile cache, dirty-region recomposition, scratch disk, background save.
-9. Plugin API and actions: replayable command actions, batch execution, external filters.
-10. Advanced AI/generative tools: content-aware fill and generative expand.
+1. Retouching: frequency separation, spot removal presets and more portrait-oriented cleanup controls.
+2. Smart objects: re-editable transforms, embedded payload management and richer linked-file status/conflict handling.
+3. RAW/color management: ICC profiles, 16/32-bit channels, Lab/CMYK workflows and richer metadata editing.
+4. GPU/tiled rendering: tile cache, dirty-region recomposition, scratch disk, background save.
+5. Plugin API and actions: replayable command actions, batch execution, external filters.
+6. Advanced AI/generative tools: content-aware fill and generative expand.

@@ -23,9 +23,13 @@ from .core import (
     adjust_hue_saturation,
     adjust_posterize,
     adjust_saturation,
+    adjust_temperature_tint,
     adjust_threshold,
+    adjust_vibrance,
     apply_gradient,
     apply_filter_stack,
+    bezier_curve_points,
+    custom_shape_points,
     blur,
     curves,
     content_aware_fill,
@@ -43,8 +47,11 @@ from .core import (
     refine_selection_mask,
     rgba_array_to_pil,
     reduce_red_eye,
+    regular_polygon_points,
     selection_edge_confidence,
+    star_points,
     union_rect,
+    warp_pixels,
     sharpen,
 )
 from .history import DocumentStateCommand, History, LayerBlendModeCommand, LayerMoveCommand, LayerOpacityCommand, MaskPatchCommand, PixelPatchCommand, SelectionMaskCommand
@@ -123,6 +130,7 @@ TOOL_DEFINITIONS = [
     ("Кривая Безье", "bezier_shape", "Создает редактируемую кубическую кривую Безье."),
     ("Многоугольник", "polygon_shape", "Создает редактируемый многоугольник."),
     ("Звезда", "star_shape", "Создает редактируемую звезду."),
+    ("Своя фигура", "custom_shape", "Создает фигуру из библиотеки пользовательских контуров."),
     ("Прямоуг. выделение", "select", "Выделяет прямоугольную область."),
     ("Эллипс выделение", "ellipse_select", "Выделяет овальную область."),
     ("Лассо", "lasso", "Рисует свободный контур выделения от руки."),
@@ -139,6 +147,13 @@ RETOUCH_PRESETS = {
     "Средняя ретушь": {"brush_size": 34, "opacity": 0.45, "tolerance": 28},
     "Сильная ретушь": {"brush_size": 58, "opacity": 0.72, "tolerance": 44},
     "Детальная ретушь": {"brush_size": 9, "opacity": 0.34, "tolerance": 12},
+}
+
+CUSTOM_SHAPE_PRESETS = {
+    "Ромб": [(0.5, 0.0), (1.0, 0.5), (0.5, 1.0), (0.0, 0.5)],
+    "Стрелка": [(0.0, 0.35), (0.62, 0.35), (0.62, 0.08), (1.0, 0.5), (0.62, 0.92), (0.62, 0.65), (0.0, 0.65)],
+    "Сердце": [(0.5, 1.0), (0.08, 0.58), (0.0, 0.28), (0.16, 0.05), (0.38, 0.08), (0.5, 0.25), (0.62, 0.08), (0.84, 0.05), (1.0, 0.28), (0.92, 0.58)],
+    "Выноска": [(0.0, 0.0), (1.0, 0.0), (1.0, 0.72), (0.62, 0.72), (0.45, 1.0), (0.42, 0.72), (0.0, 0.72)],
 }
 
 MASK_PREVIEW_NORMAL = "Обычный"
@@ -185,6 +200,8 @@ FILTER_STACK_PRESETS = {
 ADJUSTMENT_TYPES = [
     "brightness_contrast",
     "saturation",
+    "vibrance",
+    "temperature_tint",
     "hue_saturation",
     "exposure",
     "color_balance",
@@ -198,6 +215,8 @@ ADJUSTMENT_TYPES = [
 ADJUSTMENT_LABELS = {
     "brightness_contrast": "\u042f\u0440\u043a\u043e\u0441\u0442\u044c/\u041a\u043e\u043d\u0442\u0440\u0430\u0441\u0442",
     "saturation": "\u041d\u0430\u0441\u044b\u0449\u0435\u043d\u043d\u043e\u0441\u0442\u044c",
+    "vibrance": "Вибрация",
+    "temperature_tint": "Температура/Оттенок",
     "hue_saturation": "\u0422\u043e\u043d/\u041d\u0430\u0441\u044b\u0449\u0435\u043d\u043d\u043e\u0441\u0442\u044c",
     "exposure": "\u042d\u043a\u0441\u043f\u043e\u0437\u0438\u0446\u0438\u044f",
     "color_balance": "\u0426\u0432\u0435\u0442\u043e\u0432\u043e\u0439 \u0431\u0430\u043b\u0430\u043d\u0441",
@@ -219,6 +238,15 @@ ADJUSTMENT_PRESETS = {
 }
 
 
+ADJUSTMENT_PRESETS.update(
+    {
+        "Живые цвета": {"type": "vibrance", "vibrance": 0.42, "saturation": 1.05},
+        "Золотой час": {"type": "temperature_tint", "temperature": 26, "tint": 5},
+        "Холодный свет": {"type": "temperature_tint", "temperature": -22, "tint": -3},
+    }
+)
+
+
 class PhotoRedactorApp(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
@@ -235,6 +263,7 @@ class PhotoRedactorApp(tk.Tk):
         self.recent_files: list[str] = []
         self.action_recording = False
         self.recorded_actions: list[str] = []
+        self.adjustment_presets = {name: dict(value) for name, value in ADJUSTMENT_PRESETS.items()}
         self.tool = tk.StringVar(value="brush")
         self.tool_order = [value for _label, value, _description in TOOL_DEFINITIONS]
         self.visible_tools = list(self.tool_order)
@@ -264,11 +293,13 @@ class PhotoRedactorApp(tk.Tk):
         self._stroke_kind = "pixels"
         self._stroke_rect: tuple[int, int, int, int] | None = None
         self._stroke_before: np.ndarray | None = None
+        self._stroke_selection_mask: np.ndarray | None = None
         self._opacity_layer_id: str | None = None
         self._opacity_before: float | None = None
         self._space_down = False
         self._panning = False
         self.selection_id: int | None = None
+        self._drag_preview_ids: list[int] = []
         self.selection_box: tuple[int, int, int, int] | None = None
         self._lasso_points: list[tuple[int, int]] = []
         self._polygon_points: list[tuple[int, int]] = []
@@ -295,6 +326,9 @@ class PhotoRedactorApp(tk.Tk):
         self._mask_edge_preview_image: ImageTk.PhotoImage | None = None
         self._filter_stack_preview_image: ImageTk.PhotoImage | None = None
         self._adjustment_preview_image: ImageTk.PhotoImage | None = None
+        self._transform_preview_image: ImageTk.PhotoImage | None = None
+        self._warp_preview_image: ImageTk.PhotoImage | None = None
+        self._bezier_preview_image: ImageTk.PhotoImage | None = None
         self._canvas_image_id: int | None = None
         self._canvas_origin = (0, 0)
         self._render_after_id: str | None = None
@@ -503,7 +537,9 @@ class PhotoRedactorApp(tk.Tk):
         layer.add_command(label="Переименовать слой", command=self.rename_layer)
         layer.add_command(label="Заблокировать/разблокировать", command=self.toggle_layer_lock)
         layer.add_command(label="Редактировать текстовый слой", command=self.edit_text_layer)
+        layer.add_command(label="Трансформировать текстовый блок", command=self.transform_text_box)
         layer.add_command(label="Редактировать фигуру", command=self.edit_shape_layer)
+        layer.add_command(label="Редактировать точки Безье", command=self.edit_bezier_points)
         layer.add_command(label="Булева операция фигур", command=self.boolean_shape_layers)
         layer.add_command(label="\u0420\u0435\u0434\u0430\u043a\u0442\u0438\u0440\u043e\u0432\u0430\u0442\u044c \u043a\u043e\u0440\u0440\u0435\u043a\u0442\u0438\u0440\u0443\u044e\u0449\u0438\u0439 \u0441\u043b\u043e\u0439", command=self.edit_adjustment_layer)
         layer.add_separator()
@@ -1321,6 +1357,13 @@ class PhotoRedactorApp(tk.Tk):
                         data["align"],
                         data["line_spacing"],
                         data["tracking"],
+                        data["bold"],
+                        data["italic"],
+                        data["underline"],
+                        data["path_mode"],
+                        data["path_amount"],
+                        data["baseline_shift"],
+                        data["rotation"],
                     ),
                 )
                 self.doc.dirty = True
@@ -1359,7 +1402,7 @@ class PhotoRedactorApp(tk.Tk):
             self.doc.move_active_layer(dx, dy)
             self.drag_start = point
             self.request_canvas_refresh()
-        elif tool in ["select", "ellipse_select", "crop", "gradient", "rect_shape", "ellipse_shape", "line_shape", "bezier_shape", "polygon_shape", "star_shape"]:
+        elif tool in ["select", "ellipse_select", "crop", "gradient", "rect_shape", "ellipse_shape", "line_shape", "bezier_shape", "polygon_shape", "star_shape", "custom_shape"]:
             self.draw_selection(self.drag_start, point)
         elif tool == "lasso" and self.drag_start:
             self._lasso_points.append(point)
@@ -1395,7 +1438,7 @@ class PhotoRedactorApp(tk.Tk):
             self.run_document_command("Gradient", lambda: apply_gradient(self.doc.layer, (*self.drag_start, *point), self.foreground, self.background, self.doc.layer_selection_mask(self.doc.layer)))
             self.doc.dirty = True
             self.refresh()
-        elif tool in ["rect_shape", "ellipse_shape", "line_shape", "bezier_shape", "polygon_shape", "star_shape"] and self.drag_start:
+        elif tool in ["rect_shape", "ellipse_shape", "line_shape", "bezier_shape", "polygon_shape", "star_shape", "custom_shape"] and self.drag_start:
             self.create_shape_from_drag(tool, (*self.drag_start, *point))
             self.refresh()
         elif tool in ["select", "ellipse_select", "crop"] and self.drag_start:
@@ -1446,6 +1489,8 @@ class PhotoRedactorApp(tk.Tk):
             )
         elif tool == "patch" and self.drag_start:
             self.finish_patch_drag(point)
+        if tool != "crop":
+            self.clear_drag_preview()
         self.drag_start = None
         self.last_point = None
 
@@ -1464,6 +1509,7 @@ class PhotoRedactorApp(tk.Tk):
             self.doc.layer.mask_enabled = True
         self._stroke_rect = None
         self._stroke_before = None
+        self._stroke_selection_mask = self.doc.layer_selection_mask(self.doc.layer)
 
     def brush_local_rect(self, point: tuple[int, int]) -> tuple[int, int, int, int] | None:
         layer = self.doc.layer
@@ -1516,6 +1562,7 @@ class PhotoRedactorApp(tk.Tk):
         self._stroke_kind = "pixels"
         self._stroke_rect = None
         self._stroke_before = None
+        self._stroke_selection_mask = None
 
     def end_move_layer(self) -> None:
         if self._move_layer_id and self._move_start:
@@ -1532,7 +1579,7 @@ class PhotoRedactorApp(tk.Tk):
     def paint_at(self, point: tuple[int, int]) -> None:
         self.capture_stroke_before(self.brush_local_rect(point))
         tool = self.tool.get()
-        selection_mask = self.doc.layer_selection_mask(self.doc.layer)
+        selection_mask = self._stroke_selection_mask
         if tool in ["clone", "healing"]:
             source = self.clone_source_for_point(point)
             if source is not None:
@@ -1557,31 +1604,34 @@ class PhotoRedactorApp(tk.Tk):
         self.request_canvas_refresh()
 
     def paint_line(self, start: tuple[int, int], end: tuple[int, int]) -> None:
-        steps = max(1, int(((end[0] - start[0]) ** 2 + (end[1] - start[1]) ** 2) ** 0.5 / max(1, self.brush_size.get() / 4)))
-        for i in range(steps + 1):
+        radius = max(1, int(self.brush_size.get()))
+        distance = ((end[0] - start[0]) ** 2 + (end[1] - start[1]) ** 2) ** 0.5
+        steps = max(1, int(np.ceil(distance / max(1.0, radius * 0.45))))
+        tool = self.tool.get()
+        selection_mask = self._stroke_selection_mask
+        opacity = float(self.opacity.get())
+        for i in range(1, steps + 1):
             t = i / steps
             x = round(start[0] * (1 - t) + end[0] * t)
             y = round(start[1] * (1 - t) + end[1] * t)
             self.capture_stroke_before(self.brush_local_rect((x, y)))
-            tool = self.tool.get()
-            selection_mask = self.doc.layer_selection_mask(self.doc.layer)
             if tool in ["clone", "healing"]:
                 source = self.clone_source_for_point((x, y))
                 if source is not None:
-                    clone_or_heal(self.doc.layer, source[0], source[1], x, y, int(self.brush_size.get()), float(self.opacity.get()), tool == "healing", selection_mask)
+                    clone_or_heal(self.doc.layer, source[0], source[1], x, y, radius, opacity, tool == "healing", selection_mask)
             elif self._stroke_kind == "mask":
-                draw_mask_brush(self.doc.layer, x, y, int(self.brush_size.get()), 0 if tool == "eraser" else 255, float(self.opacity.get()), selection_mask)
+                draw_mask_brush(self.doc.layer, x, y, radius, 0 if tool == "eraser" else 255, opacity, selection_mask)
             elif tool in ["blur_tool", "sharpen_tool", "dodge", "burn"]:
                 mode = "blur" if tool == "blur_tool" else "sharpen" if tool == "sharpen_tool" else tool
-                local_retouch(self.doc.layer, x, y, int(self.brush_size.get()), mode, float(self.opacity.get()), selection_mask)
+                local_retouch(self.doc.layer, x, y, radius, mode, opacity, selection_mask)
             else:
                 draw_brush(
                     self.doc.layer,
                     x,
                     y,
-                    int(self.brush_size.get()),
+                    radius,
                     self.foreground,
-                    float(self.opacity.get()),
+                    opacity,
                     tool == "eraser",
                     selection_mask,
                 )
@@ -1666,13 +1716,48 @@ class PhotoRedactorApp(tk.Tk):
     def draw_selection(self, start: tuple[int, int] | None, end: tuple[int, int]) -> None:
         if not start:
             return
+        self.clear_drag_preview()
         x1, y1 = self.doc_to_canvas(start[0], start[1])
         x2, y2 = self.doc_to_canvas(end[0], end[1])
         coords = [x1, y1, x2, y2]
-        if self.selection_id is None:
-            self.selection_id = self.canvas.create_rectangle(*coords, outline="#50e3ff", dash=(5, 4), width=2)
+        tool = self.tool.get()
+        is_shape = tool.endswith("_shape")
+        outline = "#{:02x}{:02x}{:02x}".format(*self.foreground[:3]) if is_shape else "#50e3ff"
+        fill = outline if is_shape else "#50e3ff"
+        options = {"outline": outline, "width": 2}
+        if not is_shape:
+            options["dash"] = (5, 4)
+        if tool in {"ellipse_select", "ellipse_shape"}:
+            self._drag_preview_ids.append(self.canvas.create_oval(*coords, fill=fill, stipple="gray25", **options))
+        elif tool in {"line_shape", "gradient"}:
+            line_width = max(2, int(self.brush_size.get()) * self.zoom.get()) if tool == "line_shape" else 2
+            self._drag_preview_ids.append(self.canvas.create_line(x1, y1, x2, y2, fill=outline, width=line_width))
+            for px, py in [(x1, y1), (x2, y2)]:
+                self._drag_preview_ids.append(self.canvas.create_oval(px - 4, py - 4, px + 4, py + 4, fill=outline, outline=""))
+        elif tool == "bezier_shape":
+            box = (start[0], start[1], end[0], end[1])
+            points = bezier_curve_points(None, box, 64)
+            curve = [value for point in points for value in self.doc_to_canvas(point[0], point[1])]
+            self._drag_preview_ids.append(self.canvas.create_line(*curve, fill=outline, width=max(2, int(self.brush_size.get()) * self.zoom.get()), smooth=True))
+        elif tool in {"polygon_shape", "star_shape", "custom_shape"}:
+            box = (start[0], start[1], end[0], end[1])
+            if tool == "polygon_shape":
+                points = regular_polygon_points(box, 5)
+            elif tool == "star_shape":
+                points = star_points(box, 5, 0.5)
+            else:
+                points = custom_shape_points(next(iter(CUSTOM_SHAPE_PRESETS.values())), box)
+            polygon = [value for point in points for value in self.doc_to_canvas(point[0], point[1])]
+            self._drag_preview_ids.append(self.canvas.create_polygon(*polygon, fill=fill, stipple="gray25", **options))
         else:
-            self.canvas.coords(self.selection_id, *coords)
+            self._drag_preview_ids.append(self.canvas.create_rectangle(*coords, fill=fill, stipple="gray25", **options))
+        for item_id in self._drag_preview_ids:
+            self.canvas.tag_raise(item_id)
+
+    def clear_drag_preview(self) -> None:
+        for item_id in self._drag_preview_ids:
+            self.canvas.delete(item_id)
+        self._drag_preview_ids.clear()
 
     def draw_lasso(self) -> None:
         self.delete_lasso_overlay()
@@ -1751,6 +1836,7 @@ class PhotoRedactorApp(tk.Tk):
         shape = "rectangle"
         sides = 5
         inner_ratio = 0.5
+        custom_points = None
         if tool == "ellipse_shape":
             shape = "ellipse"
         elif tool == "line_shape":
@@ -1773,10 +1859,17 @@ class PhotoRedactorApp(tk.Tk):
             if ratio is None:
                 return
             inner_ratio = ratio
+        elif tool == "custom_shape":
+            shape = "custom"
+            names = list(CUSTOM_SHAPE_PRESETS)
+            name = simpledialog.askstring("Своя фигура", "Фигура: " + ", ".join(names), initialvalue=names[0])
+            if name not in CUSTOM_SHAPE_PRESETS:
+                return
+            custom_points = CUSTOM_SHAPE_PRESETS[name]
         stroke_width = int(self.brush_size.get()) if shape in {"line", "bezier"} else 2
         self.run_document_command(
             "Shape layer",
-            lambda: self.doc.add_shape_layer(shape, box, self.foreground, self.background, stroke_width, sides, inner_ratio),
+            lambda: self.doc.add_shape_layer(shape, box, self.foreground, self.background, stroke_width, sides, inner_ratio, custom_points=custom_points),
         )
 
     def clear_selection(self) -> None:
@@ -2281,7 +2374,7 @@ class PhotoRedactorApp(tk.Tk):
     def text_layer_dialog(self, title: str, initial: dict) -> dict | None:
         window = tk.Toplevel(self)
         window.title(title)
-        window.geometry("560x470")
+        window.geometry("640x580")
         window.transient(self)
         window.grab_set()
         result: dict | None = None
@@ -2298,6 +2391,13 @@ class PhotoRedactorApp(tk.Tk):
         tracking_var = tk.IntVar(value=int(initial.get("tracking", 0)))
         align_var = tk.StringVar(value=str(initial.get("align", "left")))
         font_var = tk.StringVar(value=str(initial.get("font_family", "Arial")))
+        bold_var = tk.BooleanVar(value=bool(initial.get("bold", False)))
+        italic_var = tk.BooleanVar(value=bool(initial.get("italic", False)))
+        underline_var = tk.BooleanVar(value=bool(initial.get("underline", False)))
+        path_mode_var = tk.StringVar(value=str(initial.get("path_mode", "none")))
+        path_amount_var = tk.IntVar(value=int(initial.get("path_amount", 0)))
+        baseline_var = tk.IntVar(value=int(initial.get("baseline_shift", 0)))
+        rotation_var = tk.DoubleVar(value=float(initial.get("rotation", 0.0)))
 
         families = sorted(set(tkfont.families()))
         ttk.Label(frame, text="Font").grid(row=1, column=0, sticky=tk.W)
@@ -2312,9 +2412,22 @@ class PhotoRedactorApp(tk.Tk):
         ttk.Spinbox(frame, from_=0, to=500, textvariable=spacing_var, width=10).grid(row=3, column=3, sticky="ew", pady=2)
         ttk.Label(frame, text="Tracking").grid(row=4, column=0, sticky=tk.W)
         ttk.Spinbox(frame, from_=-50, to=500, textvariable=tracking_var, width=8).grid(row=4, column=1, sticky="ew", pady=2)
+        styles = ttk.Frame(frame)
+        styles.grid(row=4, column=2, columnspan=2, sticky="w", padx=(10, 0))
+        ttk.Checkbutton(styles, text="Жирный", variable=bold_var).pack(side=tk.LEFT)
+        ttk.Checkbutton(styles, text="Курсив", variable=italic_var).pack(side=tk.LEFT, padx=(6, 0))
+        ttk.Checkbutton(styles, text="Подчеркнуть", variable=underline_var).pack(side=tk.LEFT, padx=(6, 0))
+        ttk.Label(frame, text="Текст по контуру").grid(row=5, column=0, sticky=tk.W)
+        ttk.Combobox(frame, textvariable=path_mode_var, values=["none", "arc", "wave"], state="readonly").grid(row=5, column=1, sticky="ew", pady=2)
+        ttk.Label(frame, text="Изгиб").grid(row=5, column=2, sticky=tk.W, padx=(10, 0))
+        ttk.Spinbox(frame, from_=-500, to=500, textvariable=path_amount_var, width=10).grid(row=5, column=3, sticky="ew", pady=2)
+        ttk.Label(frame, text="Базовая линия").grid(row=6, column=0, sticky=tk.W)
+        ttk.Spinbox(frame, from_=-500, to=500, textvariable=baseline_var, width=8).grid(row=6, column=1, sticky="ew", pady=2)
+        ttk.Label(frame, text="Поворот").grid(row=6, column=2, sticky=tk.W, padx=(10, 0))
+        ttk.Spinbox(frame, from_=-360, to=360, increment=1, textvariable=rotation_var, width=10).grid(row=6, column=3, sticky="ew", pady=2)
 
         buttons = ttk.Frame(frame)
-        buttons.grid(row=5, column=0, columnspan=4, sticky="e", pady=(12, 0))
+        buttons.grid(row=7, column=0, columnspan=4, sticky="e", pady=(12, 0))
 
         def safe_int(var, default: int, minimum: int = 0) -> int:
             try:
@@ -2334,6 +2447,13 @@ class PhotoRedactorApp(tk.Tk):
                 "align": align_var.get() if align_var.get() in {"left", "center", "right"} else "left",
                 "line_spacing": safe_int(spacing_var, max(2, size // 5), 0),
                 "tracking": safe_int(tracking_var, 0, -50),
+                "bold": bold_var.get(),
+                "italic": italic_var.get(),
+                "underline": underline_var.get(),
+                "path_mode": path_mode_var.get() if path_mode_var.get() in {"none", "arc", "wave"} else "none",
+                "path_amount": safe_int(path_amount_var, 0, -500),
+                "baseline_shift": safe_int(baseline_var, 0, -500),
+                "rotation": float(rotation_var.get()),
             }
             window.destroy()
 
@@ -2406,23 +2526,139 @@ class PhotoRedactorApp(tk.Tk):
         if layer.locked:
             self.status_text("Слой заблокирован")
             return
-        initial = f"{layer.x},{layer.y},{layer.pixels.shape[1]},{layer.pixels.shape[0]},0,false,false"
-        raw = simpledialog.askstring("Free transform", "x,y,width,height,rotation,flipH,flipV:", initialvalue=initial)
-        if not raw:
+        if layer.kind == "text" and layer.text_data is not None:
+            self.transform_text_box()
             return
-        try:
-            parts = [part.strip() for part in raw.split(",")]
-            if len(parts) != 7:
-                raise ValueError
-            x, y, width, height = [int(float(value)) for value in parts[:4]]
-            angle = float(parts[4])
-            flip_h = parts[5].lower() in {"1", "true", "yes", "y", "да", "д"}
-            flip_v = parts[6].lower() in {"1", "true", "yes", "y", "да", "д"}
-        except ValueError:
-            messagebox.showerror("Free transform", "Use: x,y,width,height,rotation,flipH,flipV")
+        data = self.free_transform_dialog(layer)
+        if data is None:
             return
-        self.run_document_command("Free transform", lambda: self.doc.transform_active_layer(x, y, width, height, angle, flip_h, flip_v))
+        self.run_document_command(
+            "Free transform",
+            lambda: self.doc.transform_active_layer(
+                int(data["x"]), int(data["y"]), int(data["width"]), int(data["height"]),
+                float(data["angle"]), bool(data["flip_horizontal"]), bool(data["flip_vertical"]),
+            ),
+        )
         self.refresh()
+
+    def free_transform_dialog(self, layer) -> dict[str, object] | None:
+        dialog = tk.Toplevel(self)
+        dialog.title("Свободная трансформация")
+        dialog.transient(self)
+        dialog.resizable(False, False)
+        dialog.grab_set()
+        result: dict[str, object] | None = None
+        x_var = tk.IntVar(value=int(layer.x))
+        y_var = tk.IntVar(value=int(layer.y))
+        width_var = tk.IntVar(value=int(layer.pixels.shape[1]))
+        height_var = tk.IntVar(value=int(layer.pixels.shape[0]))
+        angle_var = tk.DoubleVar(value=0.0)
+        flip_h_var = tk.BooleanVar(value=False)
+        flip_v_var = tk.BooleanVar(value=False)
+        keep_ratio = tk.BooleanVar(value=True)
+        original_ratio = layer.pixels.shape[1] / max(1, layer.pixels.shape[0])
+
+        canvas = tk.Canvas(dialog, width=500, height=340, background="#22252b", highlightthickness=0, cursor="crosshair")
+        canvas.grid(row=0, column=0, rowspan=9, padx=12, pady=12)
+        source = rgba_array_to_pil(layer.pixels)
+        handle_positions: dict[str, tuple[float, float]] = {}
+        drag_state: dict[str, object] = {"handle": None, "last": (0, 0)}
+
+        def safe_values() -> tuple[int, int, int, int, float]:
+            try:
+                return int(x_var.get()), int(y_var.get()), max(1, int(width_var.get())), max(1, int(height_var.get())), float(angle_var.get())
+            except (tk.TclError, ValueError):
+                return layer.x, layer.y, layer.pixels.shape[1], layer.pixels.shape[0], 0.0
+
+        def preview_geometry() -> tuple[float, float, float]:
+            scale = min(460 / max(1, self.doc.width), 300 / max(1, self.doc.height))
+            return scale, (500 - self.doc.width * scale) / 2, (340 - self.doc.height * scale) / 2
+
+        def redraw(*_args) -> None:
+            x, y, width, height, angle = safe_values()
+            scale, ox, oy = preview_geometry()
+            canvas.delete("all")
+            canvas.create_rectangle(ox, oy, ox + self.doc.width * scale, oy + self.doc.height * scale, fill="#343840", outline="#707680")
+            preview = source.resize((max(1, int(width * scale)), max(1, int(height * scale))), Image.Resampling.BILINEAR)
+            if flip_h_var.get():
+                preview = preview.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
+            if flip_v_var.get():
+                preview = preview.transpose(Image.Transpose.FLIP_TOP_BOTTOM)
+            if abs(angle) > 0.001:
+                preview = preview.rotate(-angle, expand=True, resample=Image.Resampling.BICUBIC)
+            self._transform_preview_image = ImageTk.PhotoImage(preview)
+            canvas.create_image(ox + (x + width / 2) * scale, oy + (y + height / 2) * scale, image=self._transform_preview_image)
+            x1, y1 = ox + x * scale, oy + y * scale
+            x2, y2 = ox + (x + width) * scale, oy + (y + height) * scale
+            canvas.create_rectangle(x1, y1, x2, y2, outline="#50e3ff", width=2, dash=(5, 3))
+            positions = {
+                "nw": (x1, y1), "n": ((x1 + x2) / 2, y1), "ne": (x2, y1), "e": (x2, (y1 + y2) / 2),
+                "se": (x2, y2), "s": ((x1 + x2) / 2, y2), "sw": (x1, y2), "w": (x1, (y1 + y2) / 2),
+            }
+            handle_positions.clear(); handle_positions.update(positions)
+            for hx, hy in positions.values():
+                canvas.create_rectangle(hx - 5, hy - 5, hx + 5, hy + 5, fill="#f7f9fb", outline="#167d96")
+
+        def press(event) -> None:
+            nearest = None
+            distance = 12.0
+            for name, (hx, hy) in handle_positions.items():
+                current = ((event.x - hx) ** 2 + (event.y - hy) ** 2) ** 0.5
+                if current < distance:
+                    nearest, distance = name, current
+            if nearest is None:
+                x, y, width, height, _angle = safe_values()
+                scale, ox, oy = preview_geometry()
+                if ox + x * scale <= event.x <= ox + (x + width) * scale and oy + y * scale <= event.y <= oy + (y + height) * scale:
+                    nearest = "move"
+            drag_state["handle"] = nearest
+            drag_state["last"] = (event.x, event.y)
+
+        def drag(event) -> None:
+            handle = drag_state.get("handle")
+            if not handle:
+                return
+            last_x, last_y = drag_state["last"]
+            scale, _ox, _oy = preview_geometry()
+            dx, dy = (event.x - last_x) / scale, (event.y - last_y) / scale
+            x, y, width, height, _angle = safe_values()
+            if handle == "move":
+                x += round(dx); y += round(dy)
+            else:
+                if "w" in str(handle): x += round(dx); width -= round(dx)
+                if "e" in str(handle): width += round(dx)
+                if "n" in str(handle): y += round(dy); height -= round(dy)
+                if "s" in str(handle): height += round(dy)
+                width, height = max(1, width), max(1, height)
+                if keep_ratio.get() and str(handle) in {"nw", "ne", "se", "sw"}:
+                    if abs(dx) >= abs(dy): height = max(1, round(width / original_ratio))
+                    else: width = max(1, round(height * original_ratio))
+            x_var.set(x); y_var.set(y); width_var.set(width); height_var.set(height)
+            drag_state["last"] = (event.x, event.y)
+
+        for row, (label, variable) in enumerate([("X", x_var), ("Y", y_var), ("Ширина", width_var), ("Высота", height_var), ("Поворот", angle_var)]):
+            ttk.Label(dialog, text=label).grid(row=row, column=1, sticky="w", padx=(0, 8), pady=(12 if row == 0 else 4, 0))
+            ttk.Spinbox(dialog, textvariable=variable, from_=-100000 if row < 2 else 1, to=100000, width=12).grid(row=row, column=2, sticky="ew", padx=(0, 12), pady=(12 if row == 0 else 4, 0))
+        ttk.Checkbutton(dialog, text="Сохранять пропорции", variable=keep_ratio).grid(row=5, column=1, columnspan=2, sticky="w", pady=(8, 0))
+        ttk.Checkbutton(dialog, text="Отразить по горизонтали", variable=flip_h_var, command=redraw).grid(row=6, column=1, columnspan=2, sticky="w")
+        ttk.Checkbutton(dialog, text="Отразить по вертикали", variable=flip_v_var, command=redraw).grid(row=7, column=1, columnspan=2, sticky="w")
+        buttons = ttk.Frame(dialog)
+        buttons.grid(row=8, column=1, columnspan=2, sticky="e", padx=12, pady=12)
+
+        def accept() -> None:
+            nonlocal result
+            x, y, width, height, angle = safe_values()
+            result = {"x": x, "y": y, "width": width, "height": height, "angle": angle, "flip_horizontal": flip_h_var.get(), "flip_vertical": flip_v_var.get()}
+            dialog.destroy()
+
+        ttk.Button(buttons, text="ОК", command=accept).pack(side=tk.RIGHT, padx=(6, 0))
+        ttk.Button(buttons, text="Отмена", command=dialog.destroy).pack(side=tk.RIGHT)
+        canvas.bind("<ButtonPress-1>", press)
+        canvas.bind("<B1-Motion>", drag)
+        for variable in [x_var, y_var, width_var, height_var, angle_var]: variable.trace_add("write", redraw)
+        redraw()
+        dialog.wait_window()
+        return result
 
     def transform_selected_pixels(self) -> None:
         layer = self.doc.layer
@@ -2486,27 +2722,65 @@ class PhotoRedactorApp(tk.Tk):
         if layer.locked:
             self.status_text("Слой заблокирован")
             return
-        raw = simpledialog.askstring(
-            "Деформация слоя",
-            "mode,amount,wavelength: arc, arc_vertical, bulge, pinch, wave_x, wave_y",
-            initialvalue="arc,0.35,96",
-        )
-        if not raw:
+        data = self.warp_layer_dialog(layer)
+        if data is None:
             return
-        try:
-            parts = [part.strip() for part in raw.split(",")]
-            if len(parts) not in {2, 3}:
-                raise ValueError
-            mode = parts[0].lower()
-            if mode not in {"arc", "arc_vertical", "bulge", "pinch", "wave_x", "wave_y"}:
-                raise ValueError
-            amount = float(parts[1])
-            wavelength = float(parts[2]) if len(parts) == 3 else 96.0
-        except ValueError:
-            messagebox.showerror("Деформация слоя", "Используйте: mode,amount,wavelength. Пример: arc,0.35,96")
-            return
-        self.run_document_command("Warp layer", lambda: self.doc.warp_active_layer(mode, amount, wavelength))
+        self.run_document_command("Warp layer", lambda: self.doc.warp_active_layer(str(data["mode"]), float(data["amount"]), float(data["wavelength"])))
         self.refresh()
+
+    def warp_layer_dialog(self, layer) -> dict[str, object] | None:
+        dialog = tk.Toplevel(self)
+        dialog.title("Деформация слоя")
+        dialog.transient(self)
+        dialog.resizable(False, False)
+        dialog.grab_set()
+        result: dict[str, object] | None = None
+        mode = tk.StringVar(value="arc")
+        amount = tk.DoubleVar(value=0.35)
+        wavelength = tk.DoubleVar(value=96.0)
+        preview = ttk.Label(dialog)
+        preview.grid(row=0, column=0, rowspan=5, padx=12, pady=12)
+        ttk.Label(dialog, text="Режим").grid(row=0, column=1, sticky="w", pady=(12, 2))
+        mode_box = ttk.Combobox(dialog, textvariable=mode, values=["arc", "arc_vertical", "bulge", "pinch", "wave_x", "wave_y"], state="readonly", width=18)
+        mode_box.grid(row=0, column=2, sticky="ew", padx=(8, 12), pady=(12, 2))
+        ttk.Label(dialog, text="Сила").grid(row=1, column=1, sticky="w")
+        ttk.Scale(dialog, from_=-1.0, to=1.0, variable=amount, orient=tk.HORIZONTAL).grid(row=1, column=2, sticky="ew", padx=(8, 12))
+        ttk.Label(dialog, text="Длина волны").grid(row=2, column=1, sticky="w")
+        ttk.Scale(dialog, from_=8, to=512, variable=wavelength, orient=tk.HORIZONTAL).grid(row=2, column=2, sticky="ew", padx=(8, 12))
+        values = ttk.Label(dialog, text="")
+        values.grid(row=3, column=1, columnspan=2, sticky="w", pady=(6, 0))
+        source = rgba_array_to_pil(layer.pixels)
+        source.thumbnail((220, 220), Image.Resampling.LANCZOS)
+        source_array = np.array(source.convert("RGBA"), dtype=np.uint8)
+
+        def update_preview(*_args) -> None:
+            try:
+                shown = warp_pixels(source_array, mode.get(), float(amount.get()), float(wavelength.get()), cv2.INTER_CUBIC)
+            except (tk.TclError, ValueError):
+                return
+            canvas = Image.new("RGBA", (220, 220), (44, 46, 52, 255))
+            image = rgba_array_to_pil(shown)
+            canvas.alpha_composite(image, ((220 - image.width) // 2, (220 - image.height) // 2))
+            self._warp_preview_image = ImageTk.PhotoImage(canvas)
+            preview.configure(image=self._warp_preview_image)
+            values.configure(text=f"Сила: {amount.get():.2f}   Волна: {wavelength.get():.0f}")
+
+        buttons = ttk.Frame(dialog)
+        buttons.grid(row=4, column=1, columnspan=2, sticky="e", padx=12, pady=12)
+
+        def accept() -> None:
+            nonlocal result
+            result = {"mode": mode.get(), "amount": float(amount.get()), "wavelength": float(wavelength.get())}
+            dialog.destroy()
+
+        ttk.Button(buttons, text="ОК", command=accept).pack(side=tk.RIGHT, padx=(6, 0))
+        ttk.Button(buttons, text="Отмена", command=dialog.destroy).pack(side=tk.RIGHT)
+        mode_box.bind("<<ComboboxSelected>>", update_preview)
+        amount.trace_add("write", update_preview)
+        wavelength.trace_add("write", update_preview)
+        update_preview()
+        dialog.wait_window()
+        return result
 
     def toggle_clipping_mask(self) -> None:
         if self.doc.active_layer <= 0:
@@ -3199,6 +3473,39 @@ class PhotoRedactorApp(tk.Tk):
                 align=data["align"],
                 line_spacing=data["line_spacing"],
                 tracking=data["tracking"],
+                bold=data["bold"],
+                italic=data["italic"],
+                underline=data["underline"],
+                path_mode=data["path_mode"],
+                path_amount=data["path_amount"],
+                baseline_shift=data["baseline_shift"],
+                rotation=data["rotation"],
+            ),
+        )
+        self.refresh()
+
+    def transform_text_box(self) -> None:
+        layer = self.doc.layer
+        if layer.kind != "text" or layer.text_data is None or not np.any(layer.pixels[:, :, 3]):
+            messagebox.showinfo("Текстовый блок", "Выберите непустой текстовый слой.")
+            return
+        ys, xs = np.where(layer.pixels[:, :, 3] > 0)
+        x1, y1, x2, y2 = int(xs.min()), int(ys.min()), int(xs.max() + 1), int(ys.max() + 1)
+
+        class TextPreview:
+            pass
+
+        preview = TextPreview()
+        preview.x, preview.y = x1, y1
+        preview.pixels = layer.pixels[y1:y2, x1:x2].copy()
+        data = self.free_transform_dialog(preview)
+        if data is None:
+            return
+        self.run_document_command(
+            "Transform text box",
+            lambda: self.doc.transform_active_text_box(
+                int(data["x"]), int(data["y"]), int(data["width"]), int(data["height"]),
+                float(data["angle"]), bool(data["flip_horizontal"]), bool(data["flip_vertical"]),
             ),
         )
         self.refresh()
@@ -3221,7 +3528,7 @@ class PhotoRedactorApp(tk.Tk):
             if len(parts) not in {4, 12}:
                 raise ValueError
             shape = parts[0].lower()
-            if shape not in {"rectangle", "ellipse", "line", "bezier", "polygon", "star"}:
+            if shape not in {"rectangle", "ellipse", "line", "bezier", "polygon", "star", "custom"}:
                 raise ValueError
             stroke_width = max(0, int(float(parts[1])))
             sides = max(3, int(float(parts[2])))
@@ -3238,6 +3545,77 @@ class PhotoRedactorApp(tk.Tk):
             lambda: self.doc.edit_shape_layer(shape=shape, fill=self.foreground, stroke=self.background, stroke_width=stroke_width, sides=sides, inner_ratio=inner_ratio, control_points=new_control_points),
         )
         self.refresh()
+
+    def edit_bezier_points(self) -> None:
+        layer = self.doc.layer
+        if layer.kind != "shape" or layer.shape_data is None or str(layer.shape_data.get("shape")) != "bezier":
+            messagebox.showinfo("Точки Безье", "Выберите слой с кривой Безье.")
+            return
+        raw_points = layer.shape_data.get("control_points")
+        if not isinstance(raw_points, list) or len(raw_points) != 4:
+            x1, y1, x2, y2 = [float(v) for v in layer.shape_data.get("box", [0, 0, 1, 1])]
+            raw_points = [[x1, y2], [x1, y1], [x2, y1], [x2, y2]]
+        points = [[float(point[0]), float(point[1])] for point in raw_points]
+        dialog = tk.Toplevel(self)
+        dialog.title("Редактор точек Безье")
+        dialog.transient(self)
+        dialog.resizable(False, False)
+        dialog.grab_set()
+        canvas = tk.Canvas(dialog, width=620, height=440, background="#22252b", highlightthickness=0, cursor="crosshair")
+        canvas.pack(padx=12, pady=(12, 6))
+        buttons = ttk.Frame(dialog)
+        buttons.pack(fill=tk.X, padx=12, pady=(0, 12))
+        active_point: list[int | None] = [None]
+        scale = min(580 / max(1, self.doc.width), 400 / max(1, self.doc.height))
+        ox, oy = (620 - self.doc.width * scale) / 2, (440 - self.doc.height * scale) / 2
+        background = rgba_array_to_pil(self.doc.composite(checker=True)).resize((max(1, round(self.doc.width * scale)), max(1, round(self.doc.height * scale))), Image.Resampling.BILINEAR)
+        self._bezier_preview_image = ImageTk.PhotoImage(background)
+
+        def to_canvas(point: list[float] | tuple[float, float]) -> tuple[float, float]:
+            return ox + float(point[0]) * scale, oy + float(point[1]) * scale
+
+        def redraw() -> None:
+            canvas.delete("all")
+            canvas.create_image(ox, oy, image=self._bezier_preview_image, anchor=tk.NW)
+            p = [to_canvas(point) for point in points]
+            canvas.create_line(*p[0], *p[1], fill="#ffd166", dash=(4, 3), width=1)
+            canvas.create_line(*p[2], *p[3], fill="#ffd166", dash=(4, 3), width=1)
+            curve = bezier_curve_points(points, tuple(int(v) for v in layer.shape_data.get("box", [0, 0, 1, 1])), 96)
+            coords = [value for point in curve for value in to_canvas(point)]
+            canvas.create_line(*coords, fill="#50e3ff", width=3, smooth=True)
+            for index, (px, py) in enumerate(p):
+                color = "#50e3ff" if index in {0, 3} else "#ffd166"
+                canvas.create_oval(px - 7, py - 7, px + 7, py + 7, fill=color, outline="#111318", width=2)
+                canvas.create_text(px, py - 14, text=f"P{index}", fill=color)
+
+        def press(event) -> None:
+            active_point[0] = None
+            best = 14.0
+            for index, point in enumerate(points):
+                px, py = to_canvas(point)
+                distance = ((event.x - px) ** 2 + (event.y - py) ** 2) ** 0.5
+                if distance < best:
+                    active_point[0], best = index, distance
+
+        def drag(event) -> None:
+            if active_point[0] is None:
+                return
+            index = int(active_point[0])
+            points[index] = [(event.x - ox) / scale, (event.y - oy) / scale]
+            redraw()
+
+        def accept() -> None:
+            self.run_document_command("Edit Bezier points", lambda: self.doc.edit_shape_layer(control_points=[tuple(point) for point in points]))
+            dialog.destroy()
+            self.refresh()
+
+        ttk.Button(buttons, text="ОК", command=accept).pack(side=tk.RIGHT, padx=(6, 0))
+        ttk.Button(buttons, text="Отмена", command=dialog.destroy).pack(side=tk.RIGHT)
+        ToolTip(canvas, "Перетаскивайте конечные P0/P3 и управляющие P1/P2.")
+        canvas.bind("<ButtonPress-1>", press)
+        canvas.bind("<B1-Motion>", drag)
+        redraw()
+        dialog.wait_window()
 
     def boolean_shape_layers(self) -> None:
         if self.doc.active_layer <= 0:
@@ -3487,8 +3865,8 @@ class PhotoRedactorApp(tk.Tk):
         preview = ttk.Label(dialog)
         preview.grid(row=0, column=0, rowspan=8, padx=12, pady=12, sticky="n")
         ttk.Label(dialog, text="Пресет").grid(row=0, column=1, sticky="w", padx=(0, 12), pady=(12, 4))
-        adjustment_preset = tk.StringVar(value=next(iter(ADJUSTMENT_PRESETS)))
-        preset_box = ttk.Combobox(dialog, textvariable=adjustment_preset, values=list(ADJUSTMENT_PRESETS), state="readonly", width=22)
+        adjustment_preset = tk.StringVar(value=next(iter(self.adjustment_presets)))
+        preset_box = ttk.Combobox(dialog, textvariable=adjustment_preset, values=list(self.adjustment_presets), state="readonly", width=22)
         preset_box.grid(row=0, column=2, sticky="ew", padx=(0, 12), pady=(12, 4))
         ttk.Button(dialog, text="Применить пресет", command=lambda: apply_adjustment_preset()).grid(row=1, column=1, columnspan=2, sticky="ew", padx=(0, 12), pady=(0, 8))
         ttk.Label(dialog, text="\u0422\u0438\u043f").grid(row=2, column=1, sticky="w", padx=(0, 12), pady=(4, 4))
@@ -3546,7 +3924,7 @@ class PhotoRedactorApp(tk.Tk):
             update_preview()
 
         def apply_adjustment_preset() -> None:
-            preset = ADJUSTMENT_PRESETS.get(adjustment_preset.get())
+            preset = self.adjustment_presets.get(adjustment_preset.get())
             if preset is None:
                 return
             kind = str(preset.get("type", "brightness_contrast"))
@@ -3555,6 +3933,41 @@ class PhotoRedactorApp(tk.Tk):
             adjustment_type.set(kind)
             set_values_for_kind(kind, preset)
             update_preview()
+
+        def import_adjustment_presets() -> None:
+            path = filedialog.askopenfilename(filetypes=[("PhotoRedactor presets", "*.json"), ("JSON", "*.json")], parent=dialog)
+            if not path:
+                return
+            try:
+                payload = json.loads(Path(path).read_text(encoding="utf-8"))
+                presets = payload.get("presets", payload) if isinstance(payload, dict) else {}
+                added = 0
+                for name, preset in presets.items():
+                    if isinstance(name, str) and isinstance(preset, dict) and str(preset.get("type", "")) in ADJUSTMENT_TYPES:
+                        self.adjustment_presets[name] = dict(preset)
+                        added += 1
+                if added == 0:
+                    raise ValueError("Файл не содержит поддерживаемых пресетов.")
+                preset_box.configure(values=list(self.adjustment_presets))
+                adjustment_preset.set(next(reversed(self.adjustment_presets)))
+                apply_adjustment_preset()
+            except (OSError, ValueError, json.JSONDecodeError) as exc:
+                messagebox.showerror("Импорт пресетов", str(exc), parent=dialog)
+
+        def export_adjustment_presets() -> None:
+            name = simpledialog.askstring("Сохранить пресет", "Название пресета:", initialvalue=self.adjustment_name(current_adjustment()), parent=dialog)
+            if not name:
+                return
+            self.adjustment_presets[name] = current_adjustment()
+            preset_box.configure(values=list(self.adjustment_presets))
+            adjustment_preset.set(name)
+            path = filedialog.asksaveasfilename(defaultextension=".json", filetypes=[("PhotoRedactor presets", "*.json"), ("JSON", "*.json")], parent=dialog)
+            if path:
+                payload = {"format": "PhotoRedactor adjustment presets", "version": 1, "presets": self.adjustment_presets}
+                try:
+                    Path(path).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+                except OSError as exc:
+                    messagebox.showerror("Экспорт пресетов", str(exc), parent=dialog)
 
         def accept() -> None:
             nonlocal result
@@ -3570,6 +3983,8 @@ class PhotoRedactorApp(tk.Tk):
             value.trace_add("write", update_preview)
         ttk.Button(buttons, text="\u041e\u041a", command=accept).pack(side=tk.RIGHT, padx=(6, 0))
         ttk.Button(buttons, text="\u041e\u0442\u043c\u0435\u043d\u0430", command=cancel).pack(side=tk.RIGHT)
+        ttk.Button(buttons, text="Экспорт", command=export_adjustment_presets).pack(side=tk.LEFT, padx=(0, 4))
+        ttk.Button(buttons, text="Импорт", command=import_adjustment_presets).pack(side=tk.LEFT)
         dialog.protocol("WM_DELETE_WINDOW", cancel)
         set_values_for_kind(adjustment_type.get(), initial)
         update_preview()
@@ -3582,6 +3997,10 @@ class PhotoRedactorApp(tk.Tk):
             return [("\u042f\u0440\u043a\u043e\u0441\u0442\u044c", float(adjustment.get("brightness", 0)), -255, 255, 1), ("\u041a\u043e\u043d\u0442\u0440\u0430\u0441\u0442", float(adjustment.get("contrast", 1.0)), 0, 5, 0.05)]
         if kind == "saturation":
             return [("\u041d\u0430\u0441\u044b\u0449\u0435\u043d\u043d\u043e\u0441\u0442\u044c", float(adjustment.get("saturation", 1.0)), 0, 5, 0.05)]
+        if kind == "vibrance":
+            return [("Вибрация", float(adjustment.get("vibrance", 0.0)), -1, 1, 0.05), ("Насыщенность", float(adjustment.get("saturation", 1.0)), 0, 3, 0.05)]
+        if kind == "temperature_tint":
+            return [("Температура", float(adjustment.get("temperature", 0.0)), -100, 100, 1), ("Оттенок", float(adjustment.get("tint", 0.0)), -100, 100, 1)]
         if kind == "hue_saturation":
             return [("\u0422\u043e\u043d", float(adjustment.get("hue", 0)), -180, 180, 1), ("\u041d\u0430\u0441\u044b\u0449\u0435\u043d\u043d\u043e\u0441\u0442\u044c", float(adjustment.get("saturation", 1.0)), 0, 5, 0.05), ("\u0421\u0432\u0435\u0442\u043b\u043e\u0442\u0430", float(adjustment.get("lightness", 0)), -255, 255, 1)]
         if kind == "exposure":
@@ -3610,6 +4029,10 @@ class PhotoRedactorApp(tk.Tk):
             return {"type": kind, "brightness": int(values[0]), "contrast": float(values[1])}
         if kind == "saturation":
             return {"type": kind, "saturation": float(values[0])}
+        if kind == "vibrance":
+            return {"type": kind, "vibrance": float(values[0]), "saturation": float(values[1])}
+        if kind == "temperature_tint":
+            return {"type": kind, "temperature": float(values[0]), "tint": float(values[1])}
         if kind == "hue_saturation":
             return {"type": kind, "hue": int(values[0]), "saturation": float(values[1]), "lightness": int(values[2])}
         if kind == "exposure":
@@ -3641,6 +4064,10 @@ class PhotoRedactorApp(tk.Tk):
             return adjust_brightness_contrast(arr, int(adjustment.get("brightness", 0)), float(adjustment.get("contrast", 1.0)))
         if kind == "saturation":
             return adjust_saturation(arr, float(adjustment.get("saturation", 1.0)))
+        if kind == "vibrance":
+            return adjust_vibrance(arr, float(adjustment.get("vibrance", 0.0)), float(adjustment.get("saturation", 1.0)))
+        if kind == "temperature_tint":
+            return adjust_temperature_tint(arr, float(adjustment.get("temperature", 0.0)), float(adjustment.get("tint", 0.0)))
         if kind == "hue_saturation":
             return adjust_hue_saturation(arr, int(adjustment.get("hue", 0)), float(adjustment.get("saturation", 1.0)), int(adjustment.get("lightness", 0)))
         if kind == "exposure":

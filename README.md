@@ -8,23 +8,23 @@ This repository starts with a real working editor and an architecture intended t
 - custom project format (`.prdx`)
 - PNG/JPEG/WebP/BMP/TIFF import and export
 - document presets, recent files, embedded and linked image placement, linked layer update/relink, loading several files as layers and layer export
-- brush, eraser, fill, gradient, editable paragraph text layers, crop, rectangular/elliptical/freehand/magnetic/polygon selection, persistent add/subtract/intersect modes, quick selection brush with live result-mask, cursor and image-aware edge refinement, magic wand, color range, move
+- smooth cached brush strokes, eraser, fill, gradient, editable paragraph/path text layers, crop, rectangular/elliptical/freehand/magnetic/polygon selection, persistent add/subtract/intersect modes, quick selection brush with live result-mask, cursor and image-aware edge refinement, magic wand, color range, move
 - layer opacity, visibility, duplication, merge, flatten
 - layer locks, raster layer masks, mask thumbnails, thumbnail-click mask channel editing, red-overlay/black-white mask preview, linked/unlinked mask movement, mask painting, density/feather controls, live edge refinement with smart image-aware correction and blend modes
 - clipping masks, adjustment-layer clipping and basic layer styles: stroke, drop shadow and outer glow
 - non-destructive per-layer filter stack with a visual editor, built-in/importable/exportable presets, preview, reorder controls, per-filter enable/opacity/blend modes/masks and blur, sharpen, noise, median, edge and emboss filters
 - real selection mask with select all, invert, feather, smooth, grow, shrink, border/refine, smart edge cleanup/correction, subject/background/sky selection, richer Select and Mask previews/output including edge confidence, opaque-pixel selection, single row/column selection, magnetic edge snapping and saved alpha selections
-- numeric Free Transform, selected-pixel transform, perspective transform and warp presets
+- visual Free Transform with eight drag handles, selected-pixel transform, perspective transform and live warp preview/presets
 - local retouch tools and presets: blur, sharpen, dodge, burn, clone stamp, healing brush and interactive patch tool
 - content-aware fill for selected areas, patch selection, edge-aware cleanup and red-eye reduction
-- editable shape layers for rectangles, ellipses, lines, Bezier curves, polygons, stars and boolean shape combinations
-- text layer font, size, block width, wrapping, alignment, line-spacing and tracking controls
+- editable shape layers for rectangles, ellipses, lines, custom shapes, Bezier curves with draggable control points, polygons, stars and boolean shape combinations
+- text layer font, size, block width, wrapping, alignment, line-spacing, tracking, bold/italic/underline, baseline shift, text-on-arc/wave and editable transform handles
 - grid and guide overlays plus RGB/Red/Green/Blue/Alpha channel preview
 - Russian main interface labels and hover tooltips for the tool palette
 - recovery autosave and manual recovery opening
 - simple action recording to JSON logs
 - metadata/EXIF view, histogram, image statistics and eyedropper
-- non-destructive adjustment layers with presets for brightness/contrast, saturation, hue/saturation, exposure, color balance, levels, curves, threshold, posterize, invert and grayscale
+- non-destructive adjustment layers with importable/exportable preset libraries for brightness/contrast, saturation, vibrance, temperature/tint, hue/saturation, exposure, color balance, levels, curves, threshold, posterize, invert and grayscale
 - undo/redo
 - command-based undo for strokes, moves and layer edits
 - `.prdx` projects with `manifest.json` and separate layer PNG files, without Base64-packed layers
