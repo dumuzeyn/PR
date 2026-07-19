@@ -39,11 +39,13 @@ from .core import (
     encode_png,
     edge_aware_cleanup,
     flood_fill,
+    frequency_separation,
     image_statistics,
     effective_layer_mask,
     levels,
     local_retouch,
     paste_mask,
+    portrait_cleanup,
     refine_selection_mask,
     rgba_array_to_pil,
     reduce_red_eye,
@@ -53,6 +55,7 @@ from .core import (
     union_rect,
     warp_pixels,
     sharpen,
+    spot_heal,
 )
 from .history import DocumentStateCommand, History, LayerBlendModeCommand, LayerMoveCommand, LayerOpacityCommand, MaskPatchCommand, PixelPatchCommand, SelectionMaskCommand
 from .ui.tool_options import ToolOptionsPanel
@@ -119,6 +122,7 @@ TOOL_DEFINITIONS = [
     ("Затемнитель", "burn", "Затемняет область под кистью."),
     ("Штамп", "clone", "Копирует пиксели из источника. Alt+клик задает источник."),
     ("Лечение", "healing", "Копирует источник и подгоняет цвет под место назначения."),
+    ("Точечное восстановление", "spot_healing", "Автоматически удаляет мелкие дефекты без выбора источника."),
     ("Заплатка", "patch", "Перетащите активное выделение на область-источник для ретуши."),
     ("Заливка", "fill", "Заполняет связанную область выбранным цветом."),
     ("Градиент", "gradient", "Растягивает переход от переднего цвета к фоновому."),
@@ -143,10 +147,12 @@ TOOL_DEFINITIONS = [
 ]
 
 RETOUCH_PRESETS = {
-    "Мягкая ретушь": {"brush_size": 18, "opacity": 0.22, "tolerance": 18},
-    "Средняя ретушь": {"brush_size": 34, "opacity": 0.45, "tolerance": 28},
-    "Сильная ретушь": {"brush_size": 58, "opacity": 0.72, "tolerance": 44},
-    "Детальная ретушь": {"brush_size": 9, "opacity": 0.34, "tolerance": 12},
+    "Мягкая ретушь": {"brush_size": 18, "opacity": 0.22, "tolerance": 18, "tool": "healing"},
+    "Средняя ретушь": {"brush_size": 34, "opacity": 0.45, "tolerance": 28, "tool": "healing"},
+    "Сильная ретушь": {"brush_size": 58, "opacity": 0.72, "tolerance": 44, "tool": "healing"},
+    "Детальная ретушь": {"brush_size": 9, "opacity": 0.34, "tolerance": 12, "tool": "healing"},
+    "Мелкие дефекты": {"brush_size": 6, "opacity": 0.95, "tolerance": 12, "tool": "spot_healing"},
+    "Точечные пятна": {"brush_size": 14, "opacity": 0.9, "tolerance": 20, "tool": "spot_healing"},
 }
 
 CUSTOM_SHAPE_PRESETS = {
@@ -329,6 +335,8 @@ class PhotoRedactorApp(tk.Tk):
         self._transform_preview_image: ImageTk.PhotoImage | None = None
         self._warp_preview_image: ImageTk.PhotoImage | None = None
         self._bezier_preview_image: ImageTk.PhotoImage | None = None
+        self._frequency_preview_images: list[ImageTk.PhotoImage] = []
+        self._portrait_preview_images: list[ImageTk.PhotoImage] = []
         self._canvas_image_id: int | None = None
         self._canvas_origin = (0, 0)
         self._render_after_id: str | None = None
@@ -364,6 +372,8 @@ class PhotoRedactorApp(tk.Tk):
                 self.recent_files = [str(path) for path in data.get("recent_files", []) if Path(path).exists()]
                 self.tool_order = normalize_tool_order(data.get("tool_order"), TOOL_DEFINITIONS)
                 self.visible_tools = normalize_visible_tools(data.get("visible_tools"), self.tool_order)
+                if int(data.get("tool_schema_version", 1)) < 2 and "spot_healing" not in self.visible_tools:
+                    self.visible_tools.append("spot_healing")
                 self.tool_pane_position = int(data.get("tool_pane_position", self.tool_pane_position))
                 if self.tool.get() not in self.tool_order:
                     self.tool.set(self.visible_tools[0])
@@ -387,6 +397,7 @@ class PhotoRedactorApp(tk.Tk):
                         "recent_files": self.recent_files[:12],
                         "tool_order": self.tool_order,
                         "visible_tools": self.visible_tools,
+                        "tool_schema_version": 2,
                         "tool_pane_position": self.tool_pane_position,
                     },
                     ensure_ascii=False,
@@ -599,6 +610,15 @@ class PhotoRedactorApp(tk.Tk):
         filters.add_command(label="Удаление красных глаз", command=self.filter_red_eye)
         filters.add_command(label="Заплатка из источника", command=self.filter_patch_selection)
 
+        retouch = tk.Menu(menu, tearoff=False)
+        menu.add_cascade(label="Ретушь", menu=retouch)
+        retouch.add_command(label="Частотное разложение", command=self.frequency_separation_layers)
+        retouch.add_command(label="Портретная обработка", command=self.portrait_cleanup_layer)
+        retouch.add_separator()
+        retouch.add_command(label="Выбрать точечное восстановление", command=lambda: self.tool.set("spot_healing"))
+        retouch.add_command(label="Удаление красных глаз", command=self.filter_red_eye)
+        retouch.add_command(label="Заплатка из источника", command=self.filter_patch_selection)
+
         analysis = tk.Menu(menu, tearoff=False)
         menu.add_cascade(label="Анализ", menu=analysis)
         analysis.add_command(label="Статистика изображения", command=self.show_image_statistics)
@@ -788,8 +808,9 @@ class PhotoRedactorApp(tk.Tk):
         self.brush_size.set(int(preset["brush_size"]))
         self.opacity.set(float(preset["opacity"]))
         self.tolerance.set(int(preset["tolerance"]))
-        if self.tool.get() not in {"blur_tool", "sharpen_tool", "dodge", "burn", "clone", "healing"}:
-            self.tool.set("healing")
+        preset_tool = str(preset.get("tool", "healing"))
+        if preset_tool in {"blur_tool", "sharpen_tool", "dodge", "burn", "clone", "healing", "spot_healing"}:
+            self.tool.set(preset_tool)
         self.status_text(f"Пресет ретуши: {self.retouch_preset.get()}")
 
     def _build_panels(self, parent: ttk.Frame) -> None:
@@ -1142,7 +1163,7 @@ class PhotoRedactorApp(tk.Tk):
 
     @staticmethod
     def brush_preview_tools() -> set[str]:
-        return {"brush", "eraser", "blur_tool", "sharpen_tool", "dodge", "burn", "clone", "healing", "quick_selection"}
+        return {"brush", "eraser", "blur_tool", "sharpen_tool", "dodge", "burn", "clone", "healing", "spot_healing", "quick_selection"}
 
     def pointer_motion(self, event) -> None:
         self._last_pointer_event = event
@@ -1306,7 +1327,7 @@ class PhotoRedactorApp(tk.Tk):
         self.drag_start = point
         self.last_point = point
         tool = self.tool.get()
-        if tool in ["brush", "eraser", "blur_tool", "sharpen_tool", "dodge", "burn", "clone", "healing"]:
+        if tool in ["brush", "eraser", "blur_tool", "sharpen_tool", "dodge", "burn", "clone", "healing", "spot_healing"]:
             if tool in ["clone", "healing"]:
                 if event.state & 0x0008:
                     self._clone_source = point
@@ -1394,7 +1415,7 @@ class PhotoRedactorApp(tk.Tk):
             return
         point = self.canvas_to_doc(event)
         tool = self.tool.get()
-        if tool in ["brush", "eraser", "blur_tool", "sharpen_tool", "dodge", "burn", "clone", "healing"]:
+        if tool in ["brush", "eraser", "blur_tool", "sharpen_tool", "dodge", "burn", "clone", "healing", "spot_healing"]:
             self.paint_line(self.last_point or point, point)
             self.last_point = point
         elif tool == "move" and self.drag_start:
@@ -1428,7 +1449,7 @@ class PhotoRedactorApp(tk.Tk):
             return
         point = self.canvas_to_doc(event)
         tool = self.tool.get()
-        if tool in ["brush", "eraser", "blur_tool", "sharpen_tool", "dodge", "burn", "clone", "healing"]:
+        if tool in ["brush", "eraser", "blur_tool", "sharpen_tool", "dodge", "burn", "clone", "healing", "spot_healing"]:
             self.end_stroke(f"{tool.title()} stroke")
             self._clone_anchor_target = None
             self._clone_anchor_source = None
@@ -1514,6 +1535,8 @@ class PhotoRedactorApp(tk.Tk):
     def brush_local_rect(self, point: tuple[int, int]) -> tuple[int, int, int, int] | None:
         layer = self.doc.layer
         radius = int(self.brush_size.get())
+        if self.tool.get() == "spot_healing":
+            radius *= 2
         lx, ly = point[0] - layer.x, point[1] - layer.y
         if lx < -radius or ly < -radius or lx >= layer.pixels.shape[1] + radius or ly >= layer.pixels.shape[0] + radius:
             return None
@@ -1580,7 +1603,9 @@ class PhotoRedactorApp(tk.Tk):
         self.capture_stroke_before(self.brush_local_rect(point))
         tool = self.tool.get()
         selection_mask = self._stroke_selection_mask
-        if tool in ["clone", "healing"]:
+        if tool == "spot_healing":
+            spot_heal(self.doc.layer, point[0], point[1], int(self.brush_size.get()), float(self.opacity.get()), selection_mask)
+        elif tool in ["clone", "healing"]:
             source = self.clone_source_for_point(point)
             if source is not None:
                 clone_or_heal(self.doc.layer, source[0], source[1], point[0], point[1], int(self.brush_size.get()), float(self.opacity.get()), tool == "healing", selection_mask)
@@ -1606,8 +1631,9 @@ class PhotoRedactorApp(tk.Tk):
     def paint_line(self, start: tuple[int, int], end: tuple[int, int]) -> None:
         radius = max(1, int(self.brush_size.get()))
         distance = ((end[0] - start[0]) ** 2 + (end[1] - start[1]) ** 2) ** 0.5
-        steps = max(1, int(np.ceil(distance / max(1.0, radius * 0.45))))
         tool = self.tool.get()
+        spacing = radius * (0.9 if tool == "spot_healing" else 0.45)
+        steps = max(1, int(np.ceil(distance / max(1.0, spacing))))
         selection_mask = self._stroke_selection_mask
         opacity = float(self.opacity.get())
         for i in range(1, steps + 1):
@@ -1615,7 +1641,9 @@ class PhotoRedactorApp(tk.Tk):
             x = round(start[0] * (1 - t) + end[0] * t)
             y = round(start[1] * (1 - t) + end[1] * t)
             self.capture_stroke_before(self.brush_local_rect((x, y)))
-            if tool in ["clone", "healing"]:
+            if tool == "spot_healing":
+                spot_heal(self.doc.layer, x, y, radius, opacity, selection_mask)
+            elif tool in ["clone", "healing"]:
                 source = self.clone_source_for_point((x, y))
                 if source is not None:
                     clone_or_heal(self.doc.layer, source[0], source[1], x, y, radius, opacity, tool == "healing", selection_mask)
@@ -4101,6 +4129,192 @@ class PhotoRedactorApp(tk.Tk):
         out[:, :, :3] = cv2.cvtColor(gray, cv2.COLOR_GRAY2RGB)
         return out
 
+    def frequency_separation_layers(self) -> None:
+        layer = self.doc.layer
+        if layer.locked or layer.kind == "adjustment":
+            messagebox.showinfo("Частотное разложение", "Выберите незаблокированный слой с изображением.")
+            return
+        settings = self.frequency_separation_dialog(layer.pixels)
+        if settings is None:
+            return
+        self.run_document_command(
+            "Частотное разложение",
+            lambda: self.doc.frequency_separate_active(settings["radius"], settings["texture_strength"]),
+        )
+        self.refresh()
+
+    def frequency_separation_dialog(self, source: np.ndarray) -> dict[str, float] | None:
+        dialog = tk.Toplevel(self)
+        dialog.title("Частотное разложение")
+        dialog.transient(self)
+        dialog.resizable(False, False)
+        dialog.grab_set()
+        result: dict[str, float] | None = None
+        radius = tk.DoubleVar(value=8.0)
+        texture_strength = tk.DoubleVar(value=1.0)
+
+        preview_row = ttk.Frame(dialog)
+        preview_row.pack(fill=tk.X, padx=12, pady=(12, 8))
+        preview_labels: list[ttk.Label] = []
+        for title in ["Цвет и тон", "Текстура", "Результат"]:
+            column = ttk.Frame(preview_row)
+            column.pack(side=tk.LEFT, padx=4)
+            ttk.Label(column, text=title).pack(pady=(0, 4))
+            label = ttk.Label(column)
+            label.pack()
+            preview_labels.append(label)
+
+        controls = ttk.Frame(dialog)
+        controls.pack(fill=tk.X, padx=16)
+        radius_value = ttk.Label(controls, width=8)
+        texture_value = ttk.Label(controls, width=8)
+        ttk.Label(controls, text="Радиус размытия").grid(row=0, column=0, sticky="w")
+        ttk.Scale(controls, from_=0.5, to=40.0, variable=radius, orient=tk.HORIZONTAL).grid(row=0, column=1, sticky="ew", padx=8)
+        radius_value.grid(row=0, column=2, sticky="e")
+        ttk.Label(controls, text="Сила текстуры").grid(row=1, column=0, sticky="w", pady=(8, 0))
+        ttk.Scale(controls, from_=0.0, to=2.0, variable=texture_strength, orient=tk.HORIZONTAL).grid(row=1, column=1, sticky="ew", padx=8, pady=(8, 0))
+        texture_value.grid(row=1, column=2, sticky="e", pady=(8, 0))
+        controls.columnconfigure(1, weight=1)
+
+        thumb_image = rgba_array_to_pil(source)
+        thumb_image.thumbnail((190, 190), Image.Resampling.LANCZOS)
+        thumb = np.array(thumb_image.convert("RGBA"), dtype=np.uint8)
+
+        def photo_for(arr: np.ndarray) -> ImageTk.PhotoImage:
+            image = rgba_array_to_pil(arr)
+            canvas = Image.new("RGBA", (190, 190), (44, 46, 52, 255))
+            canvas.alpha_composite(image, ((190 - image.width) // 2, (190 - image.height) // 2))
+            return ImageTk.PhotoImage(canvas)
+
+        def update_preview(*_args) -> None:
+            low, high = frequency_separation(thumb, radius.get(), texture_strength.get())
+            recombined = low.copy()
+            recombined[:, :, :3] = np.clip(
+                low[:, :, :3].astype(np.float32) + high[:, :, :3].astype(np.float32) * 2.0 - 255.0,
+                0,
+                255,
+            ).astype(np.uint8)
+            self._frequency_preview_images = [photo_for(low), photo_for(high), photo_for(recombined)]
+            for label, image in zip(preview_labels, self._frequency_preview_images):
+                label.configure(image=image)
+            radius_value.configure(text=f"{radius.get():.1f} px")
+            texture_value.configure(text=f"{texture_strength.get():.2f}")
+
+        def accept() -> None:
+            nonlocal result
+            result = {"radius": float(radius.get()), "texture_strength": float(texture_strength.get())}
+            dialog.destroy()
+
+        buttons = ttk.Frame(dialog)
+        buttons.pack(fill=tk.X, padx=12, pady=12)
+        ttk.Button(buttons, text="ОК", command=accept).pack(side=tk.RIGHT, padx=(6, 0))
+        ttk.Button(buttons, text="Отмена", command=dialog.destroy).pack(side=tk.RIGHT)
+        ToolTip(preview_labels[0], "На этом слое удобно выравнивать цвет и тон кожи.")
+        ToolTip(preview_labels[1], "Этот слой сохраняет поры, волосы и мелкие детали.")
+        radius.trace_add("write", update_preview)
+        texture_strength.trace_add("write", update_preview)
+        dialog.protocol("WM_DELETE_WINDOW", dialog.destroy)
+        update_preview()
+        dialog.wait_window()
+        return result
+
+    def portrait_cleanup_layer(self) -> None:
+        layer = self.doc.layer
+        if layer.locked or layer.kind == "adjustment":
+            messagebox.showinfo("Портретная обработка", "Выберите незаблокированный слой с портретом.")
+            return
+        settings = self.portrait_cleanup_dialog(layer.pixels)
+        if settings is None:
+            return
+        self.apply_to_layer(
+            "Портретная обработка",
+            lambda arr: portrait_cleanup(arr, settings["smoothing"], settings["texture"], settings["even_tone"], settings["redness"]),
+        )
+
+    def portrait_cleanup_dialog(self, source: np.ndarray) -> dict[str, float] | None:
+        dialog = tk.Toplevel(self)
+        dialog.title("Портретная обработка")
+        dialog.transient(self)
+        dialog.resizable(False, False)
+        dialog.grab_set()
+        result: dict[str, float] | None = None
+        variables = {
+            "smoothing": tk.DoubleVar(value=0.35),
+            "texture": tk.DoubleVar(value=0.7),
+            "even_tone": tk.DoubleVar(value=0.2),
+            "redness": tk.DoubleVar(value=0.2),
+        }
+
+        preview_row = ttk.Frame(dialog)
+        preview_row.pack(fill=tk.X, padx=12, pady=(12, 8))
+        preview_labels: list[ttk.Label] = []
+        for title in ["До", "После"]:
+            column = ttk.Frame(preview_row)
+            column.pack(side=tk.LEFT, padx=5)
+            ttk.Label(column, text=title).pack(pady=(0, 4))
+            label = ttk.Label(column)
+            label.pack()
+            preview_labels.append(label)
+
+        thumb_image = rgba_array_to_pil(source)
+        thumb_image.thumbnail((250, 220), Image.Resampling.LANCZOS)
+        thumb = np.array(thumb_image.convert("RGBA"), dtype=np.uint8)
+
+        def photo_for(arr: np.ndarray) -> ImageTk.PhotoImage:
+            image = rgba_array_to_pil(arr)
+            canvas = Image.new("RGBA", (250, 220), (44, 46, 52, 255))
+            canvas.alpha_composite(image, ((250 - image.width) // 2, (220 - image.height) // 2))
+            return ImageTk.PhotoImage(canvas)
+
+        controls = ttk.Frame(dialog)
+        controls.pack(fill=tk.X, padx=16)
+        value_labels: dict[str, ttk.Label] = {}
+        specs = [
+            ("smoothing", "Сглаживание кожи", 0.0, 1.0),
+            ("texture", "Сохранение текстуры", 0.0, 1.5),
+            ("even_tone", "Выравнивание тона", 0.0, 1.0),
+            ("redness", "Уменьшение покраснений", 0.0, 1.0),
+        ]
+        for row, (key, title, start, end) in enumerate(specs):
+            ttk.Label(controls, text=title).grid(row=row, column=0, sticky="w", pady=3)
+            ttk.Scale(controls, from_=start, to=end, variable=variables[key], orient=tk.HORIZONTAL).grid(row=row, column=1, sticky="ew", padx=8, pady=3)
+            value_labels[key] = ttk.Label(controls, width=7)
+            value_labels[key].grid(row=row, column=2, sticky="e")
+        controls.columnconfigure(1, weight=1)
+
+        original_photo = photo_for(thumb)
+
+        def update_preview(*_args) -> None:
+            cleaned = portrait_cleanup(
+                thumb,
+                variables["smoothing"].get(),
+                variables["texture"].get(),
+                variables["even_tone"].get(),
+                variables["redness"].get(),
+            )
+            self._portrait_preview_images = [original_photo, photo_for(cleaned)]
+            for label, image in zip(preview_labels, self._portrait_preview_images):
+                label.configure(image=image)
+            for key, label in value_labels.items():
+                label.configure(text=f"{variables[key].get():.2f}")
+
+        def accept() -> None:
+            nonlocal result
+            result = {key: float(variable.get()) for key, variable in variables.items()}
+            dialog.destroy()
+
+        buttons = ttk.Frame(dialog)
+        buttons.pack(fill=tk.X, padx=12, pady=12)
+        ttk.Button(buttons, text="ОК", command=accept).pack(side=tk.RIGHT, padx=(6, 0))
+        ttk.Button(buttons, text="Отмена", command=dialog.destroy).pack(side=tk.RIGHT)
+        ToolTip(preview_labels[1], "Обработка автоматически ограничивается тонами кожи.")
+        for variable in variables.values():
+            variable.trace_add("write", update_preview)
+        dialog.protocol("WM_DELETE_WINDOW", dialog.destroy)
+        update_preview()
+        dialog.wait_window()
+        return result
+
     def filter_blur(self) -> None:
         r = simpledialog.askinteger("Gaussian blur", "Radius:", initialvalue=3, minvalue=1, maxvalue=200)
         if r:
@@ -4120,11 +4334,11 @@ class PhotoRedactorApp(tk.Tk):
         layer = self.doc.layer
         selection_mask = self.doc.layer_selection_mask(layer)
         if selection_mask is None or not np.any(selection_mask):
-            messagebox.showinfo("Content-aware fill", "Create a selection on the active layer first.")
+            messagebox.showinfo("Заливка с учетом содержимого", "Сначала создайте выделение на активном слое.")
             return
-        radius = simpledialog.askinteger("Content-aware fill", "Search radius:", initialvalue=3, minvalue=1, maxvalue=30)
+        radius = simpledialog.askinteger("Заливка с учетом содержимого", "Радиус поиска:", initialvalue=3, minvalue=1, maxvalue=30)
         if radius:
-            self.apply_to_layer("content-aware fill", lambda arr: content_aware_fill(arr, selection_mask, radius))
+            self.apply_to_layer("Заливка с учетом содержимого", lambda arr: content_aware_fill(arr, selection_mask, radius))
 
     def filter_edge_cleanup(self) -> None:
         layer = self.doc.layer
@@ -4141,22 +4355,22 @@ class PhotoRedactorApp(tk.Tk):
 
     def filter_red_eye(self) -> None:
         selection_mask = self.doc.layer_selection_mask(self.doc.layer)
-        strength = simpledialog.askfloat("Red-eye reduction", "Strength 0..1:", initialvalue=0.85, minvalue=0.0, maxvalue=1.0)
+        strength = simpledialog.askfloat("Удаление красных глаз", "Сила 0..1:", initialvalue=0.85, minvalue=0.0, maxvalue=1.0)
         if strength is not None:
-            self.apply_to_layer("red-eye reduction", lambda arr: reduce_red_eye(arr, selection_mask, strength))
+            self.apply_to_layer("Удаление красных глаз", lambda arr: reduce_red_eye(arr, selection_mask, strength))
 
     def filter_patch_selection(self) -> None:
         if self.doc.selection_mask is None:
-            messagebox.showinfo("Patch selection", "Create a selection first.")
+            messagebox.showinfo("Заплатка", "Сначала создайте выделение.")
             return
-        x = simpledialog.askinteger("Patch selection", "Source X top-left:", initialvalue=0, minvalue=-100000, maxvalue=100000)
+        x = simpledialog.askinteger("Заплатка", "X левого верхнего угла источника:", initialvalue=0, minvalue=-100000, maxvalue=100000)
         if x is None:
             return
-        y = simpledialog.askinteger("Patch selection", "Source Y top-left:", initialvalue=0, minvalue=-100000, maxvalue=100000)
+        y = simpledialog.askinteger("Заплатка", "Y левого верхнего угла источника:", initialvalue=0, minvalue=-100000, maxvalue=100000)
         if y is None:
             return
-        heal = messagebox.askyesno("Patch selection", "Blend source color into the destination?")
-        self.run_document_command("Patch selection", lambda: self.doc.patch_active_selection(x, y, heal))
+        heal = messagebox.askyesno("Заплатка", "Подогнать цвет источника под место назначения?")
+        self.run_document_command("Заплатка", lambda: self.doc.patch_active_selection(x, y, heal))
         self.refresh()
 
     def set_view_channel(self) -> None:

@@ -24,6 +24,7 @@ BLEND_MODES = [
     "Screen",
     "Overlay",
     "Soft Light",
+    "Linear Light",
     "Darken",
     "Lighten",
     "Difference",
@@ -503,6 +504,41 @@ class Document:
         self.layers.append(Layer(name, pixels))
         self.active_layer = len(self.layers) - 1
         self.dirty = True
+
+    def frequency_separate_active(self, radius: float = 8.0, texture_strength: float = 1.0) -> bool:
+        source = self.layer
+        if source.locked or source.kind == "adjustment" or source.pixels.size == 0:
+            return False
+        low_pixels, high_pixels = frequency_separation(render_layer_pixels(source), radius, texture_strength)
+        low = Layer(
+            name=f"Низкие частоты - {source.name}",
+            pixels=low_pixels,
+            x=source.x,
+            y=source.y,
+            mask=None if source.mask is None else source.mask.copy(),
+            mask_enabled=source.mask_enabled,
+            mask_linked=source.mask_linked,
+            mask_density=source.mask_density,
+            mask_feather=source.mask_feather,
+        )
+        high = Layer(
+            name=f"Высокие частоты - {source.name}",
+            pixels=high_pixels,
+            x=source.x,
+            y=source.y,
+            mask=None if source.mask is None else source.mask.copy(),
+            mask_enabled=source.mask_enabled,
+            mask_linked=source.mask_linked,
+            mask_density=source.mask_density,
+            mask_feather=source.mask_feather,
+            blend_mode="Linear Light",
+        )
+        source.visible = False
+        insert_at = self.active_layer + 1
+        self.layers[insert_at:insert_at] = [low, high]
+        self.active_layer = insert_at + 1
+        self.dirty = True
+        return True
 
     def place_image(self, path: str | Path, linked: bool = False) -> None:
         image = Image.open(path)
@@ -2122,6 +2158,8 @@ def blend_rgb(src: np.ndarray, dst: np.ndarray, mode: str) -> np.ndarray:
         dn = d / 255.0
         out = (1.0 - 2.0 * sn) * dn * dn + 2.0 * sn * dn
         return out * 255.0
+    if mode == "Linear Light":
+        return np.clip(d + 2.0 * s - 255.0, 0.0, 255.0)
     if mode == "Darken":
         return np.minimum(s, d)
     if mode == "Lighten":
@@ -2323,6 +2361,43 @@ def clone_or_heal(
     mix = np.clip(float(opacity), 0, 1)
     dst[mask] = dst[mask] * (1.0 - mix) + edited[mask] * mix
     layer.pixels[y1:y2, x1:x2] = np.clip(dst, 0, 255).astype(np.uint8)
+    return x1, y1, x2, y2
+
+
+def spot_heal(
+    layer: Layer,
+    x: int,
+    y: int,
+    radius: int,
+    strength: float = 1.0,
+    selection_mask: np.ndarray | None = None,
+) -> tuple[int, int, int, int] | None:
+    if layer.locked:
+        return None
+    radius = max(2, int(radius))
+    lx, ly = int(x) - layer.x, int(y) - layer.y
+    margin = max(5, radius)
+    x1 = max(0, lx - radius - margin)
+    y1 = max(0, ly - radius - margin)
+    x2 = min(layer.pixels.shape[1], lx + radius + margin + 1)
+    y2 = min(layer.pixels.shape[0], ly + radius + margin + 1)
+    if x1 >= x2 or y1 >= y2:
+        return None
+
+    yy, xx = np.ogrid[y1:y2, x1:x2]
+    target_mask = ((xx - lx) ** 2 + (yy - ly) ** 2 <= radius * radius).astype(np.uint8) * 255
+    if selection_mask is not None:
+        target_mask = np.minimum(target_mask, selection_mask[y1:y2, x1:x2])
+    if not np.any(target_mask):
+        return None
+
+    patch = layer.pixels[y1:y2, x1:x2].copy()
+    inpaint_radius = max(2.0, min(12.0, radius * 0.55))
+    healed_rgb = cv2.inpaint(patch[:, :, :3], target_mask, inpaint_radius, cv2.INPAINT_TELEA)
+    feather = cv2.GaussianBlur(target_mask, (0, 0), max(0.7, radius * 0.16)).astype(np.float32) / 255.0
+    feather *= float(np.clip(strength, 0.0, 1.0))
+    mixed = patch[:, :, :3].astype(np.float32) * (1.0 - feather[:, :, None]) + healed_rgb.astype(np.float32) * feather[:, :, None]
+    layer.pixels[y1:y2, x1:x2, :3] = np.clip(mixed, 0, 255).astype(np.uint8)
     return x1, y1, x2, y2
 
 
@@ -2949,6 +3024,66 @@ def content_aware_fill(arr: np.ndarray, selection_mask: np.ndarray | None, radiu
     alpha = cv2.inpaint(out[:, :, 3], mask, radius, cv2.INPAINT_TELEA)
     out[:, :, :3] = rgb
     out[:, :, 3] = np.where(mask > 0, np.maximum(alpha, out[:, :, 3]), out[:, :, 3]).astype(np.uint8)
+    return out
+
+
+def frequency_separation(arr: np.ndarray, radius: float = 8.0, texture_strength: float = 1.0) -> tuple[np.ndarray, np.ndarray]:
+    radius = max(0.5, float(radius))
+    texture_strength = max(0.0, float(texture_strength))
+    low = arr.copy()
+    low_rgb = cv2.GaussianBlur(arr[:, :, :3], (0, 0), radius).astype(np.float32)
+    low[:, :, :3] = np.clip(low_rgb, 0, 255).astype(np.uint8)
+    detail = (arr[:, :, :3].astype(np.float32) - low_rgb) * texture_strength
+    high = arr.copy()
+    high[:, :, :3] = np.clip(127.5 + detail * 0.5, 0, 255).astype(np.uint8)
+    return low, high
+
+
+def portrait_cleanup(
+    arr: np.ndarray,
+    smoothing: float = 0.35,
+    texture: float = 0.7,
+    even_tone: float = 0.2,
+    redness: float = 0.2,
+) -> np.ndarray:
+    smoothing = float(np.clip(smoothing, 0.0, 1.0))
+    texture = float(np.clip(texture, 0.0, 1.5))
+    even_tone = float(np.clip(even_tone, 0.0, 1.0))
+    redness = float(np.clip(redness, 0.0, 1.0))
+    if max(smoothing, even_tone, redness) <= 0.0:
+        return arr.copy()
+
+    rgb = arr[:, :, :3]
+    ycrcb = cv2.cvtColor(rgb, cv2.COLOR_RGB2YCrCb)
+    cr, cb = ycrcb[:, :, 1], ycrcb[:, :, 2]
+    skin_binary = ((cr >= 132) & (cr <= 183) & (cb >= 76) & (cb <= 136) & (arr[:, :, 3] > 0)).astype(np.uint8) * 255
+    if not np.any(skin_binary):
+        return arr.copy()
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+    skin_binary = cv2.morphologyEx(skin_binary, cv2.MORPH_CLOSE, kernel)
+    skin = cv2.GaussianBlur(skin_binary, (0, 0), 2.0).astype(np.float32) / 255.0
+    skin *= skin_binary.astype(np.float32) / 255.0
+
+    source = rgb.astype(np.float32)
+    diameter = 9
+    smooth = cv2.bilateralFilter(rgb, diameter, 30.0 + smoothing * 70.0, 18.0 + smoothing * 42.0).astype(np.float32)
+    base = cv2.GaussianBlur(source, (0, 0), 1.2)
+    detail = source - base
+    smoothed = smooth + detail * texture
+    cleaned = source * (1.0 - smoothing) + smoothed * smoothing
+
+    if even_tone > 0.0:
+        tone = cv2.GaussianBlur(cleaned, (0, 0), 5.0 + even_tone * 9.0)
+        cleaned = cleaned * (1.0 - even_tone * 0.45) + tone * (even_tone * 0.45)
+
+    if redness > 0.0:
+        green_blue = (cleaned[:, :, 1] + cleaned[:, :, 2]) * 0.5
+        excess = np.maximum(0.0, cleaned[:, :, 0] - green_blue)
+        cleaned[:, :, 0] -= excess * redness * 0.65
+
+    amount = skin[:, :, None]
+    out = arr.copy()
+    out[:, :, :3] = np.clip(source * (1.0 - amount) + cleaned * amount, 0, 255).astype(np.uint8)
     return out
 
 

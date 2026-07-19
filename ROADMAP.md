@@ -14,7 +14,8 @@
 - Blend modes: Normal, Multiply, Screen, Overlay, Soft Light, Darken, Lighten, Difference, Color, Luminosity.
 - Tools: move, brush, eraser, fill, gradient, editable text, rectangular/elliptical/lasso/magnetic/polygon selection, magic wand, color range, brush/quick-selection canvas previews, interactive patch and crop.
 - Text layers: font selection, multiline editing, paragraph width, word wrapping, alignment, line spacing and tracking.
-- Local retouching: blur, sharpen, dodge, burn, clone stamp, healing brush, retouch presets, interactive patch selection, edge-aware cleanup, red-eye reduction and content-aware fill.
+- Local retouching: blur, sharpen, dodge, burn, clone stamp, source-based healing, automatic spot healing, retouch presets, interactive patch selection, edge-aware cleanup, red-eye reduction and content-aware fill.
+- Advanced retouching: frequency separation into editable tone/texture layers with Linear Light reconstruction, plus skin-aware portrait cleanup with live preview and controls for smoothing, texture, tone and redness.
 - Layer import: place embedded images, place linked images, update/relink linked layers and load several image files as layers.
 - Shape layers: editable rectangle, ellipse, line, Bezier curve, polygon, star and boolean-combination layers.
 - View helpers: grid overlay, numeric guides and channel preview for RGB/Red/Green/Blue/Alpha.
@@ -34,9 +35,8 @@
 
 ## Next milestones toward the full list
 
-1. Retouching: frequency separation, spot removal presets and more portrait-oriented cleanup controls.
-2. Smart objects: re-editable transforms, embedded payload management and richer linked-file status/conflict handling.
-3. RAW/color management: ICC profiles, 16/32-bit channels, Lab/CMYK workflows and richer metadata editing.
-4. GPU/tiled rendering: tile cache, dirty-region recomposition, scratch disk, background save.
-5. Plugin API and actions: replayable command actions, batch execution, external filters.
-6. Advanced AI/generative tools: content-aware fill and generative expand.
+1. Smart objects: re-editable transforms, embedded payload management and richer linked-file status/conflict handling.
+2. RAW/color management: ICC profiles, 16/32-bit channels, Lab/CMYK workflows and richer metadata editing.
+3. GPU/tiled rendering: tile cache, dirty-region recomposition, scratch disk, background save.
+4. Plugin API and actions: replayable command actions, batch execution, external filters.
+5. Advanced AI/generative tools: content-aware fill and generative expand.
