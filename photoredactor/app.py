@@ -11,7 +11,7 @@ from tkinter import colorchooser, filedialog, messagebox, simpledialog, ttk
 
 import cv2
 import numpy as np
-from PIL import Image, ImageTk
+from PIL import Image, ImageGrab, ImageTk
 
 from .core import (
     Document,
@@ -162,6 +162,25 @@ CUSTOM_SHAPE_PRESETS = {
     "Выноска": [(0.0, 0.0), (1.0, 0.0), (1.0, 0.72), (0.62, 0.72), (0.45, 1.0), (0.42, 0.72), (0.0, 0.72)],
 }
 
+DOCUMENT_PRESETS = [
+    {"name": "Full HD", "description": "Экран и видео", "width": 1920, "height": 1080, "dpi": 72, "background": "Белый"},
+    {"name": "4K UHD", "description": "Видео высокого разрешения", "width": 3840, "height": 2160, "dpi": 72, "background": "Черный"},
+    {"name": "Квадрат 1080", "description": "Публикация в соцсетях", "width": 1080, "height": 1080, "dpi": 72, "background": "Белый"},
+    {"name": "Портрет 4:5", "description": "Вертикальная публикация", "width": 1080, "height": 1350, "dpi": 72, "background": "Белый"},
+    {"name": "История", "description": "Экран смартфона 9:16", "width": 1080, "height": 1920, "dpi": 72, "background": "Белый"},
+    {"name": "A4", "description": "Печать 210 x 297 мм", "width": 2480, "height": 3508, "dpi": 300, "background": "Белый"},
+    {"name": "A3", "description": "Печать 297 x 420 мм", "width": 3508, "height": 4961, "dpi": 300, "background": "Белый"},
+    {"name": "Фото 10 x 15", "description": "Печать фотографии", "width": 1200, "height": 1800, "dpi": 300, "background": "Белый"},
+    {"name": "Иконка", "description": "Прозрачный квадрат", "width": 1024, "height": 1024, "dpi": 72, "background": "Прозрачный"},
+    {"name": "Свой размер", "description": "Ручная настройка", "width": 1280, "height": 900, "dpi": 72, "background": "Белый"},
+]
+
+DOCUMENT_BACKGROUNDS = {
+    "Белый": (255, 255, 255, 255),
+    "Черный": (0, 0, 0, 255),
+    "Прозрачный": (0, 0, 0, 0),
+}
+
 MASK_PREVIEW_NORMAL = "Обычный"
 MASK_PREVIEW_OVERLAY = "Красное перекрытие"
 MASK_PREVIEW_CHANNEL = "Черно-белая маска"
@@ -256,6 +275,7 @@ ADJUSTMENT_PRESETS.update(
 class PhotoRedactorApp(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
+        self.withdraw()
         self.title("PhotoRedactor - редактор изображений")
         self.geometry("1440x920")
         self.minsize(1000, 640)
@@ -337,9 +357,14 @@ class PhotoRedactorApp(tk.Tk):
         self._bezier_preview_image: ImageTk.PhotoImage | None = None
         self._frequency_preview_images: list[ImageTk.PhotoImage] = []
         self._portrait_preview_images: list[ImageTk.PhotoImage] = []
+        self._startup_clipboard_preview: ImageTk.PhotoImage | None = None
+        self._new_document_preview: ImageTk.PhotoImage | None = None
+        self.startup_frame: tk.Frame | None = None
+        self._editor_active = False
         self._canvas_image_id: int | None = None
         self._canvas_origin = (0, 0)
         self._render_after_id: str | None = None
+        self._initial_fit_after_id: str | None = None
         self._last_render_time = 0.0
         self._composite_cache = None
         self._composite_dirty = True
@@ -356,10 +381,17 @@ class PhotoRedactorApp(tk.Tk):
         self.load_settings()
         self.refresh_recent_menu()
         self.refresh()
-        self.after(500, self.check_recovery_file)
+        self.show_start_screen()
+        self.deiconify()
         self.schedule_autosave()
 
     def destroy(self) -> None:
+        if self._initial_fit_after_id is not None:
+            try:
+                self.after_cancel(self._initial_fit_after_id)
+            except tk.TclError:
+                pass
+            self._initial_fit_after_id = None
         self.autosave_recovery()
         self.save_settings()
         self.executor.shutdown(wait=False, cancel_futures=True)
@@ -422,21 +454,237 @@ class PhotoRedactorApp(tk.Tk):
         self.recent_menu.delete(0, tk.END)
         if not self.recent_files:
             self.recent_menu.add_command(label="Нет недавних файлов", state=tk.DISABLED)
+            self.refresh_startup_recent()
             return
         for path in self.recent_files:
             label = Path(path).name
             self.recent_menu.add_command(label=label, command=lambda p=path: self.open_path(p))
         self.recent_menu.add_separator()
         self.recent_menu.add_command(label="Очистить список", command=self.clear_recent_files)
+        self.refresh_startup_recent()
 
     def clear_recent_files(self) -> None:
         self.recent_files.clear()
         self.save_settings()
         self.refresh_recent_menu()
 
+    @staticmethod
+    def read_clipboard_image() -> Image.Image | None:
+        try:
+            value = ImageGrab.grabclipboard()
+            if isinstance(value, Image.Image):
+                return value.convert("RGBA")
+            if isinstance(value, list):
+                for path in value:
+                    suffix = Path(path).suffix.lower()
+                    if suffix in {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}:
+                        with Image.open(path) as image:
+                            return image.convert("RGBA")
+        except (OSError, ValueError):
+            pass
+        return None
+
+    def show_start_screen(self) -> None:
+        self._editor_active = False
+        self.editor_root.pack_forget()
+        self.status.pack_forget()
+        self.config(menu="")
+        self.minsize(820, 560)
+        self.title("PhotoRedactor")
+        self.restore_centered_window(1060, 700)
+        if self.startup_frame is not None and self.startup_frame.winfo_exists():
+            self.startup_frame.destroy()
+
+        clipboard_image = self.read_clipboard_image()
+        self._startup_clipboard_image = clipboard_image
+        frame = tk.Frame(self, background="#202226")
+        frame.pack(fill=tk.BOTH, expand=True)
+        self.startup_frame = frame
+
+        header = tk.Frame(frame, background="#181a1e", height=92)
+        header.pack(fill=tk.X)
+        header.pack_propagate(False)
+        tk.Label(header, text="PhotoRedactor", font=("Segoe UI Semibold", 25), foreground="#f5f7fa", background="#181a1e").pack(anchor=tk.W, padx=42, pady=(17, 0))
+        tk.Label(header, text="Стартовый экран", font=("Segoe UI", 10), foreground="#aeb5bf", background="#181a1e").pack(anchor=tk.W, padx=44)
+
+        content = tk.Frame(frame, background="#202226")
+        content.pack(fill=tk.BOTH, expand=True, padx=42, pady=30)
+        content.columnconfigure(0, minsize=300)
+        content.columnconfigure(1, weight=1)
+        content.rowconfigure(1, weight=1)
+
+        tk.Label(content, text="Начать", font=("Segoe UI Semibold", 15), foreground="#f5f7fa", background="#202226").grid(row=0, column=0, sticky="w", pady=(0, 12))
+        actions = tk.Frame(content, background="#202226")
+        actions.grid(row=1, column=0, sticky="new", padx=(0, 34))
+
+        new_button = tk.Button(
+            actions,
+            text="Создать новый холст",
+            command=self.new_document,
+            anchor="w",
+            font=("Segoe UI Semibold", 11),
+            background="#1976d2",
+            foreground="white",
+            activebackground="#2385e6",
+            activeforeground="white",
+            relief=tk.FLAT,
+            padx=18,
+            pady=13,
+            cursor="hand2",
+        )
+        new_button.pack(fill=tk.X, pady=(0, 8))
+        open_button = tk.Button(
+            actions,
+            text="Открыть изображение или проект",
+            command=self.open_file,
+            anchor="w",
+            font=("Segoe UI", 10),
+            background="#30343a",
+            foreground="#f5f7fa",
+            activebackground="#3a3f46",
+            activeforeground="white",
+            relief=tk.FLAT,
+            padx=18,
+            pady=12,
+            cursor="hand2",
+        )
+        open_button.pack(fill=tk.X, pady=(0, 8))
+        ToolTip(new_button, "Открывает выбор размера, формата и фона нового холста.")
+        ToolTip(open_button, "Открывает PNG, JPEG, WebP, BMP, TIFF и проекты PhotoRedactor.")
+
+        if clipboard_image is not None:
+            clipboard_box = tk.Frame(actions, background="#292d32", padx=12, pady=12)
+            clipboard_box.pack(fill=tk.X, pady=(12, 8))
+            preview = clipboard_image.copy()
+            preview.thumbnail((72, 72), Image.Resampling.LANCZOS)
+            preview_canvas = Image.new("RGBA", (72, 72), (55, 59, 65, 255))
+            preview_canvas.alpha_composite(preview, ((72 - preview.width) // 2, (72 - preview.height) // 2))
+            self._startup_clipboard_preview = ImageTk.PhotoImage(preview_canvas)
+            tk.Label(clipboard_box, image=self._startup_clipboard_preview, background="#292d32").pack(side=tk.LEFT, padx=(0, 12))
+            clipboard_text = tk.Frame(clipboard_box, background="#292d32")
+            clipboard_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+            tk.Label(clipboard_text, text="Изображение в буфере", font=("Segoe UI Semibold", 10), foreground="#f5f7fa", background="#292d32").pack(anchor=tk.W)
+            tk.Label(clipboard_text, text=f"{clipboard_image.width} x {clipboard_image.height} px", foreground="#aeb5bf", background="#292d32").pack(anchor=tk.W)
+            paste_button = ttk.Button(clipboard_text, text="Открыть как новый холст", command=self.create_from_clipboard)
+            paste_button.pack(anchor=tk.W, pady=(7, 0))
+            ToolTip(paste_button, "Создает холст точно по размеру изображения в буфере.")
+
+        if self.recovery_path.exists():
+            ttk.Button(actions, text="Восстановить последнюю сессию", command=self.open_recovery).pack(fill=tk.X, pady=(12, 0))
+
+        recent_header = tk.Frame(content, background="#202226")
+        recent_header.grid(row=0, column=1, sticky="ew", pady=(0, 12))
+        tk.Label(recent_header, text="Недавние файлы", font=("Segoe UI Semibold", 15), foreground="#f5f7fa", background="#202226").pack(side=tk.LEFT)
+        ttk.Button(recent_header, text="Очистить", command=self.clear_recent_files).pack(side=tk.RIGHT)
+
+        recent_area = tk.Frame(content, background="#202226")
+        recent_area.grid(row=1, column=1, sticky="nsew")
+        recent_area.columnconfigure(0, weight=1)
+        recent_area.rowconfigure(1, weight=1)
+        tk.Label(recent_area, text="Имя файла  |  Тип  |  Изменен", anchor="w", padx=12, pady=8, foreground="#aeb5bf", background="#30343a").grid(row=0, column=0, sticky="ew")
+        self.startup_recent_list = tk.Listbox(
+            recent_area,
+            exportselection=False,
+            activestyle="none",
+            background="#292d32",
+            foreground="#f1f3f5",
+            selectbackground="#1976d2",
+            selectforeground="#ffffff",
+            highlightthickness=0,
+            borderwidth=0,
+            font=("Segoe UI", 10),
+        )
+        recent_scroll = ttk.Scrollbar(recent_area, orient=tk.VERTICAL, command=self.startup_recent_list.yview)
+        self.startup_recent_list.configure(yscrollcommand=recent_scroll.set)
+        self.startup_recent_list.grid(row=1, column=0, sticky="nsew")
+        recent_scroll.grid(row=1, column=1, sticky="ns")
+        self.startup_recent_list.bind("<Double-Button-1>", lambda _event: self.open_startup_recent())
+        self.startup_recent_list.bind("<Return>", lambda _event: self.open_startup_recent())
+        ttk.Button(recent_area, text="Открыть выбранный", command=self.open_startup_recent).grid(row=2, column=0, sticky="e", pady=(10, 0))
+        self.refresh_startup_recent()
+
+    def restore_centered_window(self, preferred_width: int, preferred_height: int) -> None:
+        try:
+            self.state("normal")
+        except tk.TclError:
+            try:
+                self.attributes("-zoomed", False)
+            except tk.TclError:
+                pass
+        screen_width = self.winfo_screenwidth()
+        screen_height = self.winfo_screenheight()
+        width = min(preferred_width, max(820, screen_width - 120))
+        height = min(preferred_height, max(560, screen_height - 120))
+        x = max(0, (screen_width - width) // 2)
+        y = max(0, (screen_height - height) // 2)
+        self.geometry(f"{width}x{height}+{x}+{y}")
+
+    def refresh_startup_recent(self) -> None:
+        if not hasattr(self, "startup_recent_list") or not self.startup_recent_list.winfo_exists():
+            return
+        recent_list = self.startup_recent_list
+        recent_list.delete(0, tk.END)
+        self._startup_recent_paths: list[str] = []
+        for path in self.recent_files:
+            item = Path(path)
+            if not item.exists():
+                continue
+            kind = "Проект" if item.suffix.lower() == ".prdx" else "Изображение"
+            modified = time.strftime("%d.%m.%Y %H:%M", time.localtime(item.stat().st_mtime))
+            recent_list.insert(tk.END, f"  {item.name}  |  {kind}  |  {modified}")
+            self._startup_recent_paths.append(path)
+        if self._startup_recent_paths:
+            recent_list.selection_set(0)
+        else:
+            recent_list.insert(tk.END, "  Недавних файлов пока нет")
+
+    def open_startup_recent(self) -> None:
+        selection = self.startup_recent_list.curselection() if hasattr(self, "startup_recent_list") else ()
+        if not selection:
+            return
+        try:
+            path = self._startup_recent_paths[int(selection[0])]
+        except IndexError:
+            return
+        self.open_path(path)
+
+    def show_editor(self) -> None:
+        if self.startup_frame is not None and self.startup_frame.winfo_exists():
+            self.startup_frame.destroy()
+        self.startup_frame = None
+        self.config(menu=self.editor_menu)
+        self.geometry("1440x920")
+        self.minsize(1000, 640)
+        document_name = Path(self.doc.path).name if self.doc.path else "Новый документ"
+        self.title(f"{document_name} - PhotoRedactor")
+        self.editor_root.pack(fill=tk.BOTH, expand=True)
+        self.status.pack(side=tk.BOTTOM, fill=tk.X)
+        self._editor_active = True
+        self.refresh_recent_menu()
+        self.refresh()
+        self.maximize_window()
+        if self._initial_fit_after_id is not None:
+            self.after_cancel(self._initial_fit_after_id)
+        self._initial_fit_after_id = self.after(80, self.finish_initial_fit)
+
+    def finish_initial_fit(self) -> None:
+        self._initial_fit_after_id = None
+        if self._editor_active and self.winfo_exists():
+            self.fit_to_screen()
+
+    def maximize_window(self) -> None:
+        try:
+            self.state("zoomed")
+        except tk.TclError:
+            try:
+                self.attributes("-zoomed", True)
+            except tk.TclError:
+                pass
+
     def _build_ui(self) -> None:
         self._build_menu()
         root = ttk.PanedWindow(self, orient=tk.HORIZONTAL)
+        self.editor_root = root
         root.pack(fill=tk.BOTH, expand=True)
 
         left = ttk.Frame(root, width=250)
@@ -452,24 +700,24 @@ class PhotoRedactorApp(tk.Tk):
 
         self.status = ttk.Label(self, text="", anchor=tk.W)
         self.status.pack(side=tk.BOTTOM, fill=tk.X)
-        self.bind_all("<Control-z>", lambda _e: self.undo())
-        self.bind_all("<Control-y>", lambda _e: self.redo())
-        self.bind_all("<Control-s>", lambda _e: self.save())
+        self.bind_all("<Control-z>", lambda _e: self.undo() if self._editor_active else None)
+        self.bind_all("<Control-y>", lambda _e: self.redo() if self._editor_active else None)
+        self.bind_all("<Control-s>", lambda _e: self.save() if self._editor_active else None)
         self.bind_all("<Control-o>", lambda _e: self.open_file())
         self.bind_all("<Control-n>", lambda _e: self.new_document())
-        self.bind_all("<plus>", lambda _e: self.set_zoom(self.zoom.get() * 1.25))
-        self.bind_all("<minus>", lambda _e: self.set_zoom(self.zoom.get() / 1.25))
+        self.bind_all("<plus>", lambda _e: self.set_zoom(self.zoom.get() * 1.25) if self._editor_active else None)
+        self.bind_all("<minus>", lambda _e: self.set_zoom(self.zoom.get() / 1.25) if self._editor_active else None)
         self.bind_all("<KeyPress-space>", self.space_down)
         self.bind_all("<KeyRelease-space>", self.space_up)
 
     def _build_menu(self) -> None:
         menu = tk.Menu(self)
+        self.editor_menu = menu
         self.config(menu=menu)
 
         file_menu = tk.Menu(menu, tearoff=False)
         menu.add_cascade(label="Файл", menu=file_menu)
-        file_menu.add_command(label="Новый", command=self.new_document, accelerator="Ctrl+N")
-        file_menu.add_command(label="Новый из пресета", command=self.new_from_preset)
+        file_menu.add_command(label="Новый холст", command=self.new_document, accelerator="Ctrl+N")
         file_menu.add_command(label="Открыть изображение/проект", command=self.open_file, accelerator="Ctrl+O")
         self.recent_menu = tk.Menu(file_menu, tearoff=False)
         file_menu.add_cascade(label="Недавние файлы", menu=self.recent_menu)
@@ -936,13 +1184,13 @@ class PhotoRedactorApp(tk.Tk):
 
     def open_recovery(self) -> None:
         if not self.recovery_path.exists():
-            messagebox.showinfo("Recovery", "No recovery file found.")
+            messagebox.showinfo("Восстановление", "Файл восстановления не найден.")
             return
         self.doc = Document.open_project(self.recovery_path)
         self.history.clear()
         self.selection_box = self.doc.selection_bounds()
-        self.refresh()
-        self.status_text(f"Opened recovery: {self.recovery_path}")
+        self.show_editor()
+        self.status_text(f"Открыто восстановление: {self.recovery_path}")
 
     def clear_recovery(self) -> None:
         if self.recovery_path.exists():
@@ -2192,60 +2440,229 @@ class PhotoRedactorApp(tk.Tk):
             self.refresh()
 
     def new_document(self) -> None:
-        width = simpledialog.askinteger("New document", "Width px:", initialvalue=1280, minvalue=1, maxvalue=50000)
-        if not width:
+        clipboard_image = self.read_clipboard_image()
+        settings = self.new_document_dialog(clipboard_image)
+        if settings is None:
             return
-        height = simpledialog.askinteger("New document", "Height px:", initialvalue=900, minvalue=1, maxvalue=50000)
-        if not height:
-            return
-        color = colorchooser.askcolor(title="Background color", initialcolor="#ffffff")[0] or (255, 255, 255)
-        self.doc = Document.new(width, height, tuple(map(int, color)) + (255,))
-        self.history.clear()
-        self.selection_box = None
-        self.refresh()
+        self.create_document_from_settings(settings, clipboard_image)
 
-    def new_from_preset(self) -> None:
-        presets = {
-            "photo": (1800, 1200, 300, (255, 255, 255, 255)),
-            "web": (1920, 1080, 72, (255, 255, 255, 255)),
-            "4k": (3840, 2160, 72, (0, 0, 0, 255)),
-            "mobile_story": (1080, 1920, 72, (255, 255, 255, 255)),
-            "icon": (1024, 1024, 72, (0, 0, 0, 0)),
-            "print_a4": (2480, 3508, 300, (255, 255, 255, 255)),
-        }
-        names = ", ".join(presets)
-        name = simpledialog.askstring("New preset", f"Preset name:\n{names}", initialvalue="web")
-        if not name:
-            return
-        key = name.strip().lower()
-        if key not in presets:
-            messagebox.showerror("New preset", "Unknown preset.")
-            return
-        width, height, dpi, background = presets[key]
+    @staticmethod
+    def available_document_presets(clipboard_image: Image.Image | None = None) -> list[dict[str, object]]:
+        presets = [dict(item) for item in DOCUMENT_PRESETS]
+        if clipboard_image is not None:
+            presets.insert(
+                0,
+                {
+                    "name": "Из буфера обмена",
+                    "description": "Размер скопированного изображения",
+                    "width": clipboard_image.width,
+                    "height": clipboard_image.height,
+                    "dpi": 72,
+                    "background": "Прозрачный",
+                    "clipboard": True,
+                },
+            )
+        return presets
+
+    def new_document_dialog(self, clipboard_image: Image.Image | None = None) -> dict[str, object] | None:
+        presets = self.available_document_presets(clipboard_image)
+        dialog = tk.Toplevel(self)
+        dialog.title("Новый холст")
+        dialog.transient(self)
+        dialog.grab_set()
+        dialog.resizable(False, False)
+        result: dict[str, object] | None = None
+
+        width = tk.IntVar(value=int(presets[0]["width"]))
+        height = tk.IntVar(value=int(presets[0]["height"]))
+        dpi = tk.IntVar(value=int(presets[0]["dpi"]))
+        background = tk.StringVar(value=str(presets[0]["background"]))
+        include_clipboard = tk.BooleanVar(value=bool(presets[0].get("clipboard", False)))
+
+        body = ttk.Frame(dialog)
+        body.pack(fill=tk.BOTH, expand=True, padx=14, pady=14)
+        preset_panel = ttk.Frame(body, width=260)
+        preset_panel.grid(row=0, column=0, rowspan=2, sticky="ns", padx=(0, 16))
+        ttk.Label(preset_panel, text="Форматы", font=("Segoe UI Semibold", 12)).pack(anchor=tk.W, pady=(0, 6))
+        preset_list = tk.Listbox(preset_panel, width=34, height=18, exportselection=False, activestyle="dotbox")
+        preset_list.pack(fill=tk.Y, expand=True)
+        for preset in presets:
+            preset_list.insert(tk.END, f"{preset['name']}  {preset['width']} x {preset['height']}")
+
+        preview_panel = ttk.Frame(body)
+        preview_panel.grid(row=0, column=1, sticky="new")
+        ttk.Label(preview_panel, text="Предпросмотр", font=("Segoe UI Semibold", 12)).pack(anchor=tk.W, pady=(0, 6))
+        preview = tk.Canvas(preview_panel, width=330, height=210, background="#25282d", highlightthickness=0)
+        preview.pack()
+        preset_description = ttk.Label(preview_panel, text="", wraplength=330, justify=tk.LEFT)
+        preset_description.pack(fill=tk.X, pady=(7, 0))
+
+        settings = ttk.LabelFrame(body, text="Параметры")
+        settings.grid(row=1, column=1, sticky="sew", pady=(12, 0))
+        ttk.Label(settings, text="Ширина, px").grid(row=0, column=0, sticky="w", padx=10, pady=(10, 4))
+        width_entry = ttk.Spinbox(settings, textvariable=width, from_=1, to=50000, width=12)
+        width_entry.grid(row=0, column=1, sticky="ew", padx=(0, 10), pady=(10, 4))
+        ttk.Label(settings, text="Высота, px").grid(row=1, column=0, sticky="w", padx=10, pady=4)
+        height_entry = ttk.Spinbox(settings, textvariable=height, from_=1, to=50000, width=12)
+        height_entry.grid(row=1, column=1, sticky="ew", padx=(0, 10), pady=4)
+        swap_button = ttk.Button(settings, text="Поменять ориентацию")
+        swap_button.grid(row=2, column=0, columnspan=2, sticky="ew", padx=10, pady=4)
+        ttk.Label(settings, text="DPI").grid(row=3, column=0, sticky="w", padx=10, pady=4)
+        ttk.Spinbox(settings, textvariable=dpi, from_=1, to=2400, width=12).grid(row=3, column=1, sticky="ew", padx=(0, 10), pady=4)
+        ttk.Label(settings, text="Фон").grid(row=4, column=0, sticky="w", padx=10, pady=4)
+        ttk.Combobox(settings, textvariable=background, values=list(DOCUMENT_BACKGROUNDS), state="readonly", width=16).grid(row=4, column=1, sticky="ew", padx=(0, 10), pady=4)
+        clipboard_check = ttk.Checkbutton(settings, text="Добавить изображение из буфера", variable=include_clipboard)
+        if clipboard_image is not None:
+            clipboard_check.grid(row=5, column=0, columnspan=2, sticky="w", padx=10, pady=(5, 10))
+        settings.columnconfigure(1, weight=1)
+
+        def safe_dimension(variable: tk.IntVar, fallback: int) -> int:
+            try:
+                return max(1, min(50000, int(variable.get())))
+            except (tk.TclError, ValueError):
+                return fallback
+
+        def update_preview(*_args) -> None:
+            canvas_width = safe_dimension(width, 1280)
+            canvas_height = safe_dimension(height, 900)
+            preview.delete("all")
+            margin = 16
+            scale = min((330 - margin * 2) / canvas_width, (210 - margin * 2) / canvas_height)
+            shown_width = max(1, round(canvas_width * scale))
+            shown_height = max(1, round(canvas_height * scale))
+            x1 = (330 - shown_width) // 2
+            y1 = (210 - shown_height) // 2
+            x2, y2 = x1 + shown_width, y1 + shown_height
+            if background.get() == "Прозрачный":
+                tile = max(5, min(12, shown_width // 12 if shown_width else 5))
+                for py in range(y1, y2, tile):
+                    for px in range(x1, x2, tile):
+                        color = "#d4d6d8" if ((px - x1) // tile + (py - y1) // tile) % 2 == 0 else "#ffffff"
+                        preview.create_rectangle(px, py, min(px + tile, x2), min(py + tile, y2), fill=color, outline="")
+            else:
+                fill = "#ffffff" if background.get() == "Белый" else "#050505"
+                preview.create_rectangle(x1, y1, x2, y2, fill=fill, outline="")
+            if clipboard_image is not None and include_clipboard.get():
+                image = clipboard_image.copy()
+                image.thumbnail((shown_width, shown_height), Image.Resampling.LANCZOS)
+                self._new_document_preview = ImageTk.PhotoImage(image)
+                preview.create_image((x1 + x2) // 2, (y1 + y2) // 2, image=self._new_document_preview)
+            preview.create_rectangle(x1, y1, x2, y2, outline="#7d8794", width=1)
+            preview.create_text(165, 199, text=f"{canvas_width} x {canvas_height} px", fill="#d9dde3", font=("Segoe UI", 9))
+
+        def select_preset(_event=None) -> None:
+            selection = preset_list.curselection()
+            if not selection:
+                return
+            preset = presets[int(selection[0])]
+            width.set(int(preset["width"]))
+            height.set(int(preset["height"]))
+            dpi.set(int(preset["dpi"]))
+            background.set(str(preset["background"]))
+            include_clipboard.set(bool(preset.get("clipboard", False)))
+            preset_description.configure(text=str(preset["description"]))
+            update_preview()
+
+        def swap_orientation() -> None:
+            old_width = safe_dimension(width, 1280)
+            old_height = safe_dimension(height, 900)
+            width.set(old_height)
+            height.set(old_width)
+            update_preview()
+
+        def accept() -> None:
+            nonlocal result
+            try:
+                canvas_width = int(width.get())
+                canvas_height = int(height.get())
+                canvas_dpi = int(dpi.get())
+            except (tk.TclError, ValueError):
+                messagebox.showerror("Новый холст", "Укажите целые числа для размера и DPI.", parent=dialog)
+                return
+            if not (1 <= canvas_width <= 50000 and 1 <= canvas_height <= 50000 and 1 <= canvas_dpi <= 2400):
+                messagebox.showerror("Новый холст", "Размер должен быть от 1 до 50000 px, DPI - от 1 до 2400.", parent=dialog)
+                return
+            result = {
+                "width": canvas_width,
+                "height": canvas_height,
+                "dpi": canvas_dpi,
+                "background": DOCUMENT_BACKGROUNDS.get(background.get(), DOCUMENT_BACKGROUNDS["Белый"]),
+                "include_clipboard": bool(include_clipboard.get() and clipboard_image is not None),
+            }
+            dialog.destroy()
+
+        swap_button.configure(command=swap_orientation)
+        preset_list.bind("<<ListboxSelect>>", select_preset)
+        for variable in (width, height, background, include_clipboard):
+            variable.trace_add("write", update_preview)
+        buttons = ttk.Frame(dialog)
+        buttons.pack(fill=tk.X, padx=14, pady=(0, 14))
+        ttk.Button(buttons, text="Создать", command=accept).pack(side=tk.RIGHT, padx=(6, 0))
+        ttk.Button(buttons, text="Отмена", command=dialog.destroy).pack(side=tk.RIGHT)
+        ToolTip(preset_list, "Выберите готовый формат, затем при необходимости измените его параметры.")
+        preset_list.selection_set(0)
+        preset_list.activate(0)
+        select_preset()
+        dialog.protocol("WM_DELETE_WINDOW", dialog.destroy)
+        dialog.wait_window()
+        return result
+
+    def create_document_from_settings(self, settings: dict[str, object], clipboard_image: Image.Image | None = None) -> None:
+        width = int(settings["width"])
+        height = int(settings["height"])
+        dpi = int(settings["dpi"])
+        background = tuple(settings["background"])
+        include_clipboard = bool(settings.get("include_clipboard", False) and clipboard_image is not None)
         self.doc = Document.new(width, height, background)
         self.doc.dpi = dpi
-        self.doc.metadata = {"source": "preset", "preset": key}
+        self.doc.metadata = {"source": "clipboard" if include_clipboard else "new document", "preset_size": [width, height]}
+        if include_clipboard and clipboard_image is not None:
+            canvas = Image.new("RGBA", (width, height), background)
+            image = clipboard_image.convert("RGBA").copy()
+            if image.width > width or image.height > height:
+                image.thumbnail((width, height), Image.Resampling.LANCZOS)
+            canvas.alpha_composite(image, ((width - image.width) // 2, (height - image.height) // 2))
+            self.doc.layer.pixels = np.array(canvas, dtype=np.uint8)
+            self.doc.layer.name = "Из буфера обмена"
         self.history.clear()
         self.selection_box = None
-        self.refresh()
+        self.show_editor()
+
+    def create_from_clipboard(self) -> None:
+        image = self.read_clipboard_image() or getattr(self, "_startup_clipboard_image", None)
+        if image is None:
+            messagebox.showinfo("Буфер обмена", "В буфере больше нет изображения.")
+            return
+        self.create_document_from_settings(
+            {"width": image.width, "height": image.height, "dpi": 72, "background": DOCUMENT_BACKGROUNDS["Прозрачный"], "include_clipboard": True},
+            image,
+        )
+
+    def new_from_preset(self) -> None:
+        self.new_document()
 
     def open_file(self) -> None:
-        path = filedialog.askopenfilename(filetypes=[("Supported", "*.prdx *.png *.jpg *.jpeg *.webp *.bmp *.tif *.tiff"), ("All", "*.*")])
+        path = filedialog.askopenfilename(filetypes=[("Проекты и изображения", "*.prdx *.png *.jpg *.jpeg *.webp *.bmp *.tif *.tiff"), ("Все файлы", "*.*")])
         if not path:
             return
         self.open_path(path)
 
     def open_path(self, path: str) -> None:
         if not Path(path).exists():
-            messagebox.showerror("Open", f"File not found:\n{path}")
+            messagebox.showerror("Открытие", f"Файл не найден:\n{path}")
             self.recent_files = [item for item in self.recent_files if item.lower() != path.lower()]
             self.refresh_recent_menu()
             return
-        self.doc = Document.open_project(path) if path.lower().endswith(".prdx") else Document.from_image(path)
+        try:
+            document = Document.open_project(path) if path.lower().endswith(".prdx") else Document.from_image(path)
+        except Exception as exc:
+            messagebox.showerror("Открытие", f"Не удалось открыть файл:\n{exc}")
+            return
+        self.doc = document
         self.history.clear()
         self.selection_box = self.doc.selection_bounds()
         self.add_recent_file(path)
-        self.refresh()
+        self.show_editor()
 
     def place_embedded(self) -> None:
         path = filedialog.askopenfilename(filetypes=[("Images", "*.png *.jpg *.jpeg *.webp *.bmp *.tif *.tiff"), ("All", "*.*")])
@@ -4428,16 +4845,22 @@ class PhotoRedactorApp(tk.Tk):
         self.center_canvas_on_doc(doc_center_x, doc_center_y)
 
     def center_canvas_on_doc(self, doc_x: float, doc_y: float) -> None:
-        bbox = self.canvas.bbox("all")
-        if bbox is None:
+        raw_region = str(self.canvas.cget("scrollregion")).split()
+        if len(raw_region) != 4:
+            return
+        try:
+            region = tuple(float(value) for value in raw_region)
+        except ValueError:
             return
         target_x, target_y = self.doc_to_canvas(doc_x, doc_y)
         width = max(1, self.canvas.winfo_width())
         height = max(1, self.canvas.winfo_height())
-        scroll_w = max(1, bbox[2] - bbox[0])
-        scroll_h = max(1, bbox[3] - bbox[1])
-        self.canvas.xview_moveto(max(0.0, min(1.0, (target_x - width / 2 - bbox[0]) / scroll_w)))
-        self.canvas.yview_moveto(max(0.0, min(1.0, (target_y - height / 2 - bbox[1]) / scroll_h)))
+        scroll_w = max(1.0, region[2] - region[0])
+        scroll_h = max(1.0, region[3] - region[1])
+        left = target_x - width / 2.0
+        top = target_y - height / 2.0
+        self.canvas.xview_moveto(max(0.0, min(1.0, (left - region[0]) / scroll_w)))
+        self.canvas.yview_moveto(max(0.0, min(1.0, (top - region[1]) / scroll_h)))
 
     def fit_to_screen(self) -> None:
         self.update_idletasks()

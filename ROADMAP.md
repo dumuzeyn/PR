@@ -4,6 +4,7 @@
 
 - Local documents: new, open, save, save as, export.
 - Workflow: document presets, recent files, layer export and project metadata.
+- Startup workflow: centered medium-size editor-free welcome screen with recent files, recovery, clipboard-image detection and a visual preset-based canvas creator; the editor opens maximized, documents open centered and zoom keeps the viewport focus.
 - Document geometry: resize image, resize canvas, trim transparent pixels, reveal all layers, rotate, flip, crop.
 - Navigation: zoom, fit to screen, pan with scrollbars.
 - Raster layers: create, duplicate, delete, reorder, visibility, opacity, merge, flatten.

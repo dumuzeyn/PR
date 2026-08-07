@@ -8,6 +8,9 @@ This repository starts with a real working editor and an architecture intended t
 - custom project format (`.prdx`)
 - PNG/JPEG/WebP/BMP/TIFF import and export
 - document presets, recent files, embedded and linked image placement, linked layer update/relink, loading several files as layers and layer export
+- dedicated startup workspace for recent projects, file opening, recovery and new-canvas creation before the editor UI appears
+- visual new-canvas dialog with screen, social, print and custom presets; clipboard images become the first size preset and can be placed immediately
+- centered medium-size startup window, maximized editor, automatic canvas centering and center-preserving zoom
 - smooth cached brush strokes, eraser, fill, gradient, editable paragraph/path text layers, crop, rectangular/elliptical/freehand/magnetic/polygon selection, persistent add/subtract/intersect modes, quick selection brush with live result-mask, cursor and image-aware edge refinement, magic wand, color range, move
 - layer opacity, visibility, duplication, merge, flatten
 - layer locks, raster layer masks, mask thumbnails, thumbnail-click mask channel editing, red-overlay/black-white mask preview, linked/unlinked mask movement, mask painting, density/feather controls, live edge refinement with smart image-aware correction and blend modes
@@ -48,6 +51,10 @@ This repository starts with a real working editor and an architecture intended t
 ```
 
 The executable will be created in `dist\PhotoRedactor.exe`.
+
+## Download the automatic Windows build
+
+Every push to `master` starts the `Build PhotoRedactor for Windows` workflow. Open the repository's `Actions` tab, select the latest successful run and download the `PhotoRedactor-Windows` artifact. It contains the current `PhotoRedactor.exe` built and tested by GitHub.
 
 ## Tool panel
 

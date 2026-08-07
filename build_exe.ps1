@@ -5,4 +5,4 @@ if (Test-Path $runtimePython) {
 } else {
   $py = "python"
 }
-& $py -m PyInstaller --noconfirm --onefile --windowed --name PhotoRedactor --collect-all cv2 --collect-all PIL --collect-all numpy launcher.py
+& $py -m PyInstaller --noconfirm --clean --onefile --windowed --name PhotoRedactor launcher.py
