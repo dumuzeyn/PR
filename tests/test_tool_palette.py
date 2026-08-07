@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import tkinter as tk
+from types import SimpleNamespace
 import unittest
 
 from photoredactor.ui.tool_palette import ToolPaletteDialog
@@ -40,8 +41,29 @@ class ToolPaletteDialogTests(unittest.TestCase):
         self.dialog.listbox.event_generate("<ButtonRelease-1>", x=120, y=y)
         self.dialog.update()
         self.assertNotIn("second", self.dialog.visible)
-        self.assertTrue(str(self.dialog.listbox.get(1)).startswith("☐"))
+        self.assertIn("Второй", str(self.dialog.listbox.get(1)))
+        self.assertIn("скрыт", str(self.dialog.listbox.get(1)))
         self.assertEqual(str(self.dialog.visibility_status.cget("text")), "Скрыт")
+
+    def test_selected_tool_has_visible_drag_handle(self) -> None:
+        self.assertTrue(self.dialog._drag_handle.place_info())
+        self.assertEqual(str(self.dialog._drag_handle.cget("text")), "≡")
+        self.assertEqual(str(self.dialog._drag_handle.cget("cursor")), "fleur")
+
+    def test_drag_handle_reorders_without_toggling_visibility(self) -> None:
+        target_y = self.row_center(2)
+        self.dialog.begin_handle_drag(SimpleNamespace())
+        root_y = self.dialog.listbox.winfo_rooty() + target_y
+        root_x = self.dialog.listbox.winfo_rootx() + 20
+        event = SimpleNamespace(x_root=root_x, y_root=root_y)
+        self.dialog.drag_from_handle(event)
+        self.dialog.update()
+        self.assertIsNotNone(self.dialog._drag_ghost)
+        self.assertIn("≡", str(self.dialog._drag_ghost.winfo_children()[0].cget("text")))
+        self.dialog.end_handle_drag(event)
+        self.dialog.update()
+        self.assertEqual(self.dialog.order, ["second", "third", "first"])
+        self.assertIn("first", self.dialog.visible)
 
     def test_dragging_reorders_tools(self) -> None:
         start_y = self.row_center(0)
