@@ -1,7 +1,10 @@
+import tempfile
+from pathlib import Path
+
 import numpy as np
 
 from photoredactor.core import Document
-from photoredactor.history import History, LayerFieldsCommand, MaskTilePatchCommand, PixelTilePatchCommand, TilePatch
+from photoredactor.history import History, LayerFieldsCommand, LayerVisibilityCommand, MaskTilePatchCommand, PixelTilePatchCommand, TilePatch
 
 
 def test_pixel_tile_command_undo_redo() -> None:
@@ -68,3 +71,30 @@ def test_layer_fields_command_restores_only_changed_values() -> None:
     assert layer.pixels is original_pixels
     command.undo(document)
     assert (layer.name, layer.opacity) == ("Background", 1.0)
+
+
+def test_layer_visibility_command_preserves_active_layer() -> None:
+    document = Document.new(16, 16)
+    document.add_layer("top")
+    active = document.active_layer
+    lower = document.layers[0]
+    command = LayerVisibilityCommand("visibility", lower.id, True, False)
+
+    command.redo(document)
+    assert lower.visible is False
+    assert document.active_layer == active
+    command.undo(document)
+    assert lower.visible is True
+    assert document.active_layer == active
+
+
+def test_layer_visibility_survives_project_roundtrip() -> None:
+    document = Document.new(16, 16)
+    document.add_layer("hidden")
+    document.layer.visible = False
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / "visibility.prdx"
+        document.save_project(path)
+        restored = Document.open_project(path)
+    assert restored.layers[-1].name == "hidden"
+    assert restored.layers[-1].visible is False

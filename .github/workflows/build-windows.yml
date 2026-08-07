@@ -30,7 +30,7 @@ jobs:
       - name: Run tests
         shell: powershell
         run: |
-          python -m pytest -q tests/test_rendering.py tests/test_tile_history.py tests/test_retouch.py tests/test_tool_smoke.py
+          python -m pytest -q tests/test_rendering.py tests/test_tile_history.py tests/test_retouch.py tests/test_retouch_quality.py tests/test_selection_masks.py tests/test_shape_geometry.py tests/test_tool_smoke.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
           # Tcl/Tk on Windows does not reliably support repeated root teardown in one process.

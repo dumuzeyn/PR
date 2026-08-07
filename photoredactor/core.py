@@ -19,6 +19,7 @@ from .performance import profiled, profiler
 
 _checker_cache: dict[tuple[int, int, int], np.ndarray] = {}
 _brush_mask_cache: dict[int, np.ndarray] = {}
+_retouch_mask_cache: dict[tuple[int, int], np.ndarray] = {}
 _filter_mask_cache: dict[str, np.ndarray] = {}
 BLEND_MODES = [
     "Normal",
@@ -1030,16 +1031,18 @@ class Document:
         self.width, self.height = new_w, new_h
         self.dirty = True
 
-    def set_rect_selection(self, box: tuple[int, int, int, int], mode: str = "replace") -> None:
+    def set_rect_selection(self, box: tuple[int, int, int, int], mode: str = "replace", feather: int = 0) -> None:
         x1, y1, x2, y2 = normalized_box(box)
         x1, x2 = max(0, min(self.width, x1)), max(0, min(self.width, x2))
         y1, y2 = max(0, min(self.height, y1)), max(0, min(self.height, y2))
         mask = np.zeros((self.height, self.width), dtype=np.uint8)
         if x1 < x2 and y1 < y2:
             mask[y1:y2, x1:x2] = 255
+        if feather > 0:
+            mask = cv2.GaussianBlur(mask, (0, 0), max(0.1, float(feather)))
         self.apply_selection_mask(mask, mode)
 
-    def set_ellipse_selection(self, box: tuple[int, int, int, int], mode: str = "replace") -> None:
+    def set_ellipse_selection(self, box: tuple[int, int, int, int], mode: str = "replace", feather: int = 0, antialias: bool = True) -> None:
         x1, y1, x2, y2 = normalized_box(box)
         x1, x2 = max(0, min(self.width, x1)), max(0, min(self.width, x2))
         y1, y2 = max(0, min(self.height, y1)), max(0, min(self.height, y2))
@@ -1047,15 +1050,19 @@ class Document:
         if x1 < x2 and y1 < y2:
             center = ((x1 + x2) // 2, (y1 + y2) // 2)
             axes = (max(1, (x2 - x1) // 2), max(1, (y2 - y1) // 2))
-            cv2.ellipse(mask, center, axes, 0, 0, 360, 255, -1)
+            cv2.ellipse(mask, center, axes, 0, 0, 360, 255, -1, lineType=cv2.LINE_AA if antialias else cv2.LINE_8)
+        if feather > 0:
+            mask = cv2.GaussianBlur(mask, (0, 0), max(0.1, float(feather)))
         self.apply_selection_mask(mask, mode)
 
-    def set_polygon_selection(self, points: list[tuple[int, int]], mode: str = "replace") -> None:
+    def set_polygon_selection(self, points: list[tuple[int, int]], mode: str = "replace", feather: int = 0, antialias: bool = True) -> None:
         if len(points) < 3:
             return
         mask = np.zeros((self.height, self.width), dtype=np.uint8)
         pts = np.array([[(max(0, min(self.width - 1, int(x))), max(0, min(self.height - 1, int(y)))) for x, y in points]], dtype=np.int32)
-        cv2.fillPoly(mask, pts, 255)
+        cv2.fillPoly(mask, pts, 255, lineType=cv2.LINE_AA if antialias else cv2.LINE_8)
+        if feather > 0:
+            mask = cv2.GaussianBlur(mask, (0, 0), max(0.1, float(feather)))
         self.apply_selection_mask(mask, mode)
 
     def set_single_row_selection(self, y: int, mode: str = "replace") -> None:
@@ -1070,15 +1077,18 @@ class Document:
             mask[:, x : x + 1] = 255
         self.apply_selection_mask(mask, mode)
 
-    def magic_wand_selection(self, layer: Layer, x: int, y: int, tolerance: int, mode: str = "replace") -> None:
+    def magic_wand_selection(self, layer: Layer, x: int, y: int, tolerance: int, mode: str = "replace", contiguous: bool = True) -> None:
         lx, ly = int(x) - layer.x, int(y) - layer.y
         if lx < 0 or ly < 0 or lx >= layer.pixels.shape[1] or ly >= layer.pixels.shape[0]:
             return
         seed = layer.pixels[ly, lx].astype(np.int16)
         diff = np.abs(layer.pixels.astype(np.int16) - seed).max(axis=2)
         candidates = (diff <= int(tolerance)).astype(np.uint8)
-        _, labels, _, _ = cv2.connectedComponentsWithStats(candidates, 4)
-        local = (labels == labels[ly, lx]).astype(np.uint8) * 255
+        if contiguous:
+            _, labels, _, _ = cv2.connectedComponentsWithStats(candidates, 4)
+            local = (labels == labels[ly, lx]).astype(np.uint8) * 255
+        else:
+            local = candidates * 255
         self.apply_selection_mask(self._layer_mask_to_document(layer, local), mode)
 
     def color_range_selection(self, layer: Layer, x: int, y: int, tolerance: int, mode: str = "replace") -> None:
@@ -1158,7 +1168,7 @@ class Document:
         if mode == "add" and current is not None:
             return np.maximum(current, mask)
         if mode == "subtract" and current is not None:
-            result = np.where(mask > 0, 0, current).astype(np.uint8)
+            result = np.clip(current.astype(np.float32) * (1.0 - mask.astype(np.float32) / 255.0), 0, 255).astype(np.uint8)
             return result if np.any(result) else None
         if mode == "intersect" and current is not None:
             result = np.minimum(current, mask)
@@ -1259,7 +1269,11 @@ class Document:
         if mode == "add" and self.selection_mask is not None:
             self.selection_mask = np.maximum(self.selection_mask, mask)
         elif mode == "subtract" and self.selection_mask is not None:
-            self.selection_mask = np.where(mask > 0, 0, self.selection_mask).astype(np.uint8)
+            self.selection_mask = np.clip(
+                self.selection_mask.astype(np.float32) * (1.0 - mask.astype(np.float32) / 255.0),
+                0,
+                255,
+            ).astype(np.uint8)
         elif mode == "intersect" and self.selection_mask is not None:
             self.selection_mask = np.minimum(self.selection_mask, mask)
         else:
@@ -1669,6 +1683,82 @@ class Document:
 def normalized_box(box: tuple[int, int, int, int]) -> tuple[int, int, int, int]:
     x1, y1, x2, y2 = box
     return min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)
+
+
+def shape_box_from_drag(
+    start: tuple[int, int],
+    end: tuple[int, int],
+    shape: str,
+    *,
+    keep_proportions: bool = False,
+    from_center: bool = False,
+) -> tuple[int, int, int, int]:
+    sx, sy = int(start[0]), int(start[1])
+    ex, ey = int(end[0]), int(end[1])
+    dx, dy = ex - sx, ey - sy
+    if shape == "line" and keep_proportions and (dx or dy):
+        length = math.hypot(dx, dy)
+        angle = round(math.atan2(dy, dx) / (math.pi / 4.0)) * (math.pi / 4.0)
+        dx, dy = round(math.cos(angle) * length), round(math.sin(angle) * length)
+    elif shape != "line" and keep_proportions:
+        size = max(abs(dx), abs(dy))
+        dx = size if dx >= 0 else -size
+        dy = size if dy >= 0 else -size
+    if from_center:
+        return sx - dx, sy - dy, sx + dx, sy + dy
+    return sx, sy, sx + dx, sy + dy
+
+
+def shape_geometry_from_drag(
+    tool: str,
+    start: tuple[int, int],
+    end: tuple[int, int],
+    *,
+    shift: bool = False,
+    alt: bool = False,
+    sides: int = 5,
+    inner_ratio: float = 0.5,
+    custom_points: Any = None,
+) -> dict[str, Any]:
+    shape_by_tool = {
+        "rect_shape": "rectangle",
+        "ellipse_shape": "ellipse",
+        "line_shape": "line",
+        "bezier_shape": "bezier",
+        "polygon_shape": "polygon",
+        "star_shape": "star",
+        "custom_shape": "custom",
+    }
+    shape = shape_by_tool.get(tool, tool.removesuffix("_shape"))
+    raw_box = shape_box_from_drag(start, end, shape, keep_proportions=shift, from_center=alt)
+    box = normalized_box(raw_box)
+    geometry: dict[str, Any] = {"shape": shape, "box": box}
+    if shape == "line":
+        geometry["line"] = raw_box
+    elif shape == "bezier":
+        geometry["points"] = bezier_curve_points(None, box, 64)
+    elif shape == "polygon":
+        geometry["points"] = regular_polygon_points(box, max(3, int(sides)))
+    elif shape == "star":
+        geometry["points"] = star_points(box, max(3, int(sides)), inner_ratio)
+    elif shape == "custom":
+        geometry["points"] = custom_shape_points(custom_points, box)
+    return geometry
+
+
+def shape_drag_is_meaningful(geometry: dict[str, Any], minimum: int = 3) -> bool:
+    x1, y1, x2, y2 = geometry["box"]
+    if geometry.get("shape") in {"line", "bezier"}:
+        return math.hypot(x2 - x1, y2 - y1) >= minimum
+    return x2 - x1 >= minimum and y2 - y1 >= minimum
+
+
+def selection_contour_points(mask: np.ndarray | None, threshold: int = 128) -> list[np.ndarray]:
+    if mask is None or mask.ndim != 2 or not np.any(mask >= threshold):
+        return []
+    binary = (mask >= threshold).astype(np.uint8)
+    contours, _hierarchy = cv2.findContours(binary, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
+    return [contour[:, 0, :].copy() for contour in contours if len(contour) >= 2]
 
 
 def union_rect(a: tuple[int, int, int, int] | None, b: tuple[int, int, int, int] | None) -> tuple[int, int, int, int] | None:
@@ -2226,6 +2316,186 @@ def brush_mask(radius: int) -> np.ndarray:
     return mask
 
 
+def retouch_falloff_mask(radius: int, hardness: float = 0.5) -> np.ndarray:
+    radius = max(1, int(radius))
+    hardness = float(hardness)
+    if hardness > 1.0:
+        hardness /= 100.0
+    hardness = float(np.clip(hardness, 0.0, 1.0))
+    key = radius, int(round(hardness * 100))
+    cached = _retouch_mask_cache.get(key)
+    if cached is not None:
+        return cached
+    yy, xx = np.ogrid[-radius : radius + 1, -radius : radius + 1]
+    distance = np.sqrt(xx * xx + yy * yy).astype(np.float32) / float(radius)
+    solid_radius = hardness * 0.96
+    falloff = np.clip((1.0 - distance) / max(0.04, 1.0 - solid_radius), 0.0, 1.0)
+    if len(_retouch_mask_cache) > 128:
+        _retouch_mask_cache.clear()
+    _retouch_mask_cache[key] = falloff
+    return falloff
+
+
+def retouch_effect_halo(mode: str, strength: float) -> int:
+    if mode == "blur":
+        sigma = 0.65 + 1.85 * float(np.clip(strength, 0.0, 1.0))
+        return max(3, int(math.ceil(sigma * 3.0)))
+    if mode == "sharpen":
+        return 4
+    return 0
+
+
+def retouch_effect_rgb(source: np.ndarray, mode: str, strength: float, tonal_range: str = "midtones") -> np.ndarray:
+    rgb = source[:, :, :3].astype(np.float32)
+    strength = float(np.clip(strength, 0.0, 1.0))
+    if mode == "blur":
+        sigma = 0.65 + 1.85 * strength
+        alpha = source[:, :, 3].astype(np.float32) / 255.0
+        weight = cv2.GaussianBlur(alpha, (0, 0), sigma, borderType=cv2.BORDER_REFLECT_101)
+        premultiplied = cv2.GaussianBlur(rgb * alpha[:, :, None], (0, 0), sigma, borderType=cv2.BORDER_REFLECT_101)
+        return np.where(weight[:, :, None] > 1e-4, premultiplied / np.maximum(weight[:, :, None], 1e-4), rgb)
+    if mode == "sharpen":
+        blurred = cv2.GaussianBlur(rgb, (0, 0), 1.0, borderType=cv2.BORDER_REFLECT_101)
+        detail = rgb - blurred
+        detail_luma = np.abs(detail[:, :, 0] * 0.2126 + detail[:, :, 1] * 0.7152 + detail[:, :, 2] * 0.0722)
+        detail[detail_luma < 2.0] = 0.0
+        return np.clip(rgb + detail * 0.85, 0.0, 255.0)
+    if mode not in {"dodge", "burn"}:
+        return rgb
+    hls = cv2.cvtColor(source[:, :, :3], cv2.COLOR_RGB2HLS).astype(np.float32)
+    luminance = hls[:, :, 1] / 255.0
+    range_name = str(tonal_range).lower()
+    if range_name in {"shadows", "тени"}:
+        tonal_weight = np.clip(1.0 - luminance, 0.0, 1.0)
+    elif range_name in {"highlights", "света"}:
+        tonal_weight = np.clip(luminance, 0.0, 1.0)
+    else:
+        tonal_weight = np.clip(1.0 - np.abs(luminance - 0.5) * 2.0, 0.08, 1.0)
+    if mode == "dodge":
+        luminance = luminance + (1.0 - luminance) * 0.38 * tonal_weight
+    else:
+        luminance = luminance - luminance * 0.38 * tonal_weight
+    hls[:, :, 1] = np.clip(luminance * 255.0, 0.0, 255.0)
+    return cv2.cvtColor(hls.astype(np.uint8), cv2.COLOR_HLS2RGB).astype(np.float32)
+
+
+class RetouchStroke:
+    def __init__(
+        self,
+        layer: Layer,
+        mode: str,
+        radius: int,
+        hardness: float,
+        strength: float,
+        tonal_range: str = "midtones",
+        selection_mask: np.ndarray | None = None,
+        tile_size: int = 128,
+    ) -> None:
+        self.layer = layer
+        self.mode = mode
+        self.radius = max(1, int(radius))
+        self.hardness = float(np.clip(hardness, 0.0, 1.0))
+        self.strength = float(np.clip(strength, 0.0, 1.0))
+        self.tonal_range = tonal_range
+        self.selection_mask = selection_mask
+        self.tile_size = max(32, int(tile_size))
+        self.before_tiles: dict[tuple[int, int], tuple[tuple[int, int, int, int], np.ndarray]] = {}
+        self.coverage_tiles: dict[tuple[int, int], np.ndarray] = {}
+
+    def tile_keys(self, rect: tuple[int, int, int, int]):
+        x1, y1, x2, y2 = rect
+        if x1 >= x2 or y1 >= y2:
+            return
+        for ty in range(y1 // self.tile_size, (y2 - 1) // self.tile_size + 1):
+            for tx in range(x1 // self.tile_size, (x2 - 1) // self.tile_size + 1):
+                yield tx, ty
+
+    def capture_before(self, rect: tuple[int, int, int, int]) -> None:
+        height, width = self.layer.pixels.shape[:2]
+        for key in self.tile_keys(rect):
+            if key in self.before_tiles:
+                continue
+            tx, ty = key
+            x1, y1 = tx * self.tile_size, ty * self.tile_size
+            x2, y2 = min(width, x1 + self.tile_size), min(height, y1 + self.tile_size)
+            tile_rect = x1, y1, x2, y2
+            self.before_tiles[key] = tile_rect, self.layer.pixels[y1:y2, x1:x2].copy()
+
+    def original_region(self, rect: tuple[int, int, int, int]) -> np.ndarray:
+        self.capture_before(rect)
+        x1, y1, x2, y2 = rect
+        result = self.layer.pixels[y1:y2, x1:x2].copy()
+        for key in self.tile_keys(rect):
+            tile_rect, before = self.before_tiles[key]
+            tx1, ty1, tx2, ty2 = tile_rect
+            ix1, iy1 = max(x1, tx1), max(y1, ty1)
+            ix2, iy2 = min(x2, tx2), min(y2, ty2)
+            result[iy1 - y1 : iy2 - y1, ix1 - x1 : ix2 - x1] = before[iy1 - ty1 : iy2 - ty1, ix1 - tx1 : ix2 - tx1]
+        return result
+
+    def merge_coverage(self, rect: tuple[int, int, int, int], dab: np.ndarray) -> None:
+        x1, y1, x2, y2 = rect
+        for key in self.tile_keys(rect):
+            tile_rect, _before = self.before_tiles[key]
+            tx1, ty1, tx2, ty2 = tile_rect
+            coverage = self.coverage_tiles.get(key)
+            if coverage is None:
+                coverage = np.zeros((ty2 - ty1, tx2 - tx1), dtype=np.float32)
+                self.coverage_tiles[key] = coverage
+            ix1, iy1 = max(x1, tx1), max(y1, ty1)
+            ix2, iy2 = min(x2, tx2), min(y2, ty2)
+            target = coverage[iy1 - ty1 : iy2 - ty1, ix1 - tx1 : ix2 - tx1]
+            source = dab[iy1 - y1 : iy2 - y1, ix1 - x1 : ix2 - x1]
+            np.maximum(target, source, out=target)
+
+    def coverage_region(self, rect: tuple[int, int, int, int]) -> np.ndarray:
+        x1, y1, x2, y2 = rect
+        result = np.zeros((y2 - y1, x2 - x1), dtype=np.float32)
+        for key in self.tile_keys(rect):
+            coverage = self.coverage_tiles.get(key)
+            if coverage is None:
+                continue
+            tile_rect, _before = self.before_tiles[key]
+            tx1, ty1, tx2, ty2 = tile_rect
+            ix1, iy1 = max(x1, tx1), max(y1, ty1)
+            ix2, iy2 = min(x2, tx2), min(y2, ty2)
+            result[iy1 - y1 : iy2 - y1, ix1 - x1 : ix2 - x1] = coverage[iy1 - ty1 : iy2 - ty1, ix1 - tx1 : ix2 - tx1]
+        return result
+
+    @profiled("retouch.stroke_dab")
+    def dab(self, x: int, y: int) -> tuple[int, int, int, int] | None:
+        if self.layer.locked or self.strength <= 0.0:
+            return None
+        lx, ly = int(x) - self.layer.x, int(y) - self.layer.y
+        height, width = self.layer.pixels.shape[:2]
+        radius = self.radius
+        x1, y1 = max(0, lx - radius), max(0, ly - radius)
+        x2, y2 = min(width, lx + radius + 1), min(height, ly + radius + 1)
+        if x1 >= x2 or y1 >= y2:
+            return None
+        full_mask = retouch_falloff_mask(radius, self.hardness)
+        mx1, my1 = x1 - (lx - radius), y1 - (ly - radius)
+        dab = full_mask[my1 : my1 + (y2 - y1), mx1 : mx1 + (x2 - x1)].copy()
+        if self.selection_mask is not None:
+            dab *= self.selection_mask[y1:y2, x1:x2].astype(np.float32) / 255.0
+        if not np.any(dab > 0.0):
+            return None
+        halo = retouch_effect_halo(self.mode, self.strength)
+        source_rect = max(0, x1 - halo), max(0, y1 - halo), min(width, x2 + halo), min(height, y2 + halo)
+        self.capture_before(source_rect)
+        self.merge_coverage((x1, y1, x2, y2), dab)
+        source = self.original_region(source_rect)
+        edited = retouch_effect_rgb(source, self.mode, self.strength, self.tonal_range)
+        sx, sy = x1 - source_rect[0], y1 - source_rect[1]
+        edited = edited[sy : sy + (y2 - y1), sx : sx + (x2 - x1)]
+        original = self.original_region((x1, y1, x2, y2))
+        mix = self.coverage_region((x1, y1, x2, y2)) * self.strength
+        output = original.copy()
+        output[:, :, :3] = np.clip(original[:, :, :3].astype(np.float32) * (1.0 - mix[:, :, None]) + edited * mix[:, :, None], 0, 255).astype(np.uint8)
+        self.layer.pixels[y1:y2, x1:x2] = output
+        return x1, y1, x2, y2
+
+
 @profiled("stroke.brush_dab")
 def draw_brush(layer: Layer, x: int, y: int, radius: int, color: tuple[int, int, int, int], opacity: float = 1.0, erase=False, selection_mask: np.ndarray | None = None) -> tuple[int, int, int, int] | None:
     if layer.locked:
@@ -2241,23 +2511,29 @@ def draw_brush(layer: Layer, x: int, y: int, radius: int, color: tuple[int, int,
     mx1 = x1 - (lx - radius)
     my1 = y1 - (ly - radius)
     mask = full_mask[my1 : my1 + (y2 - y1), mx1 : mx1 + (x2 - x1)]
+    coverage = mask.astype(np.float32)
     if selection_mask is not None:
-        mask = mask & (selection_mask[y1:y2, x1:x2] > 0)
-        if not np.any(mask):
+        coverage *= selection_mask[y1:y2, x1:x2].astype(np.float32) / 255.0
+        if not np.any(coverage > 0.0):
             return None
     target = layer.pixels[y1:y2, x1:x2]
     if erase:
-        target[mask, 3] = np.clip(target[mask, 3].astype(np.float32) * (1.0 - opacity), 0, 255)
+        target[:, :, 3] = np.clip(target[:, :, 3].astype(np.float32) * (1.0 - float(opacity) * coverage), 0, 255).astype(np.uint8)
     else:
         paint = np.array(color, dtype=np.float32)
-        paint[3] *= opacity
-        dst = target[mask].astype(np.float32)
-        sa = paint[3] / 255.0
-        da = dst[:, 3] / 255.0
+        dst = target.astype(np.float32)
+        original = dst.copy()
+        sa = (paint[3] / 255.0) * float(opacity) * coverage
+        da = dst[:, :, 3] / 255.0
         oa = sa + da * (1.0 - sa)
-        dst[:, :3] = np.where(oa[:, None] > 0, (paint[:3] * sa + dst[:, :3] * da[:, None] * (1.0 - sa)) / np.maximum(oa[:, None], 1e-6), 0)
-        dst[:, 3] = oa * 255
-        target[mask] = np.clip(dst, 0, 255).astype(np.uint8)
+        dst[:, :, :3] = np.where(
+            oa[:, :, None] > 0,
+            (paint[:3] * sa[:, :, None] + dst[:, :, :3] * da[:, :, None] * (1.0 - sa[:, :, None])) / np.maximum(oa[:, :, None], 1e-6),
+            0,
+        )
+        dst[:, :, 3] = oa * 255
+        dst = np.where(coverage[:, :, None] > 0.0, dst, original)
+        target[:] = np.clip(dst, 0, 255).astype(np.uint8)
     return x1, y1, x2, y2
 
 
@@ -2279,54 +2555,32 @@ def draw_mask_brush(layer: Layer, x: int, y: int, radius: int, value: int, opaci
     mx1 = x1 - (lx - radius)
     my1 = y1 - (ly - radius)
     mask = full_mask[my1 : my1 + (y2 - y1), mx1 : mx1 + (x2 - x1)]
+    coverage = mask.astype(np.float32)
     if selection_mask is not None:
-        mask = mask & (selection_mask[y1:y2, x1:x2] > 0)
-        if not np.any(mask):
+        coverage *= selection_mask[y1:y2, x1:x2].astype(np.float32) / 255.0
+        if not np.any(coverage > 0.0):
             return None
     target = layer.mask[y1:y2, x1:x2].astype(np.float32)
-    target[mask] = target[mask] * (1.0 - opacity) + int(value) * opacity
+    mix = coverage * float(opacity)
+    target = target * (1.0 - mix) + int(value) * mix
     layer.mask[y1:y2, x1:x2] = np.clip(target, 0, 255).astype(np.uint8)
     return x1, y1, x2, y2
 
 
 @profiled("retouch.local_dab")
-def local_retouch(layer: Layer, x: int, y: int, radius: int, mode: str, opacity: float = 1.0, selection_mask: np.ndarray | None = None) -> tuple[int, int, int, int] | None:
-    if layer.locked:
-        return None
-    lx, ly = x - layer.x, y - layer.y
-    if lx < -radius or ly < -radius or lx >= layer.pixels.shape[1] + radius or ly >= layer.pixels.shape[0] + radius:
-        return None
-    x1 = max(0, lx - radius)
-    y1 = max(0, ly - radius)
-    x2 = min(layer.pixels.shape[1], lx + radius + 1)
-    y2 = min(layer.pixels.shape[0], ly + radius + 1)
-    full_mask = brush_mask(radius)
-    mx1 = x1 - (lx - radius)
-    my1 = y1 - (ly - radius)
-    mask = full_mask[my1 : my1 + (y2 - y1), mx1 : mx1 + (x2 - x1)]
-    if selection_mask is not None:
-        mask = mask & (selection_mask[y1:y2, x1:x2] > 0)
-        if not np.any(mask):
-            return None
-    patch = layer.pixels[y1:y2, x1:x2].copy()
-    edited = patch.copy().astype(np.float32)
-    if mode == "blur":
-        k = max(3, radius // 2 * 2 + 1)
-        edited[:, :, :3] = cv2.GaussianBlur(patch[:, :, :3], (k, k), max(1, radius / 3))
-    elif mode == "sharpen":
-        blurred = cv2.GaussianBlur(patch[:, :, :3], (0, 0), 1.2)
-        edited[:, :, :3] = np.clip(patch[:, :, :3].astype(np.float32) * 1.8 - blurred.astype(np.float32) * 0.8, 0, 255)
-    elif mode == "dodge":
-        edited[:, :, :3] = np.clip(patch[:, :, :3].astype(np.float32) + 45, 0, 255)
-    elif mode == "burn":
-        edited[:, :, :3] = np.clip(patch[:, :, :3].astype(np.float32) - 45, 0, 255)
-    else:
-        return None
-    target = layer.pixels[y1:y2, x1:x2].astype(np.float32)
-    mix = np.clip(float(opacity), 0, 1)
-    target[mask] = target[mask] * (1.0 - mix) + edited[mask] * mix
-    layer.pixels[y1:y2, x1:x2] = np.clip(target, 0, 255).astype(np.uint8)
-    return x1, y1, x2, y2
+def local_retouch(
+    layer: Layer,
+    x: int,
+    y: int,
+    radius: int,
+    mode: str,
+    strength: float = 0.25,
+    selection_mask: np.ndarray | None = None,
+    hardness: float = 0.5,
+    tonal_range: str = "midtones",
+) -> tuple[int, int, int, int] | None:
+    stroke = RetouchStroke(layer, mode, radius, hardness, strength, tonal_range, selection_mask)
+    return stroke.dab(x, y)
 
 
 @profiled("retouch.clone_heal_dab")
@@ -2340,6 +2594,7 @@ def clone_or_heal(
     opacity: float = 1.0,
     heal: bool = False,
     selection_mask: np.ndarray | None = None,
+    hardness: float = 0.5,
 ) -> tuple[int, int, int, int] | None:
     if layer.locked:
         return None
@@ -2358,23 +2613,25 @@ def clone_or_heal(
     sy2 = sy1 + (y2 - y1)
     if sx1 < 0 or sy1 < 0 or sx2 > layer.pixels.shape[1] or sy2 > layer.pixels.shape[0]:
         return None
-    full_mask = brush_mask(radius)
+    full_mask = retouch_falloff_mask(radius, hardness)
     mx1 = x1 - (tx - radius)
     my1 = y1 - (ty - radius)
-    mask = full_mask[my1 : my1 + (y2 - y1), mx1 : mx1 + (x2 - x1)]
+    mask = full_mask[my1 : my1 + (y2 - y1), mx1 : mx1 + (x2 - x1)].copy()
     if selection_mask is not None:
-        mask = mask & (selection_mask[y1:y2, x1:x2] > 0)
-        if not np.any(mask):
+        mask *= selection_mask[y1:y2, x1:x2].astype(np.float32) / 255.0
+        if not np.any(mask > 0.0):
             return None
     src = layer.pixels[sy1:sy2, sx1:sx2].astype(np.float32)
     dst = layer.pixels[y1:y2, x1:x2].astype(np.float32)
     edited = src.copy()
     if heal:
-        src_mean = src[mask, :3].mean(axis=0) if np.any(mask) else src[:, :, :3].reshape(-1, 3).mean(axis=0)
-        dst_mean = dst[mask, :3].mean(axis=0) if np.any(mask) else dst[:, :, :3].reshape(-1, 3).mean(axis=0)
-        edited[:, :, :3] = np.clip(src[:, :, :3] - src_mean + dst_mean, 0, 255)
-    mix = np.clip(float(opacity), 0, 1)
-    dst[mask] = dst[mask] * (1.0 - mix) + edited[mask] * mix
+        sigma = max(1.0, min(8.0, radius * 0.22))
+        source_low = cv2.GaussianBlur(src[:, :, :3], (0, 0), sigma, borderType=cv2.BORDER_REFLECT_101)
+        target_low = cv2.GaussianBlur(dst[:, :, :3], (0, 0), sigma, borderType=cv2.BORDER_REFLECT_101)
+        edited[:, :, :3] = np.clip(target_low + (src[:, :, :3] - source_low), 0, 255)
+        edited[:, :, 3] = dst[:, :, 3]
+    mix = mask * float(np.clip(opacity, 0.0, 1.0))
+    dst = dst * (1.0 - mix[:, :, None]) + edited * mix[:, :, None]
     layer.pixels[y1:y2, x1:x2] = np.clip(dst, 0, 255).astype(np.uint8)
     return x1, y1, x2, y2
 
@@ -2387,6 +2644,7 @@ def spot_heal(
     radius: int,
     strength: float = 1.0,
     selection_mask: np.ndarray | None = None,
+    hardness: float = 0.45,
 ) -> tuple[int, int, int, int] | None:
     if layer.locked:
         return None
@@ -2400,18 +2658,26 @@ def spot_heal(
     if x1 >= x2 or y1 >= y2:
         return None
 
-    yy, xx = np.ogrid[y1:y2, x1:x2]
-    target_mask = ((xx - lx) ** 2 + (yy - ly) ** 2 <= radius * radius).astype(np.uint8) * 255
+    falloff_full = retouch_falloff_mask(radius, hardness)
+    target_left, target_top = lx - radius, ly - radius
+    fx1, fy1 = max(x1, target_left), max(y1, target_top)
+    fx2, fy2 = min(x2, lx + radius + 1), min(y2, ly + radius + 1)
+    falloff = np.zeros((y2 - y1, x2 - x1), dtype=np.float32)
+    if fx1 < fx2 and fy1 < fy2:
+        falloff[fy1 - y1 : fy2 - y1, fx1 - x1 : fx2 - x1] = falloff_full[
+            fy1 - target_top : fy2 - target_top,
+            fx1 - target_left : fx2 - target_left,
+        ]
     if selection_mask is not None:
-        target_mask = np.minimum(target_mask, selection_mask[y1:y2, x1:x2])
-    if not np.any(target_mask):
+        falloff *= selection_mask[y1:y2, x1:x2].astype(np.float32) / 255.0
+    target_mask = (falloff > 0.04).astype(np.uint8) * 255
+    if not np.any(target_mask > 0):
         return None
 
     patch = layer.pixels[y1:y2, x1:x2].copy()
     inpaint_radius = max(2.0, min(12.0, radius * 0.55))
     healed_rgb = cv2.inpaint(patch[:, :, :3], target_mask, inpaint_radius, cv2.INPAINT_TELEA)
-    feather = cv2.GaussianBlur(target_mask, (0, 0), max(0.7, radius * 0.16)).astype(np.float32) / 255.0
-    feather *= float(np.clip(strength, 0.0, 1.0))
+    feather = falloff * float(np.clip(strength, 0.0, 1.0))
     mixed = patch[:, :, :3].astype(np.float32) * (1.0 - feather[:, :, None]) + healed_rgb.astype(np.float32) * feather[:, :, None]
     layer.pixels[y1:y2, x1:x2, :3] = np.clip(mixed, 0, 255).astype(np.uint8)
     return x1, y1, x2, y2
@@ -2433,8 +2699,12 @@ def flood_fill(layer: Layer, x: int, y: int, color: tuple[int, int, int, int], t
         return
     region = labels == label
     if selection_mask is not None:
-        region = region & (selection_mask > 0)
-    layer.pixels[region] = np.array(color, dtype=np.uint8)
+        coverage = (selection_mask.astype(np.float32) / 255.0) * region.astype(np.float32)
+        target = layer.pixels.astype(np.float32)
+        paint = np.array(color, dtype=np.float32)
+        layer.pixels[:] = np.clip(target * (1.0 - coverage[:, :, None]) + paint * coverage[:, :, None], 0, 255).astype(np.uint8)
+    else:
+        layer.pixels[region] = np.array(color, dtype=np.uint8)
 
 
 def apply_gradient(layer: Layer, box: tuple[int, int, int, int], start: tuple[int, int, int, int], end: tuple[int, int, int, int], selection_mask: np.ndarray | None = None) -> None:
@@ -2456,8 +2726,13 @@ def apply_gradient(layer: Layer, box: tuple[int, int, int, int], start: tuple[in
     if selection_mask is None:
         layer.pixels[y1:y2, x1:x2] = patch
     else:
-        mask = selection_mask[y1:y2, x1:x2] > 0
-        layer.pixels[y1:y2, x1:x2][mask] = patch[mask]
+        coverage = selection_mask[y1:y2, x1:x2].astype(np.float32) / 255.0
+        target = layer.pixels[y1:y2, x1:x2].astype(np.float32)
+        layer.pixels[y1:y2, x1:x2] = np.clip(
+            target * (1.0 - coverage[:, :, None]) + patch.astype(np.float32) * coverage[:, :, None],
+            0,
+            255,
+        ).astype(np.uint8)
 
 
 def add_text(layer: Layer, x: int, y: int, text: str, color: tuple[int, int, int, int], size: int, selection_mask: np.ndarray | None = None) -> None:
@@ -2474,8 +2749,12 @@ def add_text(layer: Layer, x: int, y: int, text: str, color: tuple[int, int, int
     if selection_mask is None:
         layer.pixels = rendered
     else:
-        mask = selection_mask > 0
-        layer.pixels[mask] = rendered[mask]
+        coverage = selection_mask.astype(np.float32) / 255.0
+        layer.pixels[:] = np.clip(
+            layer.pixels.astype(np.float32) * (1.0 - coverage[:, :, None]) + rendered.astype(np.float32) * coverage[:, :, None],
+            0,
+            255,
+        ).astype(np.uint8)
 
 
 def render_text_layer(layer: Layer) -> None:

@@ -51,7 +51,11 @@ from .core import (
     rgba_array_to_pil,
     reduce_red_eye,
     regular_polygon_points,
+    RetouchStroke,
     selection_edge_confidence,
+    selection_contour_points,
+    shape_drag_is_meaningful,
+    shape_geometry_from_drag,
     star_points,
     union_rect,
     warp_pixels,
@@ -68,6 +72,7 @@ from .history import (
     LayerInsertCommand,
     LayerMoveCommand,
     LayerOpacityCommand,
+    LayerVisibilityCommand,
     LayerPropertyCommand,
     LayerReorderCommand,
     MaskPatchCommand,
@@ -173,6 +178,18 @@ RETOUCH_PRESETS = {
     "Детальная ретушь": {"brush_size": 9, "opacity": 0.34, "tolerance": 12, "tool": "healing"},
     "Мелкие дефекты": {"brush_size": 6, "opacity": 0.95, "tolerance": 12, "tool": "spot_healing"},
     "Точечные пятна": {"brush_size": 14, "opacity": 0.9, "tolerance": 20, "tool": "spot_healing"},
+}
+
+TOOL_SETTINGS_DEFAULTS = {
+    "brush": {"size": 28, "opacity": 1.0},
+    "eraser": {"size": 28, "opacity": 1.0},
+    "blur_tool": {"size": 32, "hardness": 0.5, "strength": 0.25},
+    "sharpen_tool": {"size": 28, "hardness": 0.5, "strength": 0.2},
+    "dodge": {"size": 32, "hardness": 0.45, "exposure": 0.15, "range": "Средние тона"},
+    "burn": {"size": 32, "hardness": 0.45, "exposure": 0.15, "range": "Средние тона"},
+    "clone": {"size": 28, "hardness": 0.5, "opacity": 0.8},
+    "healing": {"size": 26, "hardness": 0.45, "strength": 0.65},
+    "spot_healing": {"size": 10, "hardness": 0.4, "strength": 0.65},
 }
 
 CUSTOM_SHAPE_PRESETS = {
@@ -325,6 +342,20 @@ class PhotoRedactorApp(tk.Tk):
         self.zoom = tk.DoubleVar(value=1.0)
         self.brush_size = tk.IntVar(value=28)
         self.opacity = tk.DoubleVar(value=1.0)
+        self.hardness = tk.DoubleVar(value=0.5)
+        self.retouch_strength = tk.DoubleVar(value=0.25)
+        self.exposure = tk.DoubleVar(value=0.15)
+        self.tonal_range = tk.StringVar(value="Средние тона")
+        self.tool_settings = copy.deepcopy(TOOL_SETTINGS_DEFAULTS)
+        self._active_settings_tool = "brush"
+        self.shape_stroke_width = tk.IntVar(value=2)
+        self.polygon_sides = tk.IntVar(value=5)
+        self.star_points_count = tk.IntVar(value=5)
+        self.star_inner_ratio = tk.DoubleVar(value=0.5)
+        self.custom_shape_preset = tk.StringVar(value=next(iter(CUSTOM_SHAPE_PRESETS)))
+        self.selection_feather = tk.IntVar(value=0)
+        self.selection_antialias = tk.BooleanVar(value=True)
+        self.magic_contiguous = tk.BooleanVar(value=True)
         self.tolerance = tk.IntVar(value=24)
         self.quick_smooth = tk.IntVar(value=1)
         self.quick_edge_radius = tk.IntVar(value=2)
@@ -346,12 +377,19 @@ class PhotoRedactorApp(tk.Tk):
         self._stroke_before: np.ndarray | None = None
         self._stroke_tiles: dict[tuple[int, int], tuple[tuple[int, int, int, int], np.ndarray]] = {}
         self._stroke_selection_mask: np.ndarray | None = None
+        self._retouch_stroke: RetouchStroke | None = None
         self._opacity_layer_id: str | None = None
         self._opacity_before: float | None = None
         self._space_down = False
         self._panning = False
         self.selection_id: int | None = None
+        self._selection_overlay_ids: list[int] = []
+        self._selection_contours: list[np.ndarray] = []
+        self._selection_contour_signature: tuple[int, int, int] | None = None
+        self._selection_dash_phase = 0
+        self._selection_animation_id: str | None = None
         self._drag_preview_ids: list[int] = []
+        self._shape_drag_options: dict | None = None
         self.selection_box: tuple[int, int, int, int] | None = None
         self._lasso_points: list[tuple[int, int]] = []
         self._polygon_points: list[tuple[int, int]] = []
@@ -422,6 +460,12 @@ class PhotoRedactorApp(tk.Tk):
         self.schedule_autosave()
 
     def destroy(self) -> None:
+        if self._selection_animation_id is not None:
+            try:
+                self.after_cancel(self._selection_animation_id)
+            except tk.TclError:
+                pass
+            self._selection_animation_id = None
         if self._initial_fit_after_id is not None:
             try:
                 self.after_cancel(self._initial_fit_after_id)
@@ -443,6 +487,21 @@ class PhotoRedactorApp(tk.Tk):
                 if int(data.get("tool_schema_version", 1)) < 2 and "spot_healing" not in self.visible_tools:
                     self.visible_tools.append("spot_healing")
                 self.tool_pane_position = int(data.get("tool_pane_position", self.tool_pane_position))
+                saved_tool_settings = data.get("tool_settings", {})
+                if isinstance(saved_tool_settings, dict):
+                    for tool_id, defaults in TOOL_SETTINGS_DEFAULTS.items():
+                        saved = saved_tool_settings.get(tool_id)
+                        if isinstance(saved, dict):
+                            self.tool_settings[tool_id] = {**defaults, **{key: saved[key] for key in defaults if key in saved}}
+                shape_settings = data.get("shape_settings", {})
+                if isinstance(shape_settings, dict):
+                    self.shape_stroke_width.set(max(0, min(100, int(shape_settings.get("stroke_width", 2)))))
+                    self.polygon_sides.set(max(3, min(64, int(shape_settings.get("polygon_sides", 5)))))
+                    self.star_points_count.set(max(3, min(64, int(shape_settings.get("star_points", 5)))))
+                    self.star_inner_ratio.set(float(np.clip(shape_settings.get("star_inner_ratio", 0.5), 0.05, 0.95)))
+                    preset = str(shape_settings.get("custom_shape_preset", self.custom_shape_preset.get()))
+                    if preset in CUSTOM_SHAPE_PRESETS:
+                        self.custom_shape_preset.set(preset)
                 custom_canvas = data.get("custom_canvas", {})
                 self.custom_canvas_width = max(1, min(50000, int(custom_canvas.get("width", self.custom_canvas_width))))
                 self.custom_canvas_height = max(1, min(50000, int(custom_canvas.get("height", self.custom_canvas_height))))
@@ -452,6 +511,7 @@ class PhotoRedactorApp(tk.Tk):
                     self.custom_canvas_background = saved_background
                 if self.tool.get() not in self.tool_order:
                     self.tool.set(self.visible_tools[0])
+                self.load_active_tool_settings(self.tool.get())
                 if hasattr(self, "tool_palette"):
                     self.tool_palette.set_configuration(self.tool_order, self.visible_tools)
                 if hasattr(self, "tool_split"):
@@ -466,6 +526,7 @@ class PhotoRedactorApp(tk.Tk):
         try:
             self.app_data_dir.mkdir(parents=True, exist_ok=True)
             self.capture_tool_pane_position()
+            self.save_active_tool_settings()
             self.settings_path.write_text(
                 json.dumps(
                     {
@@ -474,6 +535,14 @@ class PhotoRedactorApp(tk.Tk):
                         "visible_tools": self.visible_tools,
                         "tool_schema_version": 2,
                         "tool_pane_position": self.tool_pane_position,
+                        "tool_settings": self.tool_settings,
+                        "shape_settings": {
+                            "stroke_width": int(self.shape_stroke_width.get()),
+                            "polygon_sides": int(self.polygon_sides.get()),
+                            "star_points": int(self.star_points_count.get()),
+                            "star_inner_ratio": float(self.star_inner_ratio.get()),
+                            "custom_shape_preset": self.custom_shape_preset.get(),
+                        },
                         "custom_canvas": {
                             "width": self.custom_canvas_width,
                             "height": self.custom_canvas_height,
@@ -782,6 +851,21 @@ class PhotoRedactorApp(tk.Tk):
         self.bind_all("<minus>", lambda _e: self.set_zoom(self.zoom.get() / 1.25) if self._editor_active else None)
         self.bind_all("<KeyPress-space>", self.space_down)
         self.bind_all("<KeyRelease-space>", self.space_up)
+        self.bind_all("<Escape>", self.cancel_incomplete_interaction)
+
+    def cancel_incomplete_interaction(self, _event=None) -> str:
+        if hasattr(self, "canvas"):
+            self.clear_drag_preview()
+            self.clear_lasso_overlay()
+            self.clear_quick_selection_preview()
+        self.drag_start = None
+        self.last_point = None
+        self._shape_drag_options = None
+        self._clone_anchor_target = None
+        self._clone_anchor_source = None
+        if hasattr(self, "canvas"):
+            self.update_selection_overlay()
+        return "break"
 
     def _build_menu(self) -> None:
         menu = tk.Menu(self)
@@ -1003,6 +1087,10 @@ class PhotoRedactorApp(tk.Tk):
             definitions=TOOL_DEFINITIONS,
             brush_size=self.brush_size,
             opacity=self.opacity,
+            hardness=self.hardness,
+            retouch_strength=self.retouch_strength,
+            exposure=self.exposure,
+            tonal_range=self.tonal_range,
             tolerance=self.tolerance,
             selection_mode=self.selection_mode,
             quick_smooth=self.quick_smooth,
@@ -1015,6 +1103,15 @@ class PhotoRedactorApp(tk.Tk):
             pick_background=self.pick_background,
             set_paint_target=self.set_paint_target,
             apply_retouch_preset=self.apply_retouch_preset,
+            shape_stroke_width=self.shape_stroke_width,
+            polygon_sides=self.polygon_sides,
+            star_points=self.star_points_count,
+            star_inner_ratio=self.star_inner_ratio,
+            custom_shape_preset=self.custom_shape_preset,
+            custom_shape_presets=list(CUSTOM_SHAPE_PRESETS),
+            selection_feather=self.selection_feather,
+            selection_antialias=self.selection_antialias,
+            magic_contiguous=self.magic_contiguous,
             tooltip_factory=ToolTip,
         )
         self.tool_options_panel.pack(fill=tk.BOTH, expand=True)
@@ -1024,7 +1121,47 @@ class PhotoRedactorApp(tk.Tk):
         if value in self.tool_order:
             self.tool.set(value)
 
+    def save_active_tool_settings(self) -> None:
+        settings = self.tool_settings.get(self._active_settings_tool)
+        if settings is None:
+            return
+        if "size" in settings:
+            settings["size"] = int(self.brush_size.get())
+        if "opacity" in settings:
+            settings["opacity"] = float(self.opacity.get())
+        if "hardness" in settings:
+            settings["hardness"] = float(self.hardness.get())
+        if "strength" in settings:
+            settings["strength"] = float(self.retouch_strength.get())
+        if "exposure" in settings:
+            settings["exposure"] = float(self.exposure.get())
+        if "range" in settings:
+            settings["range"] = self.tonal_range.get()
+
+    def load_active_tool_settings(self, tool: str) -> None:
+        settings = self.tool_settings.get(tool)
+        self._active_settings_tool = tool
+        if settings is None:
+            return
+        if "size" in settings:
+            self.brush_size.set(int(settings["size"]))
+        if "opacity" in settings:
+            self.opacity.set(float(settings["opacity"]))
+        if "hardness" in settings:
+            self.hardness.set(float(settings["hardness"]))
+        if "strength" in settings:
+            self.retouch_strength.set(float(settings["strength"]))
+        if "exposure" in settings:
+            self.exposure.set(float(settings["exposure"]))
+        if "range" in settings:
+            self.tonal_range.set(str(settings["range"]))
+
     def tool_changed(self, *_args) -> None:
+        new_tool = self.tool.get()
+        if new_tool != self._active_settings_tool:
+            self.save_active_tool_settings()
+            self.load_active_tool_settings(new_tool)
+        self.cancel_incomplete_interaction()
         if hasattr(self, "tool_options_panel"):
             self.tool_options_panel.render()
         self.refresh_tool_menu()
@@ -1035,7 +1172,7 @@ class PhotoRedactorApp(tk.Tk):
         if self.tool.get() != "quick_selection":
             self._quick_points.clear()
             self.clear_quick_selection_preview()
-        label = self.tool_label(self.tool.get())
+        label = self.tool_label(new_tool)
         if label:
             self.status_text(f"Инструмент: {label}")
 
@@ -1120,24 +1257,35 @@ class PhotoRedactorApp(tk.Tk):
         self.canvas.bind("<ButtonRelease-2>", self.pan_up)
         self.canvas.bind("<Motion>", self.pointer_motion)
         self.canvas.bind("<Leave>", self.pointer_leave)
+        self.canvas.bind("<FocusOut>", self.canvas_focus_lost)
         self.canvas.bind("<MouseWheel>", self.mouse_wheel)
+
+    def canvas_focus_lost(self, _event) -> None:
+        if self.drag_start is not None and self.tool.get().endswith("_shape"):
+            self.cancel_incomplete_interaction()
 
     def apply_retouch_preset(self) -> None:
         preset = RETOUCH_PRESETS.get(self.retouch_preset.get())
         if preset is None:
             return
-        self.brush_size.set(int(preset["brush_size"]))
-        self.opacity.set(float(preset["opacity"]))
-        self.tolerance.set(int(preset["tolerance"]))
         preset_tool = str(preset.get("tool", "healing"))
         if preset_tool in {"blur_tool", "sharpen_tool", "dodge", "burn", "clone", "healing", "spot_healing"}:
             self.tool.set(preset_tool)
+        self.brush_size.set(int(preset["brush_size"]))
+        if preset_tool == "clone":
+            self.opacity.set(float(preset["opacity"]))
+        elif preset_tool in {"dodge", "burn"}:
+            self.exposure.set(float(preset["opacity"]))
+        else:
+            self.retouch_strength.set(float(preset["opacity"]))
+        self.tolerance.set(int(preset["tolerance"]))
         self.status_text(f"Пресет ретуши: {self.retouch_preset.get()}")
 
     def _build_panels(self, parent: ttk.Frame) -> None:
         ttk.Label(parent, text="Слои").pack(anchor=tk.W, padx=8, pady=(8, 4))
         self.layer_list = tk.Listbox(parent, height=16, exportselection=False)
         self.layer_list.pack(fill=tk.BOTH, expand=False, padx=8)
+        self.layer_list.bind("<Button-1>", self.layer_list_click)
         self.layer_list.bind("<<ListboxSelect>>", self.layer_selected)
         buttons = ttk.Frame(parent)
         buttons.pack(fill=tk.X, padx=8, pady=6)
@@ -1256,6 +1404,7 @@ class PhotoRedactorApp(tk.Tk):
         self._edit_generation += 1
         self.record_action(label)
         self.selection_box = self.doc.selection_bounds()
+        self._selection_contour_signature = None
         self.update_selection_overlay()
         self.status_text(label)
 
@@ -1396,7 +1545,7 @@ class PhotoRedactorApp(tk.Tk):
                 return
             self.refresh(preserve_render_cache=command.attribute not in {"filters", "effects", "mask", "mask_feather"})
             return
-        if isinstance(command, (LayerOpacityCommand, LayerBlendModeCommand)):
+        if isinstance(command, (LayerOpacityCommand, LayerBlendModeCommand, LayerVisibilityCommand)):
             self.refresh(preserve_render_cache=True)
             return
         if isinstance(command, LayerFieldsCommand):
@@ -1565,14 +1714,14 @@ class PhotoRedactorApp(tk.Tk):
     def refresh_layers(self) -> None:
         self.layer_list.delete(0, tk.END)
         for i, layer in enumerate(reversed(self.doc.layers)):
-            marker = "*" if layer.visible else "-"
+            marker = "👁" if layer.visible else "  "
             mask_marker = "U" if layer.mask is not None and not layer.mask_linked else "M" if layer.mask is not None and layer.mask_enabled else "m" if layer.mask is not None else " "
             lock_marker = "L" if layer.locked else " "
             kind_marker = "T" if layer.kind == "text" else "A" if layer.kind == "adjustment" else "S" if layer.kind == "shape" else "L" if layer.kind == "linked" else "E" if layer.kind == "embedded" else " "
             clip_marker = "C" if layer.clipping else " "
             fx_marker = "F" if layer.effects else " "
             filter_marker = "P" if layer.filters else " "
-            self.layer_list.insert(tk.END, f"{marker}{mask_marker}{lock_marker}{kind_marker}{clip_marker}{fx_marker}{filter_marker} {layer.name}  {round(layer.opacity * 100)}%")
+            self.layer_list.insert(tk.END, f"{marker} {mask_marker}{lock_marker}{kind_marker}{clip_marker}{fx_marker}{filter_marker} {layer.name}  {round(layer.opacity * 100)}%")
         self.layer_list.selection_clear(0, tk.END)
         self.layer_list.selection_set(len(self.doc.layers) - 1 - self.doc.active_layer)
         self.layer_opacity.set(self.doc.layer.opacity)
@@ -1689,6 +1838,8 @@ class PhotoRedactorApp(tk.Tk):
         self._last_pointer_event = event
         if not self._panning:
             self.update_brush_preview(event)
+        if self.tool.get() == "polygon_lasso" and self._polygon_points:
+            self.draw_polygon_lasso(self.canvas_to_doc(event))
 
     def pointer_leave(self, _event) -> None:
         self._last_pointer_event = None
@@ -1789,7 +1940,7 @@ class PhotoRedactorApp(tk.Tk):
             if self._quick_mode == "add":
                 mask = np.maximum(current, mask)
             elif self._quick_mode == "subtract":
-                mask = np.where(mask > 0, 0, current).astype(np.uint8)
+                mask = np.clip(current.astype(np.float32) * (1.0 - mask.astype(np.float32) / 255.0), 0, 255).astype(np.uint8)
             elif self._quick_mode == "intersect":
                 mask = np.minimum(current, mask)
         if mask is None:
@@ -1870,10 +2021,14 @@ class PhotoRedactorApp(tk.Tk):
         if self.tool.get() == "hand" or self._space_down:
             self.pan_down(event)
             return
+        self.canvas.focus_set()
         point = self.canvas_to_doc(event)
         self.drag_start = point
         self.last_point = point
         tool = self.tool.get()
+        if tool.endswith("_shape"):
+            self._shape_drag_options = self.current_shape_options(tool)
+            self.clear_selection_overlay()
         if tool in ["brush", "eraser", "blur_tool", "sharpen_tool", "dodge", "burn", "clone", "healing", "spot_healing"]:
             if tool in ["clone", "healing"]:
                 if event.state & 0x0008:
@@ -1894,7 +2049,8 @@ class PhotoRedactorApp(tk.Tk):
             self.run_pixel_delta_command("Fill", lambda: flood_fill(self.doc.layer, point[0], point[1], self.foreground, int(self.tolerance.get()), self.doc.layer_selection_mask(self.doc.layer)))
         elif tool == "magic_wand":
             mode = self.selection_mode_from_event(event)
-            self.run_selection_command("Magic wand selection", lambda: self.doc.magic_wand_selection(self.doc.layer, point[0], point[1], int(self.tolerance.get()), mode))
+            contiguous = bool(self.magic_contiguous.get())
+            self.run_selection_command("Magic wand selection", lambda: self.doc.magic_wand_selection(self.doc.layer, point[0], point[1], int(self.tolerance.get()), mode, contiguous))
         elif tool == "color_range":
             mode = self.selection_mode_from_event(event)
             self.run_selection_command("Color range selection", lambda: self.doc.color_range_selection(self.doc.layer, point[0], point[1], int(self.tolerance.get()), mode))
@@ -1971,7 +2127,7 @@ class PhotoRedactorApp(tk.Tk):
             self.drag_start = point
             self.request_canvas_refresh()
         elif tool in ["select", "ellipse_select", "crop", "gradient", "rect_shape", "ellipse_shape", "line_shape", "bezier_shape", "polygon_shape", "star_shape", "custom_shape"]:
-            self.draw_selection(self.drag_start, point)
+            self.draw_selection(self.drag_start, point, event.state)
         elif tool == "lasso" and self.drag_start:
             self._lasso_points.append(point)
             self.draw_lasso()
@@ -2005,21 +2161,30 @@ class PhotoRedactorApp(tk.Tk):
         elif tool == "gradient" and self.drag_start:
             self.run_pixel_delta_command("Gradient", lambda: apply_gradient(self.doc.layer, (*self.drag_start, *point), self.foreground, self.background, self.doc.layer_selection_mask(self.doc.layer)))
         elif tool in ["rect_shape", "ellipse_shape", "line_shape", "bezier_shape", "polygon_shape", "star_shape", "custom_shape"] and self.drag_start:
-            self.create_shape_from_drag(tool, (*self.drag_start, *point))
-            self.refresh()
+            geometry = self.shape_geometry_for_drag(tool, self.drag_start, point, event.state)
+            if shape_drag_is_meaningful(geometry):
+                self.create_shape_from_drag(tool, geometry)
+                self.refresh()
+            else:
+                self.update_selection_overlay()
         elif tool in ["select", "ellipse_select", "crop"] and self.drag_start:
             self.selection_box = (*self.drag_start, *point)
             if tool == "select":
                 mode = self.selection_mode_from_event(event)
-                self.run_selection_command("Rectangular selection", lambda: self.doc.set_rect_selection(self.selection_box, mode))
+                feather = int(self.selection_feather.get())
+                self.run_selection_command("Rectangular selection", lambda: self.doc.set_rect_selection(self.selection_box, mode, feather))
             elif tool == "ellipse_select":
                 mode = self.selection_mode_from_event(event)
-                self.run_selection_command("Elliptical selection", lambda: self.doc.set_ellipse_selection(self.selection_box, mode))
-            self.draw_selection(self.drag_start, point)
+                feather = int(self.selection_feather.get())
+                antialias = bool(self.selection_antialias.get())
+                self.run_selection_command("Elliptical selection", lambda: self.doc.set_ellipse_selection(self.selection_box, mode, feather, antialias))
+            self.draw_selection(self.drag_start, point, event.state)
         elif tool == "lasso" and len(self._lasso_points) >= 3:
             mode = self.selection_mode_from_event(event)
             points = list(self._lasso_points)
-            self.run_selection_command("Lasso selection", lambda: self.doc.set_polygon_selection(points, mode))
+            feather = int(self.selection_feather.get())
+            antialias = bool(self.selection_antialias.get())
+            self.run_selection_command("Lasso selection", lambda: self.doc.set_polygon_selection(points, mode, feather, antialias))
             self.clear_lasso_overlay()
         elif tool == "magnetic_lasso":
             if self.drag_start:
@@ -2027,7 +2192,9 @@ class PhotoRedactorApp(tk.Tk):
             if len(self._lasso_points) >= 3:
                 mode = self.selection_mode_from_event(event)
                 points = list(self._lasso_points)
-                self.run_selection_command("Magnetic lasso selection", lambda: self.doc.set_polygon_selection(points, mode))
+                feather = int(self.selection_feather.get())
+                antialias = bool(self.selection_antialias.get())
+                self.run_selection_command("Magnetic lasso selection", lambda: self.doc.set_polygon_selection(points, mode, feather, antialias))
             self.clear_lasso_overlay()
             self._magnetic_edges = None
         elif tool == "quick_selection" and self._quick_points:
@@ -2059,12 +2226,15 @@ class PhotoRedactorApp(tk.Tk):
             self.clear_drag_preview()
         self.drag_start = None
         self.last_point = None
+        self._shape_drag_options = None
 
     def pointer_double_click(self, event) -> None:
         if self.tool.get() == "polygon_lasso" and len(self._polygon_points) >= 3:
             mode = self.selection_mode_from_event(event)
             points = list(self._polygon_points)
-            self.run_selection_command("Polygon lasso selection", lambda: self.doc.set_polygon_selection(points, mode))
+            feather = int(self.selection_feather.get())
+            antialias = bool(self.selection_antialias.get())
+            self.run_selection_command("Polygon lasso selection", lambda: self.doc.set_polygon_selection(points, mode, feather, antialias))
             self.clear_lasso_overlay()
 
     def begin_stroke(self, kind: str = "pixels") -> None:
@@ -2078,6 +2248,21 @@ class PhotoRedactorApp(tk.Tk):
         self._stroke_before = None
         self._stroke_tiles = {}
         self._stroke_selection_mask = self.doc.layer_selection_mask(self.doc.layer)
+        tool = self.tool.get()
+        if kind == "pixels" and tool in {"blur_tool", "sharpen_tool", "dodge", "burn"}:
+            mode = "blur" if tool == "blur_tool" else "sharpen" if tool == "sharpen_tool" else tool
+            strength = float(self.exposure.get()) if tool in {"dodge", "burn"} else float(self.retouch_strength.get())
+            self._retouch_stroke = RetouchStroke(
+                self.doc.layer,
+                mode,
+                int(self.brush_size.get()),
+                float(self.hardness.get()),
+                strength,
+                self.tonal_range.get(),
+                self._stroke_selection_mask,
+            )
+        else:
+            self._retouch_stroke = None
 
     def brush_local_rect(self, point: tuple[int, int]) -> tuple[int, int, int, int] | None:
         layer = self.doc.layer
@@ -2097,6 +2282,8 @@ class PhotoRedactorApp(tk.Tk):
     def capture_stroke_before(self, rect: tuple[int, int, int, int] | None) -> None:
         if rect is None:
             return
+        if self._retouch_stroke is not None:
+            return
         layer = self.doc.layer
         target = layer.mask if self._stroke_kind == "mask" else layer.pixels
         if target is None:
@@ -2115,6 +2302,8 @@ class PhotoRedactorApp(tk.Tk):
                 self._stroke_tiles[key] = tile_rect, target[py1:py2, px1:px2].copy()
 
     def end_stroke(self, label: str) -> None:
+        if self._retouch_stroke is not None:
+            self._stroke_tiles = self._retouch_stroke.before_tiles
         if self._stroke_layer_id and self._stroke_tiles:
             layer = self.doc.get_layer(self._stroke_layer_id)
             if layer is not None:
@@ -2136,6 +2325,7 @@ class PhotoRedactorApp(tk.Tk):
         self._stroke_before = None
         self._stroke_tiles = {}
         self._stroke_selection_mask = None
+        self._retouch_stroke = None
         if self._editor_active:
             self.refresh_layer_previews()
 
@@ -2157,16 +2347,36 @@ class PhotoRedactorApp(tk.Tk):
         selection_mask = self._stroke_selection_mask
         changed = None
         if tool == "spot_healing":
-            changed = spot_heal(self.doc.layer, point[0], point[1], int(self.brush_size.get()), float(self.opacity.get()), selection_mask)
+            changed = spot_heal(
+                self.doc.layer,
+                point[0],
+                point[1],
+                int(self.brush_size.get()),
+                float(self.retouch_strength.get()),
+                selection_mask,
+                float(self.hardness.get()),
+            )
         elif tool in ["clone", "healing"]:
             source = self.clone_source_for_point(point)
             if source is not None:
-                changed = clone_or_heal(self.doc.layer, source[0], source[1], point[0], point[1], int(self.brush_size.get()), float(self.opacity.get()), tool == "healing", selection_mask)
+                amount = float(self.opacity.get()) if tool == "clone" else float(self.retouch_strength.get())
+                changed = clone_or_heal(
+                    self.doc.layer,
+                    source[0],
+                    source[1],
+                    point[0],
+                    point[1],
+                    int(self.brush_size.get()),
+                    amount,
+                    tool == "healing",
+                    selection_mask,
+                    float(self.hardness.get()),
+                )
         elif self._stroke_kind == "mask":
             changed = draw_mask_brush(self.doc.layer, point[0], point[1], int(self.brush_size.get()), 0 if tool == "eraser" else 255, float(self.opacity.get()), selection_mask)
         elif tool in ["blur_tool", "sharpen_tool", "dodge", "burn"]:
-            mode = "blur" if tool == "blur_tool" else "sharpen" if tool == "sharpen_tool" else tool
-            changed = local_retouch(self.doc.layer, point[0], point[1], int(self.brush_size.get()), mode, float(self.opacity.get()), selection_mask)
+            if self._retouch_stroke is not None:
+                changed = self._retouch_stroke.dab(point[0], point[1])
         else:
             changed = draw_brush(
                 self.doc.layer,
@@ -2199,16 +2409,17 @@ class PhotoRedactorApp(tk.Tk):
             self.capture_stroke_before(self.brush_local_rect((x, y)))
             changed = None
             if tool == "spot_healing":
-                changed = spot_heal(self.doc.layer, x, y, radius, opacity, selection_mask)
+                changed = spot_heal(self.doc.layer, x, y, radius, float(self.retouch_strength.get()), selection_mask, float(self.hardness.get()))
             elif tool in ["clone", "healing"]:
                 source = self.clone_source_for_point((x, y))
                 if source is not None:
-                    changed = clone_or_heal(self.doc.layer, source[0], source[1], x, y, radius, opacity, tool == "healing", selection_mask)
+                    amount = opacity if tool == "clone" else float(self.retouch_strength.get())
+                    changed = clone_or_heal(self.doc.layer, source[0], source[1], x, y, radius, amount, tool == "healing", selection_mask, float(self.hardness.get()))
             elif self._stroke_kind == "mask":
                 changed = draw_mask_brush(self.doc.layer, x, y, radius, 0 if tool == "eraser" else 255, opacity, selection_mask)
             elif tool in ["blur_tool", "sharpen_tool", "dodge", "burn"]:
-                mode = "blur" if tool == "blur_tool" else "sharpen" if tool == "sharpen_tool" else tool
-                changed = local_retouch(self.doc.layer, x, y, radius, mode, opacity, selection_mask)
+                if self._retouch_stroke is not None:
+                    changed = self._retouch_stroke.dab(x, y)
             else:
                 changed = draw_brush(
                     self.doc.layer,
@@ -2305,44 +2516,77 @@ class PhotoRedactorApp(tk.Tk):
         self.clear_patch_preview()
         self.refresh()
 
-    def draw_selection(self, start: tuple[int, int] | None, end: tuple[int, int]) -> None:
+    def current_shape_options(self, tool: str) -> dict:
+        custom_name = self.custom_shape_preset.get()
+        custom_points = CUSTOM_SHAPE_PRESETS.get(custom_name, next(iter(CUSTOM_SHAPE_PRESETS.values())))
+        line_shape = tool in {"line_shape", "bezier_shape"}
+        return {
+            "fill": self.foreground,
+            "stroke": self.foreground if line_shape else self.background,
+            "stroke_width": max(1 if line_shape else 0, int(self.shape_stroke_width.get())),
+            "sides": max(3, min(64, int(self.polygon_sides.get() if tool == "polygon_shape" else self.star_points_count.get()))),
+            "inner_ratio": float(np.clip(self.star_inner_ratio.get(), 0.05, 0.95)),
+            "custom_points": custom_points,
+        }
+
+    def shape_geometry_for_drag(self, tool: str, start: tuple[int, int], end: tuple[int, int], state: int = 0) -> dict:
+        options = self._shape_drag_options or self.current_shape_options(tool)
+        return shape_geometry_from_drag(
+            tool,
+            start,
+            end,
+            shift=bool(state & 0x0001),
+            alt=bool(state & 0x0008),
+            sides=int(options["sides"]),
+            inner_ratio=float(options["inner_ratio"]),
+            custom_points=options["custom_points"],
+        )
+
+    @staticmethod
+    def color_hex(color: tuple[int, int, int, int]) -> str:
+        return "#{:02x}{:02x}{:02x}".format(*color[:3])
+
+    def draw_selection(self, start: tuple[int, int] | None, end: tuple[int, int], state: int = 0) -> None:
         if not start:
             return
         self.clear_drag_preview()
-        x1, y1 = self.doc_to_canvas(start[0], start[1])
-        x2, y2 = self.doc_to_canvas(end[0], end[1])
-        coords = [x1, y1, x2, y2]
         tool = self.tool.get()
         is_shape = tool.endswith("_shape")
-        outline = "#{:02x}{:02x}{:02x}".format(*self.foreground[:3]) if is_shape else "#50e3ff"
-        fill = outline if is_shape else "#50e3ff"
-        options = {"outline": outline, "width": 2}
-        if not is_shape:
-            options["dash"] = (5, 4)
-        if tool in {"ellipse_select", "ellipse_shape"}:
-            self._drag_preview_ids.append(self.canvas.create_oval(*coords, fill=fill, stipple="gray25", **options))
-        elif tool in {"line_shape", "gradient"}:
-            line_width = max(2, int(self.brush_size.get()) * self.zoom.get()) if tool == "line_shape" else 2
-            self._drag_preview_ids.append(self.canvas.create_line(x1, y1, x2, y2, fill=outline, width=line_width))
-            for px, py in [(x1, y1), (x2, y2)]:
-                self._drag_preview_ids.append(self.canvas.create_oval(px - 4, py - 4, px + 4, py + 4, fill=outline, outline=""))
-        elif tool == "bezier_shape":
-            box = (start[0], start[1], end[0], end[1])
-            points = bezier_curve_points(None, box, 64)
-            curve = [value for point in points for value in self.doc_to_canvas(point[0], point[1])]
-            self._drag_preview_ids.append(self.canvas.create_line(*curve, fill=outline, width=max(2, int(self.brush_size.get()) * self.zoom.get()), smooth=True))
-        elif tool in {"polygon_shape", "star_shape", "custom_shape"}:
-            box = (start[0], start[1], end[0], end[1])
-            if tool == "polygon_shape":
-                points = regular_polygon_points(box, 5)
-            elif tool == "star_shape":
-                points = star_points(box, 5, 0.5)
+        if is_shape:
+            shape_options = self._shape_drag_options or self.current_shape_options(tool)
+            geometry = self.shape_geometry_for_drag(tool, start, end, state)
+            shape = str(geometry["shape"])
+            fill = self.color_hex(shape_options["fill"])
+            outline = self.color_hex(shape_options["stroke"])
+            stroke_width = int(shape_options["stroke_width"])
+            width = max(1, round(stroke_width * self.zoom.get()))
+            visible_outline = outline if stroke_width > 0 else ""
+            x1, y1, x2, y2 = geometry["box"]
+            canvas_box = (*self.doc_to_canvas(x1, y1), *self.doc_to_canvas(x2, y2))
+            if shape == "ellipse":
+                self._drag_preview_ids.append(self.canvas.create_oval(*canvas_box, fill=fill, outline=visible_outline, width=width))
+            elif shape == "line":
+                line = geometry["line"]
+                coords = (*self.doc_to_canvas(line[0], line[1]), *self.doc_to_canvas(line[2], line[3]))
+                self._drag_preview_ids.append(self.canvas.create_line(*coords, fill=outline, width=width))
+            elif shape == "bezier":
+                curve = [value for point in geometry["points"] for value in self.doc_to_canvas(point[0], point[1])]
+                self._drag_preview_ids.append(self.canvas.create_line(*curve, fill=outline, width=width, smooth=True))
+            elif shape in {"polygon", "star", "custom"}:
+                polygon = [value for point in geometry["points"] for value in self.doc_to_canvas(point[0], point[1])]
+                self._drag_preview_ids.append(self.canvas.create_polygon(*polygon, fill=fill, outline=visible_outline, width=width))
             else:
-                points = custom_shape_points(next(iter(CUSTOM_SHAPE_PRESETS.values())), box)
-            polygon = [value for point in points for value in self.doc_to_canvas(point[0], point[1])]
-            self._drag_preview_ids.append(self.canvas.create_polygon(*polygon, fill=fill, stipple="gray25", **options))
+                self._drag_preview_ids.append(self.canvas.create_rectangle(*canvas_box, fill=fill, outline=visible_outline, width=width))
         else:
-            self._drag_preview_ids.append(self.canvas.create_rectangle(*coords, fill=fill, stipple="gray25", **options))
+            x1, y1 = self.doc_to_canvas(start[0], start[1])
+            x2, y2 = self.doc_to_canvas(end[0], end[1])
+            coords = [x1, y1, x2, y2]
+            if tool == "ellipse_select":
+                self._drag_preview_ids.append(self.canvas.create_oval(*coords, outline="#50e3ff", dash=(5, 4), width=2))
+            elif tool == "gradient":
+                self._drag_preview_ids.append(self.canvas.create_line(*coords, fill="#50e3ff", width=2))
+            else:
+                self._drag_preview_ids.append(self.canvas.create_rectangle(*coords, outline="#50e3ff", dash=(5, 4), width=2))
         for item_id in self._drag_preview_ids:
             self.canvas.tag_raise(item_id)
 
@@ -2358,10 +2602,13 @@ class PhotoRedactorApp(tk.Tk):
         coords = [coord for point in self._lasso_points for xy in [self.doc_to_canvas(point[0], point[1])] for coord in xy]
         self._polygon_ids.append(self.canvas.create_line(*coords, fill="#50e3ff", dash=(4, 3), width=2, smooth=True))
 
-    def draw_polygon_lasso(self) -> None:
+    def draw_polygon_lasso(self, hover: tuple[int, int] | None = None) -> None:
         self.delete_lasso_overlay()
-        if len(self._polygon_points) >= 2:
-            coords = [coord for point in self._polygon_points for xy in [self.doc_to_canvas(point[0], point[1])] for coord in xy]
+        preview_points = list(self._polygon_points)
+        if hover is not None and preview_points:
+            preview_points.append(hover)
+        if len(preview_points) >= 2:
+            coords = [coord for point in preview_points for xy in [self.doc_to_canvas(point[0], point[1])] for coord in xy]
             self._polygon_ids.append(self.canvas.create_line(*coords, fill="#50e3ff", dash=(4, 3), width=2))
         for x, y in self._polygon_points:
             cx, cy = self.doc_to_canvas(x, y)
@@ -2383,22 +2630,64 @@ class PhotoRedactorApp(tk.Tk):
             self._magnetic_edges = self.doc.magnetic_edge_map(self.render_engine.render(self.doc, False))
         return self.doc.snap_point_to_edge(point, self._magnetic_edges, max(8, int(self.tolerance.get())))
 
+    def clear_selection_overlay(self) -> None:
+        if self.selection_id is not None:
+            self.canvas.delete(self.selection_id)
+            self.selection_id = None
+        for item_id in self._selection_overlay_ids:
+            self.canvas.delete(item_id)
+        self._selection_overlay_ids.clear()
+        if self._selection_animation_id is not None:
+            try:
+                self.after_cancel(self._selection_animation_id)
+            except tk.TclError:
+                pass
+            self._selection_animation_id = None
+
+    def selection_contours(self) -> list[np.ndarray]:
+        mask = self.doc.selection_mask
+        if mask is None or not np.any(mask >= 128):
+            self._selection_contours = []
+            self._selection_contour_signature = None
+            return []
+        signature = (id(mask), mask.shape[0], mask.shape[1])
+        if signature != self._selection_contour_signature:
+            self._selection_contours = selection_contour_points(mask)
+            self._selection_contour_signature = signature
+        return self._selection_contours
+
     def update_selection_overlay(self) -> None:
-        bounds = self.doc.selection_bounds()
-        if bounds is None:
-            if self.selection_id is not None:
-                self.canvas.delete(self.selection_id)
-                self.selection_id = None
+        self.clear_selection_overlay()
+        contours = self.selection_contours()
+        if not contours:
             return
-        x1, y1 = self.doc_to_canvas(bounds[0], bounds[1])
-        x2, y2 = self.doc_to_canvas(bounds[2], bounds[3])
-        coords = [x1, y1, x2, y2]
-        if self.selection_id is None:
-            self.selection_id = self.canvas.create_rectangle(*coords, outline="#50e3ff", dash=(5, 4), width=2)
-        else:
-            self.canvas.coords(self.selection_id, *coords)
-        self.canvas.tag_raise(self.selection_id)
+        epsilon = max(0.5, 0.8 / max(0.05, float(self.zoom.get())))
+        for contour in contours:
+            simplified = cv2.approxPolyDP(contour.reshape(-1, 1, 2), epsilon, True)[:, 0, :]
+            if len(simplified) < 2:
+                continue
+            closed = np.vstack([simplified, simplified[0]])
+            coords = [value for x, y in closed for value in self.doc_to_canvas(float(x), float(y))]
+            dark = self.canvas.create_line(*coords, fill="#111111", width=2, dash=(5, 5), dashoffset=self._selection_dash_phase)
+            light = self.canvas.create_line(*coords, fill="#f4f4f4", width=1, dash=(5, 5), dashoffset=self._selection_dash_phase + 5)
+            self._selection_overlay_ids.extend([dark, light])
+        for item_id in self._selection_overlay_ids:
+            self.canvas.tag_raise(item_id)
+        if self._selection_overlay_ids:
+            self._selection_animation_id = self.after(240, self.animate_selection_overlay)
         self.update_grid_and_guides()
+
+    def animate_selection_overlay(self) -> None:
+        self._selection_animation_id = None
+        if not self._selection_overlay_ids:
+            return
+        self._selection_dash_phase = (self._selection_dash_phase + 1) % 10
+        for index, item_id in enumerate(self._selection_overlay_ids):
+            try:
+                self.canvas.itemconfigure(item_id, dashoffset=self._selection_dash_phase + (5 if index % 2 else 0))
+            except tk.TclError:
+                return
+        self._selection_animation_id = self.after(240, self.animate_selection_overlay)
 
     def update_grid_and_guides(self) -> None:
         for item_id in self._overlay_ids:
@@ -2424,44 +2713,22 @@ class PhotoRedactorApp(tk.Tk):
         for item_id in self._overlay_ids:
             self.canvas.tag_raise(item_id)
 
-    def create_shape_from_drag(self, tool: str, box: tuple[int, int, int, int]) -> None:
-        shape = "rectangle"
-        sides = 5
-        inner_ratio = 0.5
-        custom_points = None
-        if tool == "ellipse_shape":
-            shape = "ellipse"
-        elif tool == "line_shape":
-            shape = "line"
-        elif tool == "bezier_shape":
-            shape = "bezier"
-        elif tool == "polygon_shape":
-            shape = "polygon"
-            value = simpledialog.askinteger("Polygon shape", "Sides:", initialvalue=5, minvalue=3, maxvalue=64)
-            if value is None:
-                return
-            sides = value
-        elif tool == "star_shape":
-            shape = "star"
-            value = simpledialog.askinteger("Star shape", "Points:", initialvalue=5, minvalue=3, maxvalue=64)
-            if value is None:
-                return
-            sides = value
-            ratio = simpledialog.askfloat("Star shape", "Inner radius 0.05..0.95:", initialvalue=0.5, minvalue=0.05, maxvalue=0.95)
-            if ratio is None:
-                return
-            inner_ratio = ratio
-        elif tool == "custom_shape":
-            shape = "custom"
-            names = list(CUSTOM_SHAPE_PRESETS)
-            name = simpledialog.askstring("Своя фигура", "Фигура: " + ", ".join(names), initialvalue=names[0])
-            if name not in CUSTOM_SHAPE_PRESETS:
-                return
-            custom_points = CUSTOM_SHAPE_PRESETS[name]
-        stroke_width = int(self.brush_size.get()) if shape in {"line", "bezier"} else 2
+    def create_shape_from_drag(self, tool: str, geometry: dict) -> None:
+        options = self._shape_drag_options or self.current_shape_options(tool)
+        shape = str(geometry["shape"])
+        box = tuple(int(v) for v in geometry.get("line", geometry["box"]))
         self.run_document_command(
             "Shape layer",
-            lambda: self.doc.add_shape_layer(shape, box, self.foreground, self.background, stroke_width, sides, inner_ratio, custom_points=custom_points),
+            lambda: self.doc.add_shape_layer(
+                shape,
+                box,
+                options["fill"],
+                options["stroke"],
+                int(options["stroke_width"]),
+                int(options["sides"]),
+                float(options["inner_ratio"]),
+                custom_points=options["custom_points"],
+            ),
         )
 
     def clear_selection(self) -> None:
@@ -4275,6 +4542,26 @@ class PhotoRedactorApp(tk.Tk):
             self.doc.active_layer = len(self.doc.layers) - 1 - sel[0]
             self.refresh_layers()
 
+    def layer_list_click(self, event) -> str | None:
+        if int(event.x) > 28 or not self.doc.layers:
+            return None
+        row = int(self.layer_list.nearest(event.y))
+        bounds = self.layer_list.bbox(row)
+        if bounds is None or event.y < bounds[1] or event.y >= bounds[1] + bounds[3]:
+            return "break"
+        layer_index = len(self.doc.layers) - 1 - row
+        if layer_index < 0 or layer_index >= len(self.doc.layers):
+            return "break"
+        active_index = self.doc.active_layer
+        layer = self.doc.layers[layer_index]
+        before = bool(layer.visible)
+        layer.visible = not before
+        self.doc.dirty = True
+        self.push_command(LayerVisibilityCommand("Видимость слоя", layer.id, before, layer.visible))
+        self.doc.active_layer = active_index
+        self.refresh(preserve_render_cache=True)
+        return "break"
+
     def begin_layer_opacity_change(self, _event) -> None:
         self._opacity_layer_id = self.doc.layer.id
         self._opacity_before = self.doc.layer.opacity
@@ -4304,7 +4591,12 @@ class PhotoRedactorApp(tk.Tk):
         self.refresh(preserve_render_cache=True)
 
     def toggle_layer_visible(self) -> None:
-        self.set_layer_property("Toggle layer visible", "visible", not self.doc.layer.visible)
+        layer = self.doc.layer
+        before = bool(layer.visible)
+        layer.visible = not before
+        self.doc.dirty = True
+        self.push_command(LayerVisibilityCommand("Видимость слоя", layer.id, before, layer.visible))
+        self.refresh(preserve_render_cache=True)
 
     def toggle_layer_lock(self) -> None:
         self.set_layer_property("Toggle layer lock", "locked", not self.doc.layer.locked, affects_canvas=False)

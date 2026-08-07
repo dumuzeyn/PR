@@ -393,6 +393,30 @@ class LayerOpacityCommand:
 
 
 @dataclass
+class LayerVisibilityCommand:
+    label: str
+    layer_id: str
+    before: bool
+    after: bool
+
+    @property
+    def memory_bytes(self) -> int:
+        return 64
+
+    def undo(self, document: Document) -> None:
+        layer = document.get_layer(self.layer_id)
+        if layer is not None:
+            layer.visible = self.before
+            document.dirty = True
+
+    def redo(self, document: Document) -> None:
+        layer = document.get_layer(self.layer_id)
+        if layer is not None:
+            layer.visible = self.after
+            document.dirty = True
+
+
+@dataclass
 class LayerBlendModeCommand:
     label: str
     layer_id: str

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tkinter as tk
 import time
+from types import SimpleNamespace
 import unittest
 
 import numpy as np
@@ -151,6 +152,32 @@ class StartupTests(unittest.TestCase):
         viewport_y = (self.app.canvas.canvasy(self.app.canvas.winfo_height() / 2) - origin_y) / self.app.zoom.get()
         self.assertAlmostEqual(viewport_x, 450.0, delta=5.0)
         self.assertAlmostEqual(viewport_y, 300.0, delta=5.0)
+
+    def test_retouch_tools_keep_independent_settings(self) -> None:
+        self.app.opacity.set(0.83)
+        self.app.tool.set("dodge")
+        self.app.exposure.set(0.12)
+        self.app.tool.set("brush")
+        self.assertAlmostEqual(self.app.opacity.get(), 0.83)
+        self.app.tool.set("dodge")
+        self.assertAlmostEqual(self.app.exposure.get(), 0.12)
+        self.assertNotAlmostEqual(self.app.opacity.get(), self.app.exposure.get())
+
+    def test_layer_eye_click_does_not_change_active_layer(self) -> None:
+        self.app.create_document_from_settings(
+            {"width": 80, "height": 60, "dpi": 72, "background": (255, 255, 255, 255), "include_clipboard": False}
+        )
+        self.app.doc.add_layer("Верхний")
+        self.app.doc.add_layer("Активный")
+        self.app.refresh_layers()
+        self.app.update()
+        active = self.app.doc.active_layer
+        row = 2
+        bounds = self.app.layer_list.bbox(row)
+        self.assertIsNotNone(bounds)
+        self.app.layer_list_click(SimpleNamespace(x=8, y=bounds[1] + bounds[3] // 2))
+        self.assertFalse(self.app.doc.layers[0].visible)
+        self.assertEqual(self.app.doc.active_layer, active)
 
 
 if __name__ == "__main__":
