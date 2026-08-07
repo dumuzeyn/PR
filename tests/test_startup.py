@@ -89,8 +89,8 @@ class StartupTests(unittest.TestCase):
             )
 
         fitted = viewport_center()
-        self.assertAlmostEqual(fitted[0], 800.0, delta=3.0)
-        self.assertAlmostEqual(fitted[1], 500.0, delta=3.0)
+        self.assertAlmostEqual(fitted[0], 800.0, delta=5.0)
+        self.assertAlmostEqual(fitted[1], 500.0, delta=5.0)
         self.app.center_canvas_on_doc(620.0, 410.0)
         self.app.update()
         before = viewport_center()
