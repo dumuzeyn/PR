@@ -62,9 +62,20 @@ class StartupTests(unittest.TestCase):
         clipboard = Image.new("RGBA", (640, 360), (40, 100, 180, 255))
         original_wait = tk.Toplevel.wait_window
         shown_size: list[str] = []
+        preset_size_labels: list[str] = []
+        centered: list[bool] = []
 
         def inspect_dialog(window, target=None) -> None:
             shown_size.append(str(self.app._new_document_size_label.cget("text")))
+            texts = [
+                str(self.app._new_document_preset_canvas.itemcget(item, "text"))
+                for item in self.app._new_document_preset_canvas.find_all()
+                if self.app._new_document_preset_canvas.type(item) == "text"
+            ]
+            preset_size_labels.extend(text for text in texts if text.startswith("Размер холста:"))
+            expected_x = (window.winfo_screenwidth() - window.winfo_width()) // 2
+            expected_y = (window.winfo_screenheight() - window.winfo_height()) // 2
+            centered.append(abs(window.winfo_x() - expected_x) <= 3 and abs(window.winfo_y() - expected_y) <= 3)
             window.destroy()
 
         tk.Toplevel.wait_window = inspect_dialog
@@ -72,6 +83,9 @@ class StartupTests(unittest.TestCase):
             self.assertIsNone(self.app.new_document_dialog(clipboard))
             self.assertIsNotNone(self.app._new_document_preview)
             self.assertEqual(shown_size, ["640 x 360 px"])
+            self.assertEqual(len(preset_size_labels), len(self.app.available_document_presets(clipboard)))
+            self.assertTrue(all(" x " in label and label.endswith(" px") for label in preset_size_labels))
+            self.assertEqual(centered, [True])
         finally:
             tk.Toplevel.wait_window = original_wait
 

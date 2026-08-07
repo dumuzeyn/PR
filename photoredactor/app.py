@@ -369,6 +369,7 @@ class PhotoRedactorApp(tk.Tk):
         self._canvas_origin = (0, 0)
         self._render_after_id: str | None = None
         self._initial_fit_after_id: str | None = None
+        self._performing_initial_fit = False
         self._last_render_time = 0.0
         self._composite_cache = None
         self._composite_dirty = True
@@ -636,6 +637,18 @@ class PhotoRedactorApp(tk.Tk):
         y = max(0, (screen_height - height) // 2)
         self.geometry(f"{width}x{height}+{x}+{y}")
 
+    @staticmethod
+    def center_toplevel(window: tk.Toplevel, preferred_width: int, preferred_height: int) -> None:
+        window.update_idletasks()
+        screen_width = window.winfo_screenwidth()
+        screen_height = window.winfo_screenheight()
+        width = min(max(preferred_width, window.winfo_reqwidth()), max(640, screen_width - 80))
+        height = min(max(preferred_height, window.winfo_reqheight()), max(520, screen_height - 80))
+        x = max(0, (screen_width - width) // 2)
+        y = max(0, (screen_height - height) // 2)
+        window.geometry(f"{width}x{height}+{x}+{y}")
+        window.update_idletasks()
+
     def refresh_startup_recent(self) -> None:
         if not hasattr(self, "startup_recent_list") or not self.startup_recent_list.winfo_exists():
             return
@@ -688,7 +701,11 @@ class PhotoRedactorApp(tk.Tk):
         self._initial_fit_after_id = None
         if self._editor_active and self.winfo_exists():
             self.update_idletasks()
-            self.fit_to_screen()
+            self._performing_initial_fit = True
+            try:
+                self.fit_to_screen()
+            finally:
+                self._performing_initial_fit = False
             self._initial_fit_after_id = self.after(160, self.finish_initial_center)
 
     def finish_initial_center(self) -> None:
@@ -2514,16 +2531,67 @@ class PhotoRedactorApp(tk.Tk):
 
         body = ttk.Frame(dialog)
         body.pack(fill=tk.BOTH, expand=True, padx=14, pady=14)
-        preset_panel = ttk.Frame(body, width=260)
+        preset_panel = ttk.Frame(body, width=320)
         preset_panel.grid(row=0, column=0, rowspan=2, sticky="ns", padx=(0, 16))
         ttk.Label(preset_panel, text="Форматы", font=("Segoe UI Semibold", 12)).pack(anchor=tk.W, pady=(0, 6))
-        preset_list = tk.Listbox(preset_panel, width=42, height=18, exportselection=False, activestyle="dotbox")
-        preset_list.pack(fill=tk.Y, expand=True)
-        for preset in presets:
-            preset_list.insert(tk.END, f"{preset['name']}   {preset['width']} x {preset['height']} px")
+        preset_list_area = ttk.Frame(preset_panel)
+        preset_list_area.pack(fill=tk.BOTH, expand=True)
+        preset_row_height = 52
+        preset_list_width = 306
+        preset_list = tk.Canvas(
+            preset_list_area,
+            width=preset_list_width,
+            height=572,
+            background="#ffffff",
+            highlightbackground="#c8cdd3",
+            highlightthickness=1,
+            cursor="hand2",
+            takefocus=True,
+        )
+        preset_scroll = ttk.Scrollbar(preset_list_area, orient=tk.VERTICAL, command=preset_list.yview)
+        preset_list.configure(yscrollcommand=preset_scroll.set)
+        preset_list.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        preset_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self._new_document_preset_canvas = preset_list
+        preset_items: list[tuple[int, int, int]] = []
+        for index, preset in enumerate(presets):
+            y1 = index * preset_row_height
+            tag = f"preset-{index}"
+            rectangle = preset_list.create_rectangle(
+                0,
+                y1,
+                preset_list_width,
+                y1 + preset_row_height,
+                fill="#ffffff",
+                outline="#e0e3e7",
+                tags=(tag, "preset"),
+            )
+            name_item = preset_list.create_text(
+                12,
+                y1 + 16,
+                text=str(preset["name"]),
+                anchor=tk.W,
+                fill="#15191e",
+                font=("Segoe UI Semibold", 10),
+                tags=(tag, "preset"),
+            )
+            size_item = preset_list.create_text(
+                12,
+                y1 + 36,
+                text=f"Размер холста: {preset['width']} x {preset['height']} px",
+                anchor=tk.W,
+                fill="#626a73",
+                font=("Segoe UI", 9),
+                tags=(tag, "preset"),
+            )
+            preset_items.append((rectangle, name_item, size_item))
+            preset_list.tag_bind(tag, "<Button-1>", lambda _event, selected=index: select_preset(selected))
+        preset_list.configure(scrollregion=(0, 0, preset_list_width, len(presets) * preset_row_height))
 
-        preview_panel = ttk.Frame(body)
-        preview_panel.grid(row=0, column=1, sticky="new")
+        right_panel = ttk.Frame(body)
+        right_panel.grid(row=0, column=1, rowspan=2, sticky="new")
+        preview_panel = ttk.Frame(right_panel)
+        preview_panel.pack(fill=tk.X)
         ttk.Label(preview_panel, text="Предпросмотр", font=("Segoe UI Semibold", 12)).pack(anchor=tk.W, pady=(0, 6))
         current_size_label = ttk.Label(preview_panel, text="", font=("Segoe UI Semibold", 14))
         current_size_label.pack(anchor=tk.W, pady=(0, 7))
@@ -2533,8 +2601,8 @@ class PhotoRedactorApp(tk.Tk):
         preset_description = ttk.Label(preview_panel, text="", wraplength=330, justify=tk.LEFT)
         preset_description.pack(fill=tk.X, pady=(7, 0))
 
-        settings = ttk.LabelFrame(body, text="Параметры")
-        settings.grid(row=1, column=1, sticky="sew", pady=(12, 0))
+        settings = ttk.LabelFrame(right_panel, text="Параметры")
+        settings.pack(fill=tk.X, pady=(12, 0))
         ttk.Label(settings, text="Ширина, px").grid(row=0, column=0, sticky="w", padx=10, pady=(10, 4))
         width_entry = ttk.Spinbox(settings, textvariable=width, from_=1, to=50000, width=12)
         width_entry.grid(row=0, column=1, sticky="ew", padx=(0, 10), pady=(10, 4))
@@ -2586,18 +2654,45 @@ class PhotoRedactorApp(tk.Tk):
                 preview.create_image((x1 + x2) // 2, (y1 + y2) // 2, image=self._new_document_preview)
             preview.create_rectangle(x1, y1, x2, y2, outline="#7d8794", width=1)
 
-        def select_preset(_event=None) -> None:
-            selection = preset_list.curselection()
-            if not selection:
-                return
-            preset = presets[int(selection[0])]
+        selected_preset_index = 0
+
+        def paint_preset_selection() -> None:
+            for index, (rectangle, name_item, size_item) in enumerate(preset_items):
+                selected = index == selected_preset_index
+                preset_list.itemconfigure(rectangle, fill="#1976d2" if selected else "#ffffff")
+                preset_list.itemconfigure(name_item, fill="#ffffff" if selected else "#15191e")
+                preset_list.itemconfigure(size_item, fill="#dcecff" if selected else "#626a73")
+
+        def select_preset(index: int) -> None:
+            nonlocal selected_preset_index
+            selected_preset_index = max(0, min(len(presets) - 1, int(index)))
+            preset = presets[selected_preset_index]
             width.set(int(preset["width"]))
             height.set(int(preset["height"]))
             dpi.set(int(preset["dpi"]))
             background.set(str(preset["background"]))
             include_clipboard.set(bool(preset.get("clipboard", False)))
             preset_description.configure(text=str(preset["description"]))
+            paint_preset_selection()
+            row_top = selected_preset_index * preset_row_height
+            row_bottom = row_top + preset_row_height
+            visible_top = preset_list.canvasy(0)
+            visible_bottom = visible_top + preset_list.winfo_height()
+            total_height = max(1, len(presets) * preset_row_height)
+            if preset_list.winfo_height() > preset_row_height:
+                if row_top < visible_top:
+                    preset_list.yview_moveto(row_top / total_height)
+                elif row_bottom > visible_bottom:
+                    preset_list.yview_moveto(max(0.0, (row_bottom - preset_list.winfo_height()) / total_height))
             update_preview()
+
+        def move_preset_selection(delta: int) -> str:
+            select_preset(selected_preset_index + delta)
+            return "break"
+
+        def scroll_presets(event) -> str:
+            preset_list.yview_scroll(-1 if event.delta > 0 else 1, "units")
+            return "break"
 
         def swap_orientation() -> None:
             old_width = safe_dimension(width, 1280)
@@ -2625,17 +2720,17 @@ class PhotoRedactorApp(tk.Tk):
                 "background": DOCUMENT_BACKGROUNDS.get(background.get(), DOCUMENT_BACKGROUNDS["Белый"]),
                 "include_clipboard": bool(include_clipboard.get() and clipboard_image is not None),
             }
-            selection = preset_list.curselection()
-            selected_preset = presets[int(selection[0])] if selection else None
-            uses_custom_size = selected_preset is None or selected_preset["name"] == "Свой размер"
-            if selected_preset is not None:
-                uses_custom_size = uses_custom_size or canvas_width != int(selected_preset["width"]) or canvas_height != int(selected_preset["height"])
+            selected_preset = presets[selected_preset_index]
+            uses_custom_size = selected_preset["name"] == "Свой размер"
+            uses_custom_size = uses_custom_size or canvas_width != int(selected_preset["width"]) or canvas_height != int(selected_preset["height"])
             if uses_custom_size:
                 self.remember_custom_canvas(canvas_width, canvas_height, canvas_dpi, background.get())
             dialog.destroy()
 
         swap_button.configure(command=swap_orientation)
-        preset_list.bind("<<ListboxSelect>>", select_preset)
+        preset_list.bind("<Up>", lambda _event: move_preset_selection(-1))
+        preset_list.bind("<Down>", lambda _event: move_preset_selection(1))
+        preset_list.bind("<MouseWheel>", scroll_presets)
         for variable in (width, height, background, include_clipboard):
             variable.trace_add("write", update_preview)
         buttons = ttk.Frame(dialog)
@@ -2643,10 +2738,10 @@ class PhotoRedactorApp(tk.Tk):
         ttk.Button(buttons, text="Создать", command=accept).pack(side=tk.RIGHT, padx=(6, 0))
         ttk.Button(buttons, text="Отмена", command=dialog.destroy).pack(side=tk.RIGHT)
         ToolTip(preset_list, "Выберите готовый формат, затем при необходимости измените его параметры.")
-        preset_list.selection_set(0)
-        preset_list.activate(0)
-        select_preset()
+        select_preset(0)
         dialog.protocol("WM_DELETE_WINDOW", dialog.destroy)
+        self.center_toplevel(dialog, 820, 680)
+        preset_list.yview_moveto(0.0)
         dialog.wait_window()
         return result
 
@@ -4895,6 +4990,12 @@ class PhotoRedactorApp(tk.Tk):
         self.center_canvas_on_doc(doc_center_x, doc_center_y)
 
     def center_canvas_on_doc(self, doc_x: float, doc_y: float) -> None:
+        if self._initial_fit_after_id is not None and not self._performing_initial_fit:
+            try:
+                self.after_cancel(self._initial_fit_after_id)
+            except tk.TclError:
+                pass
+            self._initial_fit_after_id = None
         raw_region = str(self.canvas.cget("scrollregion")).split()
         if len(raw_region) != 4:
             return
