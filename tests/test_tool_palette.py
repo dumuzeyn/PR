@@ -34,22 +34,28 @@ class ToolPaletteDialogTests(unittest.TestCase):
         self.assertIsNotNone(bounds)
         return int(bounds[1] + bounds[3] / 2)
 
-    def test_visibility_icon_toggles_tool_with_one_click(self) -> None:
+    def test_tool_name_toggles_visibility_with_one_click(self) -> None:
         y = self.row_center(1)
-        self.dialog.listbox.event_generate("<ButtonPress-1>", x=10, y=y)
-        self.dialog.listbox.event_generate("<ButtonRelease-1>", x=10, y=y)
+        self.dialog.listbox.event_generate("<ButtonPress-1>", x=120, y=y)
+        self.dialog.listbox.event_generate("<ButtonRelease-1>", x=120, y=y)
         self.dialog.update()
         self.assertNotIn("second", self.dialog.visible)
         self.assertTrue(str(self.dialog.listbox.get(1)).startswith("☐"))
+        self.assertEqual(str(self.dialog.visibility_status.cget("text")), "Скрыт")
 
     def test_dragging_reorders_tools(self) -> None:
         start_y = self.row_center(0)
         target_y = self.row_center(2)
         self.dialog.listbox.event_generate("<ButtonPress-1>", x=80, y=start_y)
         self.dialog.listbox.event_generate("<B1-Motion>", x=80, y=target_y)
+        self.dialog.update()
+        self.assertEqual(self.dialog.order, ["first", "second", "third"])
+        self.assertIsNotNone(self.dialog._drag_ghost)
+        self.assertTrue(self.dialog._drop_indicator.place_info())
         self.dialog.listbox.event_generate("<ButtonRelease-1>", x=80, y=target_y)
         self.dialog.update()
         self.assertEqual(self.dialog.order, ["second", "third", "first"])
+        self.assertIsNone(self.dialog._drag_ghost)
 
 
 if __name__ == "__main__":

@@ -107,6 +107,11 @@ class ToolPaletteDialog(tk.Toplevel):
         self._drag_tool: str | None = None
         self._drag_start_y = 0
         self._dragged = False
+        self._drag_insert_index: int | None = None
+        self._drag_ghost: tk.Toplevel | None = None
+        self._indicator_after_id: str | None = None
+        self._indicator_phase = 0
+        self._highlight_after_ids: list[str] = []
         self.geometry("420x520")
 
         ttk.Label(self, text="Инструменты панели").pack(anchor=tk.W, padx=12, pady=(12, 6))
@@ -124,7 +129,8 @@ class ToolPaletteDialog(tk.Toplevel):
         ttk.Button(side, text="Вверх", command=self.move_up).pack(fill=tk.X, pady=(0, 4))
         ttk.Button(side, text="Вниз", command=self.move_down).pack(fill=tk.X, pady=(0, 12))
         self.visible_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(side, text="Показывать", variable=self.visible_var, command=self.toggle_selected).pack(fill=tk.X)
+        self.visibility_status = ttk.Label(side, text="", anchor=tk.CENTER)
+        self.visibility_status.pack(fill=tk.X)
         ttk.Button(side, text="Показать все", command=self.show_all).pack(fill=tk.X, pady=(12, 4))
         ttk.Button(side, text="Скрыть все", command=self.hide_all).pack(fill=tk.X, pady=(0, 4))
         ttk.Button(side, text="По умолчанию", command=self.reset_default).pack(fill=tk.X)
@@ -140,6 +146,7 @@ class ToolPaletteDialog(tk.Toplevel):
         self.listbox.bind("<space>", self.toggle_selected_from_keyboard)
         self.listbox.bind("<Return>", self.toggle_selected_from_keyboard)
         self.protocol("WM_DELETE_WINDOW", self.cancel)
+        self._drop_indicator = tk.Frame(self.listbox, height=3, background="#258cf4")
         self.refresh_list()
         if self.order:
             self.listbox.selection_set(0)
@@ -168,7 +175,9 @@ class ToolPaletteDialog(tk.Toplevel):
 
     def update_selected_state(self) -> None:
         value = self.current_tool()
-        self.visible_var.set(value in self.visible if value else False)
+        is_visible = value in self.visible if value else False
+        self.visible_var.set(is_visible)
+        self.visibility_status.configure(text="Добавлен" if is_visible else "Скрыт")
 
     def toggle_selected(self) -> None:
         value = self.current_tool()
@@ -211,9 +220,11 @@ class ToolPaletteDialog(tk.Toplevel):
         index = self.list_index_at(event.y)
         if index is None:
             return "break"
+        self.clear_drag_feedback()
         self._drag_tool = self.order[index]
         self._drag_start_y = int(event.y)
         self._dragged = False
+        self._drag_insert_index = index
         self.listbox.selection_clear(0, tk.END)
         self.listbox.selection_set(index)
         self.listbox.activate(index)
@@ -229,19 +240,134 @@ class ToolPaletteDialog(tk.Toplevel):
             self.listbox.yview_scroll(-1, "units")
         elif event.y > self.listbox.winfo_height() - 12:
             self.listbox.yview_scroll(1, "units")
-        target = int(self.listbox.nearest(event.y))
-        target = max(0, min(len(self.order) - 1, target))
-        self.move_tool_to(self._drag_tool, target)
+        if self._dragged:
+            self._drag_insert_index = self.insertion_index_at(event.y)
+            self.show_drag_feedback(event)
         return "break"
 
     def end_drag(self, event) -> str:
         value = self._drag_tool
-        should_toggle = value is not None and not self._dragged and int(event.x) <= 34
+        was_dragged = self._dragged
+        insert_index = self._drag_insert_index
+        should_toggle = value is not None and not was_dragged
         self._drag_tool = None
         self._dragged = False
+        self._drag_insert_index = None
+        self.clear_drag_feedback()
         if should_toggle and value is not None:
             self.toggle_tool(value)
+        elif was_dragged and value is not None and insert_index is not None:
+            self.move_tool_to_insertion(value, insert_index)
         return "break"
+
+    def insertion_index_at(self, y: int) -> int:
+        if not self.order:
+            return 0
+        target = max(0, min(len(self.order) - 1, int(self.listbox.nearest(y))))
+        if self._drag_tool in self.order:
+            old_index = self.order.index(self._drag_tool)
+            if target > old_index:
+                return target + 1
+            if target < old_index:
+                return target
+        bounds = self.listbox.bbox(target)
+        if bounds is None:
+            return target
+        _x, row_y, _width, row_height = bounds
+        return target + (1 if y >= row_y + row_height / 2 else 0)
+
+    def show_drag_feedback(self, event) -> None:
+        if self._drag_tool is None or self._drag_insert_index is None:
+            return
+        if self._drag_ghost is None:
+            ghost = tk.Toplevel(self)
+            ghost.overrideredirect(True)
+            try:
+                ghost.attributes("-alpha", 0.92)
+                ghost.attributes("-topmost", True)
+            except tk.TclError:
+                pass
+            ttk.Label(
+                ghost,
+                text=self.label_by_id.get(self._drag_tool, self._drag_tool),
+                padding=(12, 6),
+                relief=tk.SOLID,
+            ).pack()
+            self._drag_ghost = ghost
+        root_x = self.listbox.winfo_rootx() + max(12, int(event.x) + 14)
+        root_y = self.listbox.winfo_rooty() + int(event.y) + 10
+        self._drag_ghost.geometry(f"+{root_x}+{root_y}")
+        self.place_drop_indicator(self._drag_insert_index)
+        if self._indicator_after_id is None:
+            self.animate_drop_indicator()
+
+    def place_drop_indicator(self, insert_index: int) -> None:
+        if not self.order:
+            return
+        if insert_index >= len(self.order):
+            bounds = self.listbox.bbox(len(self.order) - 1)
+            if bounds is None:
+                return
+            y = bounds[1] + bounds[3] - 2
+        else:
+            bounds = self.listbox.bbox(max(0, insert_index))
+            if bounds is None:
+                return
+            y = bounds[1] - 1
+        self._drop_indicator.place(x=2, y=y, relwidth=1.0, width=-4, height=3)
+        self._drop_indicator.lift()
+
+    def animate_drop_indicator(self) -> None:
+        if self._drag_tool is None or not self._dragged:
+            self._indicator_after_id = None
+            return
+        colors = ("#258cf4", "#72b7ff", "#b7dcff", "#72b7ff")
+        self._drop_indicator.configure(background=colors[self._indicator_phase % len(colors)])
+        self._indicator_phase += 1
+        self._indicator_after_id = self.after(85, self.animate_drop_indicator)
+
+    def clear_drag_feedback(self) -> None:
+        if self._indicator_after_id is not None:
+            self.after_cancel(self._indicator_after_id)
+            self._indicator_after_id = None
+        if hasattr(self, "_drop_indicator"):
+            self._drop_indicator.place_forget()
+        if self._drag_ghost is not None:
+            self._drag_ghost.destroy()
+            self._drag_ghost = None
+
+    def move_tool_to_insertion(self, value: str, insert_index: int) -> None:
+        if value not in self.order:
+            return
+        old_index = self.order.index(value)
+        self.order.pop(old_index)
+        if insert_index > old_index:
+            insert_index -= 1
+        new_index = max(0, min(len(self.order), int(insert_index)))
+        self.order.insert(new_index, value)
+        self.refresh_list(value)
+        self.animate_moved_row(new_index)
+
+    def animate_moved_row(self, index: int) -> None:
+        for after_id in self._highlight_after_ids:
+            try:
+                self.after_cancel(after_id)
+            except tk.TclError:
+                pass
+        self._highlight_after_ids.clear()
+        normal = str(self.listbox.cget("background"))
+        selected = str(self.listbox.cget("selectbackground"))
+        colors = (("#6fb8ff", "#258cf4"), ("#9dceff", "#5ca8f4"), ("#c9e5ff", "#83bdf4"), (normal, selected))
+        for step, (background, selected_background) in enumerate(colors):
+            after_id = self.after(
+                step * 70,
+                lambda bg=background, sbg=selected_background, i=index: self.listbox.itemconfigure(
+                    i,
+                    background=bg,
+                    selectbackground=sbg,
+                ),
+            )
+            self._highlight_after_ids.append(after_id)
 
     def move_tool_to(self, value: str, new_index: int) -> None:
         if value not in self.order:
@@ -290,8 +416,10 @@ class ToolPaletteDialog(tk.Toplevel):
             messagebox.showwarning("Инструменты", "Нельзя скрыть все инструменты.")
             return
         self.result = (list(self.order), visible)
+        self.clear_drag_feedback()
         self.destroy()
 
     def cancel(self) -> None:
+        self.clear_drag_feedback()
         self.result = None
         self.destroy()
