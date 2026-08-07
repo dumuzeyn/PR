@@ -104,13 +104,21 @@ class ToolPaletteDialog(tk.Toplevel):
         self.order = list(order)
         self.visible = set(visible)
         self.label_by_id = {value: label for label, value, _description in definitions}
+        self._drag_tool: str | None = None
+        self._drag_start_y = 0
+        self._dragged = False
         self.geometry("420x520")
 
-        ttk.Label(self, text="Выберите видимые инструменты и их порядок").pack(anchor=tk.W, padx=12, pady=(12, 6))
+        ttk.Label(self, text="Инструменты панели").pack(anchor=tk.W, padx=12, pady=(12, 6))
         body = ttk.Frame(self)
         body.pack(fill=tk.BOTH, expand=True, padx=12)
-        self.listbox = tk.Listbox(body, exportselection=False, activestyle="dotbox")
+        list_area = ttk.Frame(body)
+        list_area.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.listbox = tk.Listbox(list_area, exportselection=False, activestyle="dotbox", cursor="hand2")
+        scrollbar = ttk.Scrollbar(list_area, orient=tk.VERTICAL, command=self.listbox.yview)
+        self.listbox.configure(yscrollcommand=scrollbar.set)
         self.listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         side = ttk.Frame(body)
         side.pack(side=tk.LEFT, fill=tk.Y, padx=(8, 0))
         ttk.Button(side, text="Вверх", command=self.move_up).pack(fill=tk.X, pady=(0, 4))
@@ -126,17 +134,22 @@ class ToolPaletteDialog(tk.Toplevel):
         ttk.Button(buttons, text="Применить", command=self.apply).pack(side=tk.RIGHT)
         ttk.Button(buttons, text="Отмена", command=self.cancel).pack(side=tk.RIGHT, padx=(0, 8))
         self.listbox.bind("<<ListboxSelect>>", lambda _event: self.update_selected_state())
+        self.listbox.bind("<ButtonPress-1>", self.begin_drag)
+        self.listbox.bind("<B1-Motion>", self.drag_tool)
+        self.listbox.bind("<ButtonRelease-1>", self.end_drag)
+        self.listbox.bind("<space>", self.toggle_selected_from_keyboard)
+        self.listbox.bind("<Return>", self.toggle_selected_from_keyboard)
         self.protocol("WM_DELETE_WINDOW", self.cancel)
         self.refresh_list()
         if self.order:
             self.listbox.selection_set(0)
             self.update_selected_state()
 
-    def refresh_list(self) -> None:
-        selected = self.current_tool()
+    def refresh_list(self, selected_value: str | None = None) -> None:
+        selected = selected_value if selected_value is not None else self.current_tool()
         self.listbox.delete(0, tk.END)
         for value in self.order:
-            mark = "✓" if value in self.visible else " "
+            mark = "☑" if value in self.visible else "☐"
             self.listbox.insert(tk.END, f"{mark} {self.label_by_id.get(value, value)}")
         if selected in self.order:
             index = self.order.index(selected)
@@ -165,7 +178,81 @@ class ToolPaletteDialog(tk.Toplevel):
             self.visible.add(value)
         else:
             self.visible.discard(value)
-        self.refresh_list()
+        self.refresh_list(value)
+
+    def toggle_tool(self, value: str) -> None:
+        if value not in self.order:
+            return
+        if value in self.visible:
+            self.visible.discard(value)
+        else:
+            self.visible.add(value)
+        self.refresh_list(value)
+
+    def toggle_selected_from_keyboard(self, _event=None) -> str:
+        value = self.current_tool()
+        if value is not None:
+            self.toggle_tool(value)
+        return "break"
+
+    def list_index_at(self, y: int) -> int | None:
+        if not self.order:
+            return None
+        index = int(self.listbox.nearest(y))
+        bounds = self.listbox.bbox(index)
+        if bounds is None:
+            return None
+        _x, row_y, _width, row_height = bounds
+        if y < row_y or y >= row_y + row_height:
+            return None
+        return index
+
+    def begin_drag(self, event) -> str:
+        index = self.list_index_at(event.y)
+        if index is None:
+            return "break"
+        self._drag_tool = self.order[index]
+        self._drag_start_y = int(event.y)
+        self._dragged = False
+        self.listbox.selection_clear(0, tk.END)
+        self.listbox.selection_set(index)
+        self.listbox.activate(index)
+        self.update_selected_state()
+        return "break"
+
+    def drag_tool(self, event) -> str:
+        if self._drag_tool is None:
+            return "break"
+        if abs(int(event.y) - self._drag_start_y) >= 4:
+            self._dragged = True
+        if event.y < 12:
+            self.listbox.yview_scroll(-1, "units")
+        elif event.y > self.listbox.winfo_height() - 12:
+            self.listbox.yview_scroll(1, "units")
+        target = int(self.listbox.nearest(event.y))
+        target = max(0, min(len(self.order) - 1, target))
+        self.move_tool_to(self._drag_tool, target)
+        return "break"
+
+    def end_drag(self, event) -> str:
+        value = self._drag_tool
+        should_toggle = value is not None and not self._dragged and int(event.x) <= 34
+        self._drag_tool = None
+        self._dragged = False
+        if should_toggle and value is not None:
+            self.toggle_tool(value)
+        return "break"
+
+    def move_tool_to(self, value: str, new_index: int) -> None:
+        if value not in self.order:
+            return
+        old_index = self.order.index(value)
+        new_index = max(0, min(len(self.order) - 1, int(new_index)))
+        if old_index == new_index:
+            return
+        self.order.pop(old_index)
+        self.order.insert(new_index, value)
+        self.refresh_list(value)
 
     def move_up(self) -> None:
         self.move_selected(-1)
@@ -181,8 +268,7 @@ class ToolPaletteDialog(tk.Toplevel):
         new_index = index + delta
         if new_index < 0 or new_index >= len(self.order):
             return
-        self.order[index], self.order[new_index] = self.order[new_index], self.order[index]
-        self.refresh_list()
+        self.move_tool_to(value, new_index)
 
     def show_all(self) -> None:
         self.visible = set(self.order)
@@ -209,4 +295,3 @@ class ToolPaletteDialog(tk.Toplevel):
     def cancel(self) -> None:
         self.result = None
         self.destroy()
-

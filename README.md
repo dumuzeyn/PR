@@ -9,7 +9,7 @@ This repository starts with a real working editor and an architecture intended t
 - PNG/JPEG/WebP/BMP/TIFF import and export
 - document presets, recent files, embedded and linked image placement, linked layer update/relink, loading several files as layers and layer export
 - dedicated startup workspace for recent projects, file opening, recovery and new-canvas creation before the editor UI appears
-- visual new-canvas dialog with screen, social, print and custom presets; clipboard images become the first size preset and can be placed immediately
+- visual new-canvas dialog with screen, social, print and remembered custom presets; clipboard images become the first size preset and can be placed immediately
 - centered medium-size startup window, maximized editor, automatic canvas centering and center-preserving zoom
 - smooth cached brush strokes, eraser, fill, gradient, editable paragraph/path text layers, crop, rectangular/elliptical/freehand/magnetic/polygon selection, persistent add/subtract/intersect modes, quick selection brush with live result-mask, cursor and image-aware edge refinement, magic wand, color range, move
 - layer opacity, visibility, duplication, merge, flatten
@@ -60,6 +60,7 @@ Every push to `master` starts the `Build PhotoRedactor for Windows` workflow. Op
 
 - The left side is split into a scrollable tool palette and a contextual tool-options panel.
 - `Инструменты -> Настроить панель инструментов...` changes visible tools and their order.
+- Click a checkbox icon to show or hide a tool; drag a row to place it anywhere in the palette order.
 - Hidden tools stay available from the main `Инструменты` menu.
 - Tool-panel order, visibility and splitter position are saved in `settings.json`.
 - The options panel only shows controls that belong to the active tool, such as brush size, opacity, tolerance, paint target, colors or retouch presets.

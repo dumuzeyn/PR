@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import tkinter as tk
+import time
 import unittest
 
 import numpy as np
@@ -60,12 +61,27 @@ class StartupTests(unittest.TestCase):
     def test_new_document_dialog_builds_clipboard_preview(self) -> None:
         clipboard = Image.new("RGBA", (640, 360), (40, 100, 180, 255))
         original_wait = tk.Toplevel.wait_window
-        tk.Toplevel.wait_window = lambda window, target=None: window.destroy()
+        shown_size: list[str] = []
+
+        def inspect_dialog(window, target=None) -> None:
+            shown_size.append(str(self.app._new_document_size_label.cget("text")))
+            window.destroy()
+
+        tk.Toplevel.wait_window = inspect_dialog
         try:
             self.assertIsNone(self.app.new_document_dialog(clipboard))
             self.assertIsNotNone(self.app._new_document_preview)
+            self.assertEqual(shown_size, ["640 x 360 px"])
         finally:
             tk.Toplevel.wait_window = original_wait
+
+    def test_custom_canvas_size_is_reused(self) -> None:
+        self.app.save_settings = lambda: None
+        self.app.remember_custom_canvas(777, 555, 144, "Прозрачный")
+        custom = next(preset for preset in self.app.available_document_presets() if preset["name"] == "Свой размер")
+        self.assertEqual((custom["width"], custom["height"]), (777, 555))
+        self.assertEqual(custom["dpi"], 144)
+        self.assertEqual(custom["background"], "Прозрачный")
 
     def test_zoom_preserves_viewport_center(self) -> None:
         self.app.create_document_from_settings(
@@ -99,6 +115,28 @@ class StartupTests(unittest.TestCase):
         after = viewport_center()
         self.assertAlmostEqual(after[0], before[0], delta=5.0)
         self.assertAlmostEqual(after[1], before[1], delta=5.0)
+
+    def test_new_document_recenters_after_previous_view(self) -> None:
+        settings = {
+            "width": 1200,
+            "height": 800,
+            "dpi": 72,
+            "background": (255, 255, 255, 255),
+            "include_clipboard": False,
+        }
+        self.app.create_document_from_settings(settings)
+        self.app.update()
+        self.app.center_canvas_on_doc(80.0, 60.0)
+        self.app.create_document_from_settings({**settings, "width": 900, "height": 600})
+        deadline = time.monotonic() + 0.4
+        while time.monotonic() < deadline:
+            self.app.update()
+            time.sleep(0.01)
+        origin_x, origin_y = self.app._canvas_origin
+        viewport_x = (self.app.canvas.canvasx(self.app.canvas.winfo_width() / 2) - origin_x) / self.app.zoom.get()
+        viewport_y = (self.app.canvas.canvasy(self.app.canvas.winfo_height() / 2) - origin_y) / self.app.zoom.get()
+        self.assertAlmostEqual(viewport_x, 450.0, delta=5.0)
+        self.assertAlmostEqual(viewport_y, 300.0, delta=5.0)
 
 
 if __name__ == "__main__":

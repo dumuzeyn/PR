@@ -294,6 +294,10 @@ class PhotoRedactorApp(tk.Tk):
         self.tool_order = [value for _label, value, _description in TOOL_DEFINITIONS]
         self.visible_tools = list(self.tool_order)
         self.tool_pane_position = 360
+        self.custom_canvas_width = 1280
+        self.custom_canvas_height = 900
+        self.custom_canvas_dpi = 72
+        self.custom_canvas_background = "Белый"
         self.paint_target = tk.StringVar(value="pixels")
         self.selection_mode = tk.StringVar(value="replace")
         self.retouch_preset = tk.StringVar(value="Средняя ретушь")
@@ -407,6 +411,13 @@ class PhotoRedactorApp(tk.Tk):
                 if int(data.get("tool_schema_version", 1)) < 2 and "spot_healing" not in self.visible_tools:
                     self.visible_tools.append("spot_healing")
                 self.tool_pane_position = int(data.get("tool_pane_position", self.tool_pane_position))
+                custom_canvas = data.get("custom_canvas", {})
+                self.custom_canvas_width = max(1, min(50000, int(custom_canvas.get("width", self.custom_canvas_width))))
+                self.custom_canvas_height = max(1, min(50000, int(custom_canvas.get("height", self.custom_canvas_height))))
+                self.custom_canvas_dpi = max(1, min(2400, int(custom_canvas.get("dpi", self.custom_canvas_dpi))))
+                saved_background = str(custom_canvas.get("background", self.custom_canvas_background))
+                if saved_background in DOCUMENT_BACKGROUNDS:
+                    self.custom_canvas_background = saved_background
                 if self.tool.get() not in self.tool_order:
                     self.tool.set(self.visible_tools[0])
                 if hasattr(self, "tool_palette"):
@@ -431,6 +442,12 @@ class PhotoRedactorApp(tk.Tk):
                         "visible_tools": self.visible_tools,
                         "tool_schema_version": 2,
                         "tool_pane_position": self.tool_pane_position,
+                        "custom_canvas": {
+                            "width": self.custom_canvas_width,
+                            "height": self.custom_canvas_height,
+                            "dpi": self.custom_canvas_dpi,
+                            "background": self.custom_canvas_background,
+                        },
                     },
                     ensure_ascii=False,
                     indent=2,
@@ -670,7 +687,15 @@ class PhotoRedactorApp(tk.Tk):
     def finish_initial_fit(self) -> None:
         self._initial_fit_after_id = None
         if self._editor_active and self.winfo_exists():
+            self.update_idletasks()
             self.fit_to_screen()
+            self._initial_fit_after_id = self.after(160, self.finish_initial_center)
+
+    def finish_initial_center(self) -> None:
+        self._initial_fit_after_id = None
+        if self._editor_active and self.winfo_exists():
+            self.update_idletasks()
+            self.center_canvas_on_doc(self.doc.width / 2, self.doc.height / 2)
 
     def maximize_window(self) -> None:
         try:
@@ -2446,9 +2471,17 @@ class PhotoRedactorApp(tk.Tk):
             return
         self.create_document_from_settings(settings, clipboard_image)
 
-    @staticmethod
-    def available_document_presets(clipboard_image: Image.Image | None = None) -> list[dict[str, object]]:
+    def available_document_presets(self, clipboard_image: Image.Image | None = None) -> list[dict[str, object]]:
         presets = [dict(item) for item in DOCUMENT_PRESETS]
+        for preset in presets:
+            if preset["name"] == "Свой размер":
+                preset.update(
+                    width=self.custom_canvas_width,
+                    height=self.custom_canvas_height,
+                    dpi=self.custom_canvas_dpi,
+                    background=self.custom_canvas_background,
+                )
+                break
         if clipboard_image is not None:
             presets.insert(
                 0,
@@ -2484,14 +2517,17 @@ class PhotoRedactorApp(tk.Tk):
         preset_panel = ttk.Frame(body, width=260)
         preset_panel.grid(row=0, column=0, rowspan=2, sticky="ns", padx=(0, 16))
         ttk.Label(preset_panel, text="Форматы", font=("Segoe UI Semibold", 12)).pack(anchor=tk.W, pady=(0, 6))
-        preset_list = tk.Listbox(preset_panel, width=34, height=18, exportselection=False, activestyle="dotbox")
+        preset_list = tk.Listbox(preset_panel, width=42, height=18, exportselection=False, activestyle="dotbox")
         preset_list.pack(fill=tk.Y, expand=True)
         for preset in presets:
-            preset_list.insert(tk.END, f"{preset['name']}  {preset['width']} x {preset['height']}")
+            preset_list.insert(tk.END, f"{preset['name']}   {preset['width']} x {preset['height']} px")
 
         preview_panel = ttk.Frame(body)
         preview_panel.grid(row=0, column=1, sticky="new")
         ttk.Label(preview_panel, text="Предпросмотр", font=("Segoe UI Semibold", 12)).pack(anchor=tk.W, pady=(0, 6))
+        current_size_label = ttk.Label(preview_panel, text="", font=("Segoe UI Semibold", 14))
+        current_size_label.pack(anchor=tk.W, pady=(0, 7))
+        self._new_document_size_label = current_size_label
         preview = tk.Canvas(preview_panel, width=330, height=210, background="#25282d", highlightthickness=0)
         preview.pack()
         preset_description = ttk.Label(preview_panel, text="", wraplength=330, justify=tk.LEFT)
@@ -2525,6 +2561,7 @@ class PhotoRedactorApp(tk.Tk):
         def update_preview(*_args) -> None:
             canvas_width = safe_dimension(width, 1280)
             canvas_height = safe_dimension(height, 900)
+            current_size_label.configure(text=f"{canvas_width} x {canvas_height} px")
             preview.delete("all")
             margin = 16
             scale = min((330 - margin * 2) / canvas_width, (210 - margin * 2) / canvas_height)
@@ -2548,7 +2585,6 @@ class PhotoRedactorApp(tk.Tk):
                 self._new_document_preview = ImageTk.PhotoImage(image)
                 preview.create_image((x1 + x2) // 2, (y1 + y2) // 2, image=self._new_document_preview)
             preview.create_rectangle(x1, y1, x2, y2, outline="#7d8794", width=1)
-            preview.create_text(165, 199, text=f"{canvas_width} x {canvas_height} px", fill="#d9dde3", font=("Segoe UI", 9))
 
         def select_preset(_event=None) -> None:
             selection = preset_list.curselection()
@@ -2589,6 +2625,13 @@ class PhotoRedactorApp(tk.Tk):
                 "background": DOCUMENT_BACKGROUNDS.get(background.get(), DOCUMENT_BACKGROUNDS["Белый"]),
                 "include_clipboard": bool(include_clipboard.get() and clipboard_image is not None),
             }
+            selection = preset_list.curselection()
+            selected_preset = presets[int(selection[0])] if selection else None
+            uses_custom_size = selected_preset is None or selected_preset["name"] == "Свой размер"
+            if selected_preset is not None:
+                uses_custom_size = uses_custom_size or canvas_width != int(selected_preset["width"]) or canvas_height != int(selected_preset["height"])
+            if uses_custom_size:
+                self.remember_custom_canvas(canvas_width, canvas_height, canvas_dpi, background.get())
             dialog.destroy()
 
         swap_button.configure(command=swap_orientation)
@@ -2606,6 +2649,13 @@ class PhotoRedactorApp(tk.Tk):
         dialog.protocol("WM_DELETE_WINDOW", dialog.destroy)
         dialog.wait_window()
         return result
+
+    def remember_custom_canvas(self, width: int, height: int, dpi: int, background: str) -> None:
+        self.custom_canvas_width = max(1, min(50000, int(width)))
+        self.custom_canvas_height = max(1, min(50000, int(height)))
+        self.custom_canvas_dpi = max(1, min(2400, int(dpi)))
+        self.custom_canvas_background = background if background in DOCUMENT_BACKGROUNDS else "Белый"
+        self.save_settings()
 
     def create_document_from_settings(self, settings: dict[str, object], clipboard_image: Image.Image | None = None) -> None:
         width = int(settings["width"])
