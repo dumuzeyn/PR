@@ -28,7 +28,18 @@ jobs:
         run: python -m pip install --disable-pip-version-check -r requirements.txt
 
       - name: Run tests
-        run: python -m pytest -q
+        shell: powershell
+        run: |
+          python -m pytest -q tests/test_rendering.py tests/test_tile_history.py tests/test_retouch.py tests/test_tool_smoke.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          # Tcl/Tk on Windows does not reliably support repeated root teardown in one process.
+          $uiTests = python -m pytest --collect-only -q tests/test_startup.py tests/test_tool_palette.py |
+            Where-Object { $_ -like 'tests/*::*' }
+          foreach ($test in $uiTests) {
+            python -m pytest -q $test
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
 
       - name: Build executable
         shell: powershell
