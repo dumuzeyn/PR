@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+import copy
 import json
 import os
 from pathlib import Path
@@ -57,7 +58,26 @@ from .core import (
     sharpen,
     spot_heal,
 )
-from .history import DocumentStateCommand, History, LayerBlendModeCommand, LayerMoveCommand, LayerOpacityCommand, MaskPatchCommand, PixelPatchCommand, SelectionMaskCommand
+from .history import (
+    DocumentStateCommand,
+    DocumentFieldsCommand,
+    History,
+    LayerBlendModeCommand,
+    LayerDeleteCommand,
+    LayerFieldsCommand,
+    LayerInsertCommand,
+    LayerMoveCommand,
+    LayerOpacityCommand,
+    LayerPropertyCommand,
+    LayerReorderCommand,
+    MaskPatchCommand,
+    MaskTilePatchCommand,
+    PixelPatchCommand,
+    PixelTilePatchCommand,
+    SelectionMaskCommand,
+    TilePatch,
+)
+from .rendering import RenderEngine
 from .ui.tool_options import ToolOptionsPanel
 from .ui.tool_palette import ToolPalette, ToolPaletteDialog, normalize_tool_order, normalize_visible_tools
 
@@ -289,6 +309,7 @@ class PhotoRedactorApp(tk.Tk):
         self.recent_files: list[str] = []
         self.action_recording = False
         self.recorded_actions: list[str] = []
+        self._edit_generation = 0
         self.adjustment_presets = {name: dict(value) for name, value in ADJUSTMENT_PRESETS.items()}
         self.tool = tk.StringVar(value="brush")
         self.tool_order = [value for _label, value, _description in TOOL_DEFINITIONS]
@@ -323,6 +344,7 @@ class PhotoRedactorApp(tk.Tk):
         self._stroke_kind = "pixels"
         self._stroke_rect: tuple[int, int, int, int] | None = None
         self._stroke_before: np.ndarray | None = None
+        self._stroke_tiles: dict[tuple[int, int], tuple[tuple[int, int, int, int], np.ndarray]] = {}
         self._stroke_selection_mask: np.ndarray | None = None
         self._opacity_layer_id: str | None = None
         self._opacity_before: float | None = None
@@ -337,6 +359,9 @@ class PhotoRedactorApp(tk.Tk):
         self._magnetic_edges: np.ndarray | None = None
         self._quick_points: list[tuple[int, int]] = []
         self._quick_mode = "replace"
+        self._quick_preview_mask: np.ndarray | None = None
+        self._quick_preview_processed = 0
+        self._quick_base_selection: np.ndarray | None = None
         self._quick_preview_id: int | None = None
         self._quick_preview_image: ImageTk.PhotoImage | None = None
         self._last_quick_preview_time = 0.0
@@ -366,6 +391,11 @@ class PhotoRedactorApp(tk.Tk):
         self.startup_frame: tk.Frame | None = None
         self._editor_active = False
         self._canvas_image_id: int | None = None
+        self._canvas_tile_ids: dict[tuple[int, int], int] = {}
+        self._canvas_tile_images: dict[tuple[int, int], ImageTk.PhotoImage] = {}
+        self._canvas_view_signature: tuple[object, ...] | None = None
+        self._layer_thumbnail_cache: dict[tuple[object, ...], Image.Image] = {}
+        self._mask_thumbnail_cache: dict[tuple[object, ...], Image.Image] = {}
         self._canvas_origin = (0, 0)
         self._render_after_id: str | None = None
         self._initial_fit_after_id: str | None = None
@@ -374,6 +404,7 @@ class PhotoRedactorApp(tk.Tk):
         self._composite_cache = None
         self._composite_dirty = True
         self._view_dirty = True
+        self.render_engine = RenderEngine(tile_size=256)
 
         self._build_ui()
         self.tool.trace_add("write", self.tool_changed)
@@ -1153,6 +1184,7 @@ class PhotoRedactorApp(tk.Tk):
 
     def push_command(self, command) -> None:
         self.history.push(command)
+        self._edit_generation += 1
         self.record_action(command.label)
         self.status_text(command.label)
 
@@ -1160,15 +1192,68 @@ class PhotoRedactorApp(tk.Tk):
         before = self.doc.raw_state()
         fn()
         after = self.doc.raw_state()
-        self.history.push(DocumentStateCommand(label, before, after))
+        command = self.compact_document_command(label, before, after)
+        if command is not None:
+            self.history.push(command)
+        self._edit_generation += 1
         self.record_action(label)
         self.status_text(label)
+
+    @staticmethod
+    def state_value_equal(left, right) -> bool:
+        if isinstance(left, np.ndarray) or isinstance(right, np.ndarray):
+            return isinstance(left, np.ndarray) and isinstance(right, np.ndarray) and left.shape == right.shape and np.array_equal(left, right)
+        if isinstance(left, dict) and isinstance(right, dict):
+            return left.keys() == right.keys() and all(PhotoRedactorApp.state_value_equal(left[key], right[key]) for key in left)
+        if isinstance(left, (list, tuple)) and isinstance(right, (list, tuple)):
+            return len(left) == len(right) and all(PhotoRedactorApp.state_value_equal(a, b) for a, b in zip(left, right))
+        return left == right
+
+    def compact_document_command(self, label: str, before: dict, after: dict):
+        before_layers = before.get("layers", [])
+        after_layers = after.get("layers", [])
+        same_layer_order = [layer.get("id") for layer in before_layers] == [layer.get("id") for layer in after_layers]
+        document_keys = (set(before) | set(after)) - {"layers"}
+        changed_document = {
+            key: (before.get(key), after.get(key))
+            for key in document_keys
+            if not self.state_value_equal(before.get(key), after.get(key))
+        }
+        changed_layers: list[tuple[str, dict, dict]] = []
+        if same_layer_order:
+            for old_layer, new_layer in zip(before_layers, after_layers):
+                changed_fields = {
+                    key
+                    for key in set(old_layer) | set(new_layer)
+                    if not self.state_value_equal(old_layer.get(key), new_layer.get(key))
+                }
+                if changed_fields:
+                    changed_layers.append(
+                        (
+                            str(old_layer["id"]),
+                            {key: old_layer.get(key) for key in changed_fields},
+                            {key: new_layer.get(key) for key in changed_fields},
+                        )
+                    )
+        if same_layer_order and len(changed_layers) == 1 and not changed_document:
+            layer_id, old_fields, new_fields = changed_layers[0]
+            return LayerFieldsCommand(label, layer_id, old_fields, new_fields)
+        if same_layer_order and not changed_layers and changed_document:
+            return DocumentFieldsCommand(
+                label,
+                {key: value[0] for key, value in changed_document.items()},
+                {key: value[1] for key, value in changed_document.items()},
+            )
+        if same_layer_order and not changed_layers and not changed_document:
+            return None
+        return DocumentStateCommand(label, before, after)
 
     def run_selection_command(self, label: str, fn) -> None:
         before = None if self.doc.selection_mask is None else self.doc.selection_mask.copy()
         fn()
         after = None if self.doc.selection_mask is None else self.doc.selection_mask.copy()
         self.history.push(SelectionMaskCommand(label, before, after))
+        self._edit_generation += 1
         self.record_action(label)
         self.selection_box = self.doc.selection_bounds()
         self.update_selection_overlay()
@@ -1231,6 +1316,45 @@ class PhotoRedactorApp(tk.Tk):
         self.doc = Document.open_project(self.recovery_path)
         self.history.clear()
         self.selection_box = self.doc.selection_bounds()
+
+    def run_pixel_delta_command(self, label: str, fn) -> tuple[int, int, int, int] | None:
+        layer = self.doc.layer
+        if layer.locked or layer.kind == "adjustment":
+            return None
+        layer_id = layer.id
+        before = layer.pixels.copy()
+        fn()
+        target = self.doc.get_layer(layer_id)
+        if target is None or target.pixels.shape != before.shape:
+            return None
+        changed = np.any(target.pixels != before, axis=2)
+        if not np.any(changed):
+            return None
+        ys, xs = np.where(changed)
+        rect = int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1
+        x1, y1, x2, y2 = rect
+        self.push_command(PixelPatchCommand(label, layer_id, rect, before[y1:y2, x1:x2].copy(), target.pixels[y1:y2, x1:x2].copy()))
+        self.doc.dirty = True
+        self.request_canvas_refresh(self.local_to_document_rect(rect, target), target, "pixels")
+        self.refresh_layers()
+        return rect
+
+    def set_layer_property(self, label: str, attribute: str, value, affects_canvas: bool = True, preserve_render_cache: bool = True) -> bool:
+        layer = self.doc.layer
+        before = copy.deepcopy(getattr(layer, attribute))
+        after = copy.deepcopy(value)
+        if before == after:
+            return False
+        setattr(layer, attribute, after)
+        if attribute == "mask":
+            layer.touch_mask()
+        self.doc.dirty = True
+        self.push_command(LayerPropertyCommand(label, layer.id, attribute, before, after))
+        if affects_canvas:
+            self.refresh(preserve_render_cache=preserve_render_cache)
+        else:
+            self.refresh_layers()
+        return True
         self.show_editor()
         self.status_text(f"Открыто восстановление: {self.recovery_path}")
 
@@ -1242,45 +1366,79 @@ class PhotoRedactorApp(tk.Tk):
     def undo(self) -> None:
         label = self.history.undo(self.doc)
         if label:
-            self.invalidate_pixels()
-            self.refresh()
+            self._edit_generation += 1
+            self.refresh_history_command(self.history.last_command)
             self.status_text(f"Undo: {label}")
 
     def redo(self) -> None:
         label = self.history.redo(self.doc)
         if label:
-            self.invalidate_pixels()
-            self.refresh()
+            self._edit_generation += 1
+            self.refresh_history_command(self.history.last_command)
             self.status_text(f"Redo: {label}")
 
-    def invalidate_pixels(self) -> None:
+    def refresh_history_command(self, command) -> None:
+        if isinstance(command, (PixelPatchCommand, PixelTilePatchCommand, MaskPatchCommand, MaskTilePatchCommand)):
+            layer = self.doc.get_layer(command.layer_id)
+            if layer is not None:
+                kind = "mask" if isinstance(command, (MaskPatchCommand, MaskTilePatchCommand)) else "pixels"
+                for rect in command.dirty_rects:
+                    self.render_engine.invalidate_region(self.doc, self.local_to_document_rect(rect, layer), layer, kind)
+                self._composite_dirty = True
+                self._view_dirty = True
+                self.refresh_canvas()
+                self.refresh_layers()
+                self.info.configure(text=f"{self.doc.width} x {self.doc.height}px\nРЎР»РѕРµРІ: {len(self.doc.layers)}\nРђРєС‚РёРІРЅС‹Р№: {self.doc.layer.name}")
+                return
+        if isinstance(command, LayerPropertyCommand):
+            if command.attribute in {"name", "locked", "mask_linked"}:
+                self.refresh_layers()
+                return
+            self.refresh(preserve_render_cache=command.attribute not in {"filters", "effects", "mask", "mask_feather"})
+            return
+        if isinstance(command, (LayerOpacityCommand, LayerBlendModeCommand)):
+            self.refresh(preserve_render_cache=True)
+            return
+        if isinstance(command, LayerFieldsCommand):
+            changed = set(command.before) | set(command.after)
+            self.refresh(preserve_render_cache=not bool(changed & {"pixels", "filters", "effects", "mask", "mask_feather"}))
+            return
+        self.refresh()
+
+    def invalidate_pixels(self, clear_layer_caches: bool = True) -> None:
         self._composite_dirty = True
         self._view_dirty = True
+        self.render_engine.invalidate_full(self.doc, clear_layer_caches=clear_layer_caches)
 
     def invalidate_view(self) -> None:
         self._view_dirty = True
 
     def refresh_canvas(self) -> None:
+        composite_changed = self._composite_dirty or self._composite_cache is None
         if self._composite_dirty or self._composite_cache is None:
-            self._composite_cache = self.doc.composite(checker=True)
+            self._composite_cache = self.render_engine.render(self.doc, checker=True)
             self._composite_dirty = False
         display = self._channel_display(self._composite_cache)
         display = self._mask_preview_display(display)
-        image = rgba_array_to_pil(display)
         scale = self.zoom.get()
-        if scale != 1.0:
-            resample = Image.Resampling.NEAREST if scale >= 4 else Image.Resampling.BILINEAR
-            image = image.resize((max(1, int(image.width * scale)), max(1, int(image.height * scale))), resample)
-        self._preview_image = ImageTk.PhotoImage(image)
         pad_x = max(40, self.canvas.winfo_width() // 2)
         pad_y = max(40, self.canvas.winfo_height() // 2)
         self._canvas_origin = (pad_x, pad_y)
-        if self._canvas_image_id is None:
-            self._canvas_image_id = self.canvas.create_image(pad_x, pad_y, image=self._preview_image, anchor=tk.NW)
-        else:
-            self.canvas.itemconfigure(self._canvas_image_id, image=self._preview_image)
-            self.canvas.coords(self._canvas_image_id, pad_x, pad_y)
-        self.canvas.configure(scrollregion=(0, 0, image.width + pad_x * 2, image.height + pad_y * 2))
+        view_signature = (
+            round(scale, 6),
+            self.doc.width,
+            self.doc.height,
+            self.view_channel.get(),
+            self.mask_preview.get(),
+            self.doc.layer.id if self.doc.layers else None,
+        )
+        full_view = self._canvas_view_signature != view_signature or not self._canvas_tile_ids
+        changed_tiles = self.render_engine.last_changed_tiles if composite_changed and not full_view else set(self.render_engine.all_tiles(self.doc))
+        self._update_canvas_tiles(display, changed_tiles, scale, pad_x, pad_y, full_view)
+        scaled_width = max(1, round(self.doc.width * scale))
+        scaled_height = max(1, round(self.doc.height * scale))
+        self.canvas.configure(scrollregion=(0, 0, scaled_width + pad_x * 2, scaled_height + pad_y * 2))
+        self._canvas_view_signature = view_signature
         self.zoom_label.configure(text=f"{round(scale * 100)}%")
         self._last_render_time = time.perf_counter()
         self._view_dirty = False
@@ -1291,11 +1449,52 @@ class PhotoRedactorApp(tk.Tk):
         if self._last_pointer_event is not None:
             self.update_brush_preview(self._last_pointer_event)
 
+    def _update_canvas_tiles(
+        self,
+        display: np.ndarray,
+        changed_tiles: set[tuple[int, int]],
+        scale: float,
+        pad_x: int,
+        pad_y: int,
+        full_view: bool,
+    ) -> None:
+        if self._canvas_image_id is not None:
+            self.canvas.delete(self._canvas_image_id)
+            self._canvas_image_id = None
+            self._preview_image = None
+        if full_view:
+            for item_id in self._canvas_tile_ids.values():
+                self.canvas.delete(item_id)
+            self._canvas_tile_ids.clear()
+            self._canvas_tile_images.clear()
+        resample = Image.Resampling.NEAREST if scale >= 4 else Image.Resampling.BILINEAR
+        for tx, ty in sorted(changed_tiles):
+            x1, y1, x2, y2 = self.render_engine.tile_rect(self.doc, tx, ty)
+            with self.render_engine.profiler.measure("canvas.numpy_to_pil"):
+                image = rgba_array_to_pil(display[y1:y2, x1:x2])
+            left, top = round(x1 * scale), round(y1 * scale)
+            right, bottom = round(x2 * scale), round(y2 * scale)
+            size = max(1, right - left), max(1, bottom - top)
+            if image.size != size:
+                with self.render_engine.profiler.measure("canvas.resize_tile"):
+                    image = image.resize(size, resample)
+            with self.render_engine.profiler.measure("canvas.pil_to_imagetk"):
+                photo = ImageTk.PhotoImage(image)
+            key = tx, ty
+            item_id = self._canvas_tile_ids.get(key)
+            if item_id is None:
+                item_id = self.canvas.create_image(pad_x + left, pad_y + top, image=photo, anchor=tk.NW)
+                self._canvas_tile_ids[key] = item_id
+            else:
+                self.canvas.itemconfigure(item_id, image=photo)
+                self.canvas.coords(item_id, pad_x + left, pad_y + top)
+            self._canvas_tile_images[key] = photo
+
     def _channel_display(self, composite: np.ndarray) -> np.ndarray:
         channel = self.view_channel.get() if hasattr(self, "view_channel") else "RGB"
         if channel == "RGB":
             return composite
-        source = self.doc.composite(checker=False)
+        source = self.render_engine.render(self.doc, checker=False)
         out = np.zeros_like(source)
         out[:, :, 3] = 255
         if channel == "Alpha":
@@ -1337,8 +1536,13 @@ class PhotoRedactorApp(tk.Tk):
             return out
         return display
 
-    def request_canvas_refresh(self) -> None:
-        self.invalidate_pixels()
+    def request_canvas_refresh(self, rect: tuple[int, int, int, int] | None = None, layer=None, kind: str = "pixels", preserve_layer_caches: bool = False) -> None:
+        if rect is None:
+            self.invalidate_pixels(clear_layer_caches=not preserve_layer_caches)
+        else:
+            self.render_engine.invalidate_region(self.doc, rect, layer, kind)
+            self._composite_dirty = True
+            self._view_dirty = True
         if self._render_after_id is not None:
             return
         elapsed_ms = (time.perf_counter() - self._last_render_time) * 1000
@@ -1349,8 +1553,8 @@ class PhotoRedactorApp(tk.Tk):
         self._render_after_id = None
         self.refresh_canvas()
 
-    def refresh(self) -> None:
-        self.invalidate_pixels()
+    def refresh(self, preserve_render_cache: bool = False) -> None:
+        self.invalidate_pixels(clear_layer_caches=not preserve_render_cache)
         if self._render_after_id is not None:
             self.after_cancel(self._render_after_id)
             self._render_after_id = None
@@ -1377,14 +1581,34 @@ class PhotoRedactorApp(tk.Tk):
 
     def refresh_layer_previews(self) -> None:
         layer = self.doc.layer
-        self._layer_thumb_image = ImageTk.PhotoImage(self.make_layer_thumbnail(layer.pixels))
+        layer_key = (layer.id, layer.pixels_revision, id(layer.pixels), layer.pixels.shape)
+        layer_preview = self._layer_thumbnail_cache.get(layer_key)
+        if layer_preview is None:
+            layer_preview = self.make_layer_thumbnail(layer.pixels)
+            self._layer_thumbnail_cache[layer_key] = layer_preview
+            self._trim_thumbnail_cache(self._layer_thumbnail_cache)
+        self._layer_thumb_image = ImageTk.PhotoImage(layer_preview)
         self.layer_thumb.configure(image=self._layer_thumb_image)
-        self._mask_thumb_image = ImageTk.PhotoImage(self.make_mask_thumbnail(layer.mask))
+        mask_key = (layer.id, layer.mask_revision, id(layer.mask), None if layer.mask is None else layer.mask.shape)
+        mask_preview = self._mask_thumbnail_cache.get(mask_key)
+        if mask_preview is None:
+            mask_preview = self.make_mask_thumbnail(layer.mask)
+            self._mask_thumbnail_cache[mask_key] = mask_preview
+            self._trim_thumbnail_cache(self._mask_thumbnail_cache)
+        self._mask_thumb_image = ImageTk.PhotoImage(mask_preview)
         self.mask_thumb.configure(image=self._mask_thumb_image)
 
+    @staticmethod
+    def _trim_thumbnail_cache(cache: dict[tuple[object, ...], Image.Image], limit: int = 128) -> None:
+        while len(cache) > limit:
+            cache.pop(next(iter(cache)))
+
     def make_layer_thumbnail(self, pixels: np.ndarray, size: int = 64) -> Image.Image:
-        image = rgba_array_to_pil(pixels)
-        image.thumbnail((size, size), Image.Resampling.LANCZOS)
+        height, width = pixels.shape[:2]
+        scale = min(1.0, size / max(1, width), size / max(1, height))
+        preview_size = max(1, round(width * scale)), max(1, round(height * scale))
+        preview = pixels if preview_size == (width, height) else cv2.resize(pixels, preview_size, interpolation=cv2.INTER_AREA)
+        image = rgba_array_to_pil(preview)
         canvas = Image.new("RGBA", (size, size), (44, 46, 52, 255))
         x = (size - image.width) // 2
         y = (size - image.height) // 2
@@ -1394,8 +1618,11 @@ class PhotoRedactorApp(tk.Tk):
     def make_mask_thumbnail(self, mask: np.ndarray | None, size: int = 64) -> Image.Image:
         if mask is None:
             return Image.new("RGBA", (size, size), (72, 74, 82, 255))
-        image = Image.fromarray(mask.astype(np.uint8), "L")
-        image.thumbnail((size, size), Image.Resampling.NEAREST)
+        height, width = mask.shape[:2]
+        scale = min(1.0, size / max(1, width), size / max(1, height))
+        preview_size = max(1, round(width * scale)), max(1, round(height * scale))
+        preview = mask if preview_size == (width, height) else cv2.resize(mask, preview_size, interpolation=cv2.INTER_AREA)
+        image = Image.fromarray(preview.astype(np.uint8), "L")
         canvas = Image.new("L", (size, size), 72)
         x = (size - image.width) // 2
         y = (size - image.height) // 2
@@ -1411,7 +1638,7 @@ class PhotoRedactorApp(tk.Tk):
         doc.restore_raw_state(self.doc.raw_state())
         return doc
 
-    def run_background(self, label: str, worker, done=None) -> None:
+    def run_background(self, label: str, worker, done=None, is_current=None) -> None:
         self.status_text(f"{label}...")
         future = self.executor.submit(worker)
 
@@ -1421,6 +1648,9 @@ class PhotoRedactorApp(tk.Tk):
             except Exception as exc:
                 messagebox.showerror(label, str(exc))
                 self.status_text(f"{label}: error")
+                return
+            if is_current is not None and not is_current():
+                self.status_text(f"{label}: result discarded because the document changed")
                 return
             if done:
                 done(result)
@@ -1471,6 +1701,7 @@ class PhotoRedactorApp(tk.Tk):
 
     def quick_preview_settings_changed(self, *_args) -> None:
         if self.tool.get() == "quick_selection" and self._quick_points:
+            self.reset_quick_preview_cache()
             self.update_quick_selection_preview(force=True)
 
     def selection_mode_changed(self, *_args) -> None:
@@ -1538,24 +1769,44 @@ class PhotoRedactorApp(tk.Tk):
         if not force and now - self._last_quick_preview_time < 0.075:
             return
         self._last_quick_preview_time = now
-        mask = self.doc.preview_quick_selection_brush(
-            self.doc.layer,
-            self._quick_points,
-            max(2, int(self.brush_size.get())),
-            int(self.tolerance.get()),
-            self._quick_mode,
-            int(self.quick_smooth.get()),
-            int(self.quick_edge_radius.get()),
-            float(self.quick_edge_strength.get()),
-        )
+        new_points = self._quick_points[self._quick_preview_processed :]
+        if new_points:
+            with self.render_engine.profiler.measure("selection.quick_preview"):
+                partial = self.doc._quick_selection_mask(
+                    self.doc.layer,
+                    new_points,
+                    max(2, int(self.brush_size.get())),
+                    int(self.tolerance.get()),
+                    int(self.quick_smooth.get()),
+                    int(self.quick_edge_radius.get()),
+                    float(self.quick_edge_strength.get()),
+                )
+            self._quick_preview_mask = partial if self._quick_preview_mask is None else np.maximum(self._quick_preview_mask, partial)
+            self._quick_preview_processed = len(self._quick_points)
+        mask = self._quick_preview_mask
+        current = self._quick_base_selection
+        if mask is not None and current is not None:
+            if self._quick_mode == "add":
+                mask = np.maximum(current, mask)
+            elif self._quick_mode == "subtract":
+                mask = np.where(mask > 0, 0, current).astype(np.uint8)
+            elif self._quick_mode == "intersect":
+                mask = np.minimum(current, mask)
+        if mask is None:
+            mask = current
         if mask is None or not np.any(mask):
             self.clear_quick_selection_preview()
             return
-        mask_image = Image.fromarray(mask, mode="L")
+        bounds = self.mask_bounds(mask)
+        if bounds is None:
+            self.clear_quick_selection_preview()
+            return
+        x1, y1, x2, y2 = bounds
+        mask_image = Image.fromarray(mask[y1:y2, x1:x2], mode="L")
         scale = self.zoom.get()
         if scale != 1.0:
             mask_image = mask_image.resize(
-                (max(1, int(self.doc.width * scale)), max(1, int(self.doc.height * scale))),
+                (max(1, round((x2 - x1) * scale)), max(1, round((y2 - y1) * scale))),
                 Image.Resampling.NEAREST,
             )
         color_by_mode = {
@@ -1570,11 +1821,12 @@ class PhotoRedactorApp(tk.Tk):
         overlay.putalpha(alpha)
         self._quick_preview_image = ImageTk.PhotoImage(overlay)
         ox, oy = self._canvas_origin
+        preview_x, preview_y = ox + round(x1 * scale), oy + round(y1 * scale)
         if self._quick_preview_id is None:
-            self._quick_preview_id = self.canvas.create_image(ox, oy, image=self._quick_preview_image, anchor=tk.NW)
+            self._quick_preview_id = self.canvas.create_image(preview_x, preview_y, image=self._quick_preview_image, anchor=tk.NW)
         else:
             self.canvas.itemconfigure(self._quick_preview_id, image=self._quick_preview_image)
-            self.canvas.coords(self._quick_preview_id, ox, oy)
+            self.canvas.coords(self._quick_preview_id, preview_x, preview_y)
         self.canvas.tag_raise(self._quick_preview_id)
         for item_id in self._brush_preview_ids:
             self.canvas.tag_raise(item_id)
@@ -1584,6 +1836,11 @@ class PhotoRedactorApp(tk.Tk):
             self.canvas.delete(self._quick_preview_id)
             self._quick_preview_id = None
         self._quick_preview_image = None
+        self.reset_quick_preview_cache()
+
+    def reset_quick_preview_cache(self) -> None:
+        self._quick_preview_mask = None
+        self._quick_preview_processed = 0
 
     def space_down(self, _event) -> None:
         self._space_down = True
@@ -1634,9 +1891,7 @@ class PhotoRedactorApp(tk.Tk):
             self.begin_stroke(kind)
             self.paint_at(point)
         elif tool == "fill":
-            self.run_document_command("Fill", lambda: flood_fill(self.doc.layer, point[0], point[1], self.foreground, int(self.tolerance.get()), self.doc.layer_selection_mask(self.doc.layer)))
-            self.doc.dirty = True
-            self.refresh()
+            self.run_pixel_delta_command("Fill", lambda: flood_fill(self.doc.layer, point[0], point[1], self.foreground, int(self.tolerance.get()), self.doc.layer_selection_mask(self.doc.layer)))
         elif tool == "magic_wand":
             mode = self.selection_mode_from_event(event)
             self.run_selection_command("Magic wand selection", lambda: self.doc.magic_wand_selection(self.doc.layer, point[0], point[1], int(self.tolerance.get()), mode))
@@ -1646,6 +1901,8 @@ class PhotoRedactorApp(tk.Tk):
         elif tool == "quick_selection":
             self._quick_points = [point]
             self._quick_mode = self.selection_mode_from_event(event)
+            self._quick_base_selection = None if self.doc.selection_mask is None else self.doc.selection_mask.copy()
+            self.reset_quick_preview_cache()
             self.update_quick_selection_preview(force=True)
             self.status_text("Кисть быстрого выделения")
         elif tool == "patch":
@@ -1692,7 +1949,7 @@ class PhotoRedactorApp(tk.Tk):
         elif tool == "lasso":
             self._lasso_points = [point]
         elif tool == "magnetic_lasso":
-            self._magnetic_edges = self.doc.magnetic_edge_map()
+            self._magnetic_edges = self.doc.magnetic_edge_map(self.render_engine.render(self.doc, False))
             snapped = self.doc.snap_point_to_edge(point, self._magnetic_edges, max(8, int(self.tolerance.get())))
             self._lasso_points = [snapped]
             self.status_text(f"Магнитное лассо: {snapped[0]}, {snapped[1]}")
@@ -1746,9 +2003,7 @@ class PhotoRedactorApp(tk.Tk):
         elif tool == "move":
             self.end_move_layer()
         elif tool == "gradient" and self.drag_start:
-            self.run_document_command("Gradient", lambda: apply_gradient(self.doc.layer, (*self.drag_start, *point), self.foreground, self.background, self.doc.layer_selection_mask(self.doc.layer)))
-            self.doc.dirty = True
-            self.refresh()
+            self.run_pixel_delta_command("Gradient", lambda: apply_gradient(self.doc.layer, (*self.drag_start, *point), self.foreground, self.background, self.doc.layer_selection_mask(self.doc.layer)))
         elif tool in ["rect_shape", "ellipse_shape", "line_shape", "bezier_shape", "polygon_shape", "star_shape", "custom_shape"] and self.drag_start:
             self.create_shape_from_drag(tool, (*self.drag_start, *point))
             self.refresh()
@@ -1813,6 +2068,7 @@ class PhotoRedactorApp(tk.Tk):
             self.clear_lasso_overlay()
 
     def begin_stroke(self, kind: str = "pixels") -> None:
+        self._edit_generation += 1
         self._stroke_layer_id = self.doc.layer.id
         self._stroke_kind = kind
         if kind == "mask" and self.doc.layer.mask is None:
@@ -1820,6 +2076,7 @@ class PhotoRedactorApp(tk.Tk):
             self.doc.layer.mask_enabled = True
         self._stroke_rect = None
         self._stroke_before = None
+        self._stroke_tiles = {}
         self._stroke_selection_mask = self.doc.layer_selection_mask(self.doc.layer)
 
     def brush_local_rect(self, point: tuple[int, int]) -> tuple[int, int, int, int] | None:
@@ -1844,38 +2101,43 @@ class PhotoRedactorApp(tk.Tk):
         target = layer.mask if self._stroke_kind == "mask" else layer.pixels
         if target is None:
             return
-        if self._stroke_rect is None or self._stroke_before is None:
-            x1, y1, x2, y2 = rect
-            self._stroke_rect = rect
-            self._stroke_before = target[y1:y2, x1:x2].copy()
-            return
-        old = self._stroke_rect
-        new = union_rect(old, rect)
-        if new == old:
-            return
-        nx1, ny1, nx2, ny2 = new
-        ox1, oy1, ox2, oy2 = old
-        merged = target[ny1:ny2, nx1:nx2].copy()
-        merged[oy1 - ny1 : oy2 - ny1, ox1 - nx1 : ox2 - nx1] = self._stroke_before
-        self._stroke_rect = new
-        self._stroke_before = merged
+        x1, y1, x2, y2 = rect
+        tile_size = 128
+        self._stroke_rect = union_rect(self._stroke_rect, rect)
+        for ty in range(y1 // tile_size, (y2 - 1) // tile_size + 1):
+            for tx in range(x1 // tile_size, (x2 - 1) // tile_size + 1):
+                key = tx, ty
+                if key in self._stroke_tiles:
+                    continue
+                px1, py1 = tx * tile_size, ty * tile_size
+                px2, py2 = min(target.shape[1], px1 + tile_size), min(target.shape[0], py1 + tile_size)
+                tile_rect = px1, py1, px2, py2
+                self._stroke_tiles[key] = tile_rect, target[py1:py2, px1:px2].copy()
 
     def end_stroke(self, label: str) -> None:
-        if self._stroke_layer_id and self._stroke_rect and self._stroke_before is not None:
+        if self._stroke_layer_id and self._stroke_tiles:
             layer = self.doc.get_layer(self._stroke_layer_id)
             if layer is not None:
-                x1, y1, x2, y2 = self._stroke_rect
+                target = layer.mask if self._stroke_kind == "mask" else layer.pixels
+                patches: list[TilePatch] = []
+                if target is not None:
+                    for rect, before in self._stroke_tiles.values():
+                        x1, y1, x2, y2 = rect
+                        after = target[y1:y2, x1:x2].copy()
+                        if not np.array_equal(before, after):
+                            patches.append(TilePatch(rect, before, after))
                 if self._stroke_kind == "mask" and layer.mask is not None:
-                    after = layer.mask[y1:y2, x1:x2].copy()
-                    self.push_command(MaskPatchCommand(label, self._stroke_layer_id, self._stroke_rect, self._stroke_before, after))
+                    self.push_command(MaskTilePatchCommand(label, self._stroke_layer_id, patches))
                 elif self._stroke_kind == "pixels":
-                    after = layer.pixels[y1:y2, x1:x2].copy()
-                    self.push_command(PixelPatchCommand(label, self._stroke_layer_id, self._stroke_rect, self._stroke_before, after))
+                    self.push_command(PixelTilePatchCommand(label, self._stroke_layer_id, patches))
         self._stroke_layer_id = None
         self._stroke_kind = "pixels"
         self._stroke_rect = None
         self._stroke_before = None
+        self._stroke_tiles = {}
         self._stroke_selection_mask = None
+        if self._editor_active:
+            self.refresh_layer_previews()
 
     def end_move_layer(self) -> None:
         if self._move_layer_id and self._move_start:
@@ -1893,19 +2155,20 @@ class PhotoRedactorApp(tk.Tk):
         self.capture_stroke_before(self.brush_local_rect(point))
         tool = self.tool.get()
         selection_mask = self._stroke_selection_mask
+        changed = None
         if tool == "spot_healing":
-            spot_heal(self.doc.layer, point[0], point[1], int(self.brush_size.get()), float(self.opacity.get()), selection_mask)
+            changed = spot_heal(self.doc.layer, point[0], point[1], int(self.brush_size.get()), float(self.opacity.get()), selection_mask)
         elif tool in ["clone", "healing"]:
             source = self.clone_source_for_point(point)
             if source is not None:
-                clone_or_heal(self.doc.layer, source[0], source[1], point[0], point[1], int(self.brush_size.get()), float(self.opacity.get()), tool == "healing", selection_mask)
+                changed = clone_or_heal(self.doc.layer, source[0], source[1], point[0], point[1], int(self.brush_size.get()), float(self.opacity.get()), tool == "healing", selection_mask)
         elif self._stroke_kind == "mask":
-            draw_mask_brush(self.doc.layer, point[0], point[1], int(self.brush_size.get()), 0 if tool == "eraser" else 255, float(self.opacity.get()), selection_mask)
+            changed = draw_mask_brush(self.doc.layer, point[0], point[1], int(self.brush_size.get()), 0 if tool == "eraser" else 255, float(self.opacity.get()), selection_mask)
         elif tool in ["blur_tool", "sharpen_tool", "dodge", "burn"]:
             mode = "blur" if tool == "blur_tool" else "sharpen" if tool == "sharpen_tool" else tool
-            local_retouch(self.doc.layer, point[0], point[1], int(self.brush_size.get()), mode, float(self.opacity.get()), selection_mask)
+            changed = local_retouch(self.doc.layer, point[0], point[1], int(self.brush_size.get()), mode, float(self.opacity.get()), selection_mask)
         else:
-            draw_brush(
+            changed = draw_brush(
                 self.doc.layer,
                 point[0],
                 point[1],
@@ -1916,7 +2179,9 @@ class PhotoRedactorApp(tk.Tk):
                 selection_mask,
             )
         self.doc.dirty = True
-        self.request_canvas_refresh()
+        if changed is not None:
+            rect = self.local_to_document_rect(changed, self.doc.layer)
+            self.request_canvas_refresh(rect, self.doc.layer, self._stroke_kind)
 
     def paint_line(self, start: tuple[int, int], end: tuple[int, int]) -> None:
         radius = max(1, int(self.brush_size.get()))
@@ -1926,24 +2191,26 @@ class PhotoRedactorApp(tk.Tk):
         steps = max(1, int(np.ceil(distance / max(1.0, spacing))))
         selection_mask = self._stroke_selection_mask
         opacity = float(self.opacity.get())
+        changed_rect = None
         for i in range(1, steps + 1):
             t = i / steps
             x = round(start[0] * (1 - t) + end[0] * t)
             y = round(start[1] * (1 - t) + end[1] * t)
             self.capture_stroke_before(self.brush_local_rect((x, y)))
+            changed = None
             if tool == "spot_healing":
-                spot_heal(self.doc.layer, x, y, radius, opacity, selection_mask)
+                changed = spot_heal(self.doc.layer, x, y, radius, opacity, selection_mask)
             elif tool in ["clone", "healing"]:
                 source = self.clone_source_for_point((x, y))
                 if source is not None:
-                    clone_or_heal(self.doc.layer, source[0], source[1], x, y, radius, opacity, tool == "healing", selection_mask)
+                    changed = clone_or_heal(self.doc.layer, source[0], source[1], x, y, radius, opacity, tool == "healing", selection_mask)
             elif self._stroke_kind == "mask":
-                draw_mask_brush(self.doc.layer, x, y, radius, 0 if tool == "eraser" else 255, opacity, selection_mask)
+                changed = draw_mask_brush(self.doc.layer, x, y, radius, 0 if tool == "eraser" else 255, opacity, selection_mask)
             elif tool in ["blur_tool", "sharpen_tool", "dodge", "burn"]:
                 mode = "blur" if tool == "blur_tool" else "sharpen" if tool == "sharpen_tool" else tool
-                local_retouch(self.doc.layer, x, y, radius, mode, opacity, selection_mask)
+                changed = local_retouch(self.doc.layer, x, y, radius, mode, opacity, selection_mask)
             else:
-                draw_brush(
+                changed = draw_brush(
                     self.doc.layer,
                     x,
                     y,
@@ -1953,8 +2220,15 @@ class PhotoRedactorApp(tk.Tk):
                     tool == "eraser",
                     selection_mask,
                 )
+            changed_rect = union_rect(changed_rect, changed)
         self.doc.dirty = True
-        self.request_canvas_refresh()
+        if changed_rect is not None:
+            rect = self.local_to_document_rect(changed_rect, self.doc.layer)
+            self.request_canvas_refresh(rect, self.doc.layer, self._stroke_kind)
+
+    @staticmethod
+    def local_to_document_rect(rect: tuple[int, int, int, int], layer) -> tuple[int, int, int, int]:
+        return rect[0] + layer.x, rect[1] + layer.y, rect[2] + layer.x, rect[3] + layer.y
 
     def clone_source_for_point(self, point: tuple[int, int]) -> tuple[int, int] | None:
         if self._clone_anchor_source is None or self._clone_anchor_target is None:
@@ -2106,7 +2380,7 @@ class PhotoRedactorApp(tk.Tk):
 
     def magnetic_lasso_point(self, point: tuple[int, int]) -> tuple[int, int]:
         if self._magnetic_edges is None:
-            self._magnetic_edges = self.doc.magnetic_edge_map()
+            self._magnetic_edges = self.doc.magnetic_edge_map(self.render_engine.render(self.doc, False))
         return self.doc.snap_point_to_edge(point, self._magnetic_edges, max(8, int(self.tolerance.get())))
 
     def update_selection_overlay(self) -> None:
@@ -2321,7 +2595,7 @@ class PhotoRedactorApp(tk.Tk):
 
         def update_preview(*_args) -> None:
             mask = current_mask()
-            canvas = self.render_select_mask_preview(self.doc.composite(checker=False), mask, preview_mode.get(), 160)
+            canvas = self.render_select_mask_preview(self.render_engine.render(self.doc, checker=False), mask, preview_mode.get(), 160)
             self._select_mask_preview_image = ImageTk.PhotoImage(canvas)
             preview.configure(image=self._select_mask_preview_image)
             selected = int(np.count_nonzero(mask))
@@ -2380,10 +2654,13 @@ class PhotoRedactorApp(tk.Tk):
     @staticmethod
     def render_select_mask_preview(composite: np.ndarray, mask: np.ndarray, mode: str, size: int = 160) -> Image.Image:
         preview_size = (size, size)
-        mask_image = Image.fromarray(mask.astype(np.uint8), "L")
-        source = rgba_array_to_pil(composite)
-        source.thumbnail(preview_size, Image.Resampling.LANCZOS)
-        mask_image.thumbnail(preview_size, Image.Resampling.NEAREST)
+        height, width = composite.shape[:2]
+        scale = min(1.0, size / max(1, width), size / max(1, height))
+        reduced_size = max(1, round(width * scale)), max(1, round(height * scale))
+        reduced = composite if reduced_size == (width, height) else cv2.resize(composite, reduced_size, interpolation=cv2.INTER_AREA)
+        reduced_mask = mask if reduced_size == (width, height) else cv2.resize(mask, reduced_size, interpolation=cv2.INTER_NEAREST)
+        mask_image = Image.fromarray(reduced_mask.astype(np.uint8), "L")
+        source = rgba_array_to_pil(reduced)
         x = (size - source.width) // 2
         y = (size - source.height) // 2
         if mode == SELECT_MASK_PREVIEW_OVERLAY:
@@ -2759,6 +3036,7 @@ class PhotoRedactorApp(tk.Tk):
         background = tuple(settings["background"])
         include_clipboard = bool(settings.get("include_clipboard", False) and clipboard_image is not None)
         self.doc = Document.new(width, height, background)
+        self._edit_generation += 1
         self.doc.dpi = dpi
         self.doc.metadata = {"source": "clipboard" if include_clipboard else "new document", "preset_size": [width, height]}
         if include_clipboard and clipboard_image is not None:
@@ -2804,6 +3082,7 @@ class PhotoRedactorApp(tk.Tk):
             messagebox.showerror("Открытие", f"Не удалось открыть файл:\n{exc}")
             return
         self.doc = document
+        self._edit_generation += 1
         self.history.clear()
         self.selection_box = self.doc.selection_bounds()
         self.add_recent_file(path)
@@ -2872,6 +3151,7 @@ class PhotoRedactorApp(tk.Tk):
 
     def save_project_async(self, path: str) -> None:
         snapshot = self.document_copy()
+        generation = self._edit_generation
 
         def worker():
             snapshot.save_project(path)
@@ -2879,7 +3159,8 @@ class PhotoRedactorApp(tk.Tk):
 
         def done(saved_path):
             self.doc.path = saved_path
-            self.doc.dirty = False
+            if self._edit_generation == generation:
+                self.doc.dirty = False
             self.add_recent_file(saved_path)
 
         self.run_background("Save project", worker, done)
@@ -2913,12 +3194,12 @@ class PhotoRedactorApp(tk.Tk):
         x, y = point
         if x < 0 or y < 0 or x >= self.doc.width or y >= self.doc.height:
             return
-        rgba = self.doc.composite(False)[y, x]
+        rgba = self.render_engine.render(self.doc, False)[y, x]
         self.foreground = tuple(int(v) for v in rgba)
         self.status_text(f"Picked RGBA: {self.foreground}")
 
     def show_image_statistics(self) -> None:
-        stats = image_statistics(self.doc.composite(False))
+        stats = image_statistics(self.render_engine.render(self.doc, False))
         text = [
             f"Size: {stats['width']} x {stats['height']}",
             f"Opaque pixels: {stats['opaque_pixels']}",
@@ -2930,7 +3211,7 @@ class PhotoRedactorApp(tk.Tk):
         messagebox.showinfo("Image statistics", "\n".join(text))
 
     def show_histogram(self) -> None:
-        stats = image_statistics(self.doc.composite(False))
+        stats = image_statistics(self.render_engine.render(self.doc, False))
         lines = []
         for channel, values in stats["histogram"].items():
             lines.append(channel.upper())
@@ -3076,15 +3357,22 @@ class PhotoRedactorApp(tk.Tk):
         self.run_background("Export layers", worker, lambda count: messagebox.showinfo("Export layers", f"Exported {count} layers."))
 
     def new_layer(self) -> None:
-        self.run_document_command("New layer", lambda: self.doc.add_layer(f"Layer {len(self.doc.layers) + 1}"))
+        self.doc.add_layer(f"Layer {len(self.doc.layers) + 1}")
+        self.push_command(LayerInsertCommand("New layer", self.doc.active_layer, copy.deepcopy(self.doc.layer)))
         self.refresh()
 
     def duplicate_layer(self) -> None:
-        self.run_document_command("Duplicate layer", self.doc.duplicate_active_layer)
+        self.doc.duplicate_active_layer()
+        self.push_command(LayerInsertCommand("Duplicate layer", self.doc.active_layer, copy.deepcopy(self.doc.layer)))
         self.refresh()
 
     def delete_layer(self) -> None:
-        self.run_document_command("Delete layer", self.doc.delete_active_layer)
+        if len(self.doc.layers) <= 1:
+            return
+        index = self.doc.active_layer
+        deleted = copy.deepcopy(self.doc.layer)
+        self.doc.delete_active_layer()
+        self.push_command(LayerDeleteCommand("Delete layer", index, deleted))
         self.refresh()
 
     def rename_layer(self) -> None:
@@ -3092,23 +3380,17 @@ class PhotoRedactorApp(tk.Tk):
         if not name:
             return
 
-        def edit():
-            self.doc.layer.name = name
-            self.doc.dirty = True
-
-        self.run_document_command("Rename layer", edit)
-        self.refresh()
+        self.set_layer_property("Rename layer", "name", name, affects_canvas=False)
 
     def move_layer(self, delta: int) -> None:
         i = self.doc.active_layer
         j = i + delta
         if 0 <= j < len(self.doc.layers):
-            def edit():
-                self.doc.layers[i], self.doc.layers[j] = self.doc.layers[j], self.doc.layers[i]
-                self.doc.active_layer = j
-                self.doc.dirty = True
-
-            self.run_document_command("Layer reorder", edit)
+            layer_id = self.doc.layer.id
+            self.doc.layers[i], self.doc.layers[j] = self.doc.layers[j], self.doc.layers[i]
+            self.doc.active_layer = j
+            self.doc.dirty = True
+            self.push_command(LayerReorderCommand("Layer reorder", layer_id, i, j))
             self.refresh()
 
     def free_transform_layer(self) -> None:
@@ -3376,8 +3658,7 @@ class PhotoRedactorApp(tk.Tk):
         if self.doc.active_layer <= 0:
             messagebox.showinfo("Clipping mask", "The bottom layer cannot be clipped.")
             return
-        self.run_document_command("Toggle clipping mask", self.doc.toggle_active_clipping)
-        self.refresh()
+        self.set_layer_property("Toggle clipping mask", "clipping", not self.doc.layer.clipping)
 
     def edit_layer_styles(self) -> None:
         layer = self.doc.layer
@@ -3394,20 +3675,17 @@ class PhotoRedactorApp(tk.Tk):
         except ValueError:
             messagebox.showerror("Layer styles", "Invalid style string.")
             return
-        self.run_document_command("Layer styles", lambda: self.doc.set_active_layer_effects(effects))
-        self.refresh()
+        self.set_layer_property("Layer styles", "effects", effects, preserve_render_cache=False)
 
     def edit_layer_filters(self) -> None:
         layer = self.doc.layer
         filters = self.layer_filters_dialog(layer.filters, layer.pixels, self.doc.layer_selection_mask(layer))
         if filters is None:
             return
-        self.run_document_command("Layer filters", lambda: self.doc.set_active_layer_filters(filters))
-        self.refresh()
+        self.set_layer_property("Layer filters", "filters", filters, preserve_render_cache=False)
 
     def clear_layer_filters(self) -> None:
-        self.run_document_command("Clear layer filters", self.doc.clear_active_layer_filters)
-        self.refresh()
+        self.set_layer_property("Clear layer filters", "filters", [], preserve_render_cache=False)
 
     def layer_filters_dialog(self, initial_filters: list[dict], pixels: np.ndarray, selection_mask: np.ndarray | None = None) -> list[dict] | None:
         filters = []
@@ -3640,11 +3918,12 @@ class PhotoRedactorApp(tk.Tk):
             filters[index].pop("mask", None)
             refresh_list(index)
 
+        preview_scale = min(1.0, 180 / max(1, pixels.shape[1]), 180 / max(1, pixels.shape[0]))
+        preview_size = max(1, round(pixels.shape[1] * preview_scale)), max(1, round(pixels.shape[0] * preview_scale))
+        preview_source = pixels.copy() if preview_size == (pixels.shape[1], pixels.shape[0]) else cv2.resize(pixels, preview_size, interpolation=cv2.INTER_AREA)
+
         def update_preview() -> None:
-            source = rgba_array_to_pil(pixels)
-            source.thumbnail((180, 180), Image.Resampling.LANCZOS)
-            thumb = np.array(source.convert("RGBA"), dtype=np.uint8)
-            shown = apply_filter_stack(thumb, filters) if filters else thumb
+            shown = apply_filter_stack(preview_source, filters) if filters else preview_source
             image = rgba_array_to_pil(shown)
             canvas = Image.new("RGBA", (180, 180), (44, 46, 52, 255))
             canvas.alpha_composite(image, ((180 - image.width) // 2, (180 - image.height) // 2))
@@ -3850,15 +4129,13 @@ class PhotoRedactorApp(tk.Tk):
         self.refresh()
 
     def toggle_layer_mask(self) -> None:
-        self.run_document_command("Toggle mask", self.doc.toggle_active_mask)
-        self.refresh()
+        self.set_layer_property("Toggle mask", "mask_enabled", not self.doc.layer.mask_enabled)
 
     def toggle_layer_mask_link(self) -> None:
         if self.doc.layer.mask is None:
             messagebox.showinfo("Маска слоя", "У активного слоя нет маски.")
             return
-        self.run_document_command("Toggle mask link", self.doc.toggle_active_mask_link)
-        self.refresh()
+        self.set_layer_property("Toggle mask link", "mask_linked", not self.doc.layer.mask_linked, affects_canvas=False)
 
     def set_mask_density(self) -> None:
         layer = self.doc.layer
@@ -3867,8 +4144,7 @@ class PhotoRedactorApp(tk.Tk):
             return
         value = simpledialog.askfloat("Mask density", "Density 0..1:", initialvalue=float(layer.mask_density), minvalue=0.0, maxvalue=1.0)
         if value is not None:
-            self.run_document_command("Mask density", lambda: self.doc.set_active_mask_density(value))
-            self.refresh()
+            self.set_layer_property("Mask density", "mask_density", float(value))
 
     def set_mask_feather(self) -> None:
         layer = self.doc.layer
@@ -3877,8 +4153,7 @@ class PhotoRedactorApp(tk.Tk):
             return
         value = simpledialog.askfloat("Mask feather", "Radius px:", initialvalue=float(layer.mask_feather), minvalue=0.0, maxvalue=500.0)
         if value is not None:
-            self.run_document_command("Mask feather", lambda: self.doc.set_active_mask_feather(value))
-            self.refresh()
+            self.set_layer_property("Mask feather", "mask_feather", float(value), preserve_render_cache=False)
 
     def refine_layer_mask(self) -> None:
         if self.doc.layer.mask is None:
@@ -4007,7 +4282,7 @@ class PhotoRedactorApp(tk.Tk):
     def change_layer_opacity(self, _value) -> None:
         self.doc.layer.opacity = float(self.layer_opacity.get())
         self.doc.dirty = True
-        self.request_canvas_refresh()
+        self.request_canvas_refresh(preserve_layer_caches=True)
 
     def end_layer_opacity_change(self, _event) -> None:
         if self._opacity_layer_id is not None and self._opacity_before is not None:
@@ -4026,23 +4301,13 @@ class PhotoRedactorApp(tk.Tk):
         layer.blend_mode = after
         self.doc.dirty = True
         self.push_command(LayerBlendModeCommand("Layer blend mode", layer.id, before, after))
-        self.refresh()
+        self.refresh(preserve_render_cache=True)
 
     def toggle_layer_visible(self) -> None:
-        def edit():
-            self.doc.layer.visible = not self.doc.layer.visible
-            self.doc.dirty = True
-
-        self.run_document_command("Toggle layer visible", edit)
-        self.refresh()
+        self.set_layer_property("Toggle layer visible", "visible", not self.doc.layer.visible)
 
     def toggle_layer_lock(self) -> None:
-        def edit():
-            self.doc.layer.locked = not self.doc.layer.locked
-            self.doc.dirty = True
-
-        self.run_document_command("Toggle layer lock", edit)
-        self.refresh()
+        self.set_layer_property("Toggle layer lock", "locked", not self.doc.layer.locked, affects_canvas=False)
 
     def edit_text_layer(self) -> None:
         layer = self.doc.layer
@@ -4158,7 +4423,7 @@ class PhotoRedactorApp(tk.Tk):
         active_point: list[int | None] = [None]
         scale = min(580 / max(1, self.doc.width), 400 / max(1, self.doc.height))
         ox, oy = (620 - self.doc.width * scale) / 2, (440 - self.doc.height * scale) / 2
-        background = rgba_array_to_pil(self.doc.composite(checker=True)).resize((max(1, round(self.doc.width * scale)), max(1, round(self.doc.height * scale))), Image.Resampling.BILINEAR)
+        background = rgba_array_to_pil(self.render_engine.render(self.doc, checker=True)).resize((max(1, round(self.doc.width * scale)), max(1, round(self.doc.height * scale))), Image.Resampling.BILINEAR)
         self._bezier_preview_image = ImageTk.PhotoImage(background)
 
         def to_canvas(point: list[float] | tuple[float, float]) -> tuple[float, float]:
@@ -4321,6 +4586,8 @@ class PhotoRedactorApp(tk.Tk):
             self.status_text("Слой заблокирован")
             return
         layer_id = layer.id
+        generation = self._edit_generation
+        pixels_revision = layer.pixels_revision
         before = layer.pixels.copy()
         selection_mask = self.doc.layer_selection_mask(layer)
         rect = (0, 0, before.shape[1], before.shape[0])
@@ -4337,12 +4604,20 @@ class PhotoRedactorApp(tk.Tk):
             if target is None:
                 return
             target.pixels = after
+            target.touch_pixels()
             self.doc.dirty = True
             self.push_command(PixelPatchCommand(label, layer_id, rect, before, after.copy()))
             self.invalidate_pixels()
             self.refresh()
 
-        self.run_background(label, worker, done)
+        self.run_background(
+            label,
+            worker,
+            done,
+            lambda: self._edit_generation == generation
+            and (target := self.doc.get_layer(layer_id)) is not None
+            and target.pixels_revision == pixels_revision,
+        )
 
     def adjust_brightness_contrast(self) -> None:
         b = simpledialog.askinteger("Brightness", "Brightness -255..255:", initialvalue=0, minvalue=-255, maxvalue=255)
@@ -4445,7 +4720,7 @@ class PhotoRedactorApp(tk.Tk):
         dialog.resizable(False, False)
         dialog.grab_set()
 
-        source = self.doc.composite(checker=False)
+        source = self.render_engine.render(self.doc, checker=False)
         adjustment_type = tk.StringVar(value=str(initial.get("type", "brightness_contrast")))
         values = [tk.DoubleVar(value=0.0), tk.DoubleVar(value=0.0), tk.DoubleVar(value=0.0)]
         labels: list[ttk.Label] = []
@@ -4496,13 +4771,14 @@ class PhotoRedactorApp(tk.Tk):
             hint.configure(text=self.adjustment_hint(kind))
             updating = False
 
+        preview_scale = min(1.0, 180 / max(1, source.shape[1]), 180 / max(1, source.shape[0]))
+        preview_size = max(1, round(source.shape[1] * preview_scale)), max(1, round(source.shape[0] * preview_scale))
+        adjustment_preview_source = source.copy() if preview_size == (source.shape[1], source.shape[0]) else cv2.resize(source, preview_size, interpolation=cv2.INTER_AREA)
+
         def update_preview(*_args) -> None:
             if updating:
                 return
-            thumb = rgba_array_to_pil(source)
-            thumb.thumbnail((180, 180), Image.Resampling.LANCZOS)
-            arr = np.array(thumb.convert("RGBA"), dtype=np.uint8)
-            shown = self.apply_adjustment_preview(arr, current_adjustment())
+            shown = self.apply_adjustment_preview(adjustment_preview_source, current_adjustment())
             image = rgba_array_to_pil(shown)
             canvas = Image.new("RGBA", (180, 180), (44, 46, 52, 255))
             canvas.alpha_composite(image, ((180 - image.width) // 2, (180 - image.height) // 2))

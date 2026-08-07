@@ -14,6 +14,8 @@ import cv2
 import numpy as np
 from PIL import ExifTags, Image, ImageDraw, ImageFont
 
+from .performance import profiled, profiler
+
 
 _checker_cache: dict[tuple[int, int, int], np.ndarray] = {}
 _brush_mask_cache: dict[int, np.ndarray] = {}
@@ -106,6 +108,14 @@ class Layer:
     adjustment: dict[str, Any] | None = None
     smart_data: dict[str, Any] | None = None
     id: str = field(default_factory=lambda: uuid.uuid4().hex)
+    pixels_revision: int = field(default=0, repr=False, compare=False)
+    mask_revision: int = field(default=0, repr=False, compare=False)
+
+    def touch_pixels(self) -> None:
+        self.pixels_revision += 1
+
+    def touch_mask(self) -> None:
+        self.mask_revision += 1
 
     def clone(self) -> "Layer":
         return Layer(
@@ -468,24 +478,25 @@ class Document:
         return doc
 
     def composite(self, checker: bool = False) -> np.ndarray:
-        out = checker_background(self.width, self.height).copy() if checker else blank_rgba(self.width, self.height, (0, 0, 0, 0))
-        previous_alpha: np.ndarray | None = None
-        for layer in self.layers:
-            if layer.visible:
-                if layer.kind == "adjustment" and layer.adjustment is not None:
-                    clipping_mask = previous_alpha if layer.clipping and previous_alpha is not None else None
-                    apply_adjustment_layer(out, layer, clipping_mask)
-                else:
-                    layer_pixels = render_layer_pixels(layer)
-                    alpha_mask = effective_layer_mask(layer) if layer.mask_enabled else None
-                    if layer.clipping and previous_alpha is not None:
-                        clipping_mask = document_alpha_to_layer_mask(previous_alpha, layer)
-                        alpha_mask = clipping_mask if alpha_mask is None else np.minimum(alpha_mask, clipping_mask)
-                    for pixels, x, y, opacity, blend_mode in render_layer_effects(layer, layer_pixels):
-                        alpha_blend_inplace(out, pixels, x, y, opacity, None, 1.0, blend_mode)
-                    alpha_blend_inplace(out, layer_pixels, layer.x, layer.y, layer.opacity, alpha_mask, layer.mask_density, layer.blend_mode)
-                    previous_alpha = layer_alpha_canvas(self, layer, layer_pixels)
-        return out
+        with profiler.measure("render.composite.reference"):
+            out = checker_background(self.width, self.height).copy() if checker else blank_rgba(self.width, self.height, (0, 0, 0, 0))
+            previous_alpha: np.ndarray | None = None
+            for layer in self.layers:
+                if layer.visible:
+                    if layer.kind == "adjustment" and layer.adjustment is not None:
+                        clipping_mask = previous_alpha if layer.clipping and previous_alpha is not None else None
+                        apply_adjustment_layer(out, layer, clipping_mask)
+                    else:
+                        layer_pixels = render_layer_pixels(layer)
+                        alpha_mask = effective_layer_mask(layer) if layer.mask_enabled else None
+                        if layer.clipping and previous_alpha is not None:
+                            clipping_mask = document_alpha_to_layer_mask(previous_alpha, layer)
+                            alpha_mask = clipping_mask if alpha_mask is None else np.minimum(alpha_mask, clipping_mask)
+                        for pixels, x, y, opacity, blend_mode in render_layer_effects(layer, layer_pixels):
+                            alpha_blend_inplace(out, pixels, x, y, opacity, None, 1.0, blend_mode)
+                        alpha_blend_inplace(out, layer_pixels, layer.x, layer.y, layer.opacity, alpha_mask, layer.mask_density, layer.blend_mode)
+                        previous_alpha = layer_alpha_canvas(self, layer, layer_pixels)
+            return out
 
     def export_flat(self, path: str | Path, quality: int = 95) -> None:
         img = rgba_array_to_pil(self.composite(checker=False))
@@ -1169,8 +1180,8 @@ class Document:
         if np.any(mask):
             self.apply_selection_mask(mask, mode)
 
-    def magnetic_edge_map(self) -> np.ndarray:
-        composite = self.composite(False)
+    def magnetic_edge_map(self, composite: np.ndarray | None = None) -> np.ndarray:
+        composite = self.composite(False) if composite is None else composite
         gray = cv2.cvtColor(composite[:, :, :3], cv2.COLOR_RGB2GRAY)
         gray = np.where(composite[:, :, 3] > 0, gray, 0).astype(np.uint8)
         blurred = cv2.GaussianBlur(gray, (3, 3), 0)
@@ -2215,6 +2226,7 @@ def brush_mask(radius: int) -> np.ndarray:
     return mask
 
 
+@profiled("stroke.brush_dab")
 def draw_brush(layer: Layer, x: int, y: int, radius: int, color: tuple[int, int, int, int], opacity: float = 1.0, erase=False, selection_mask: np.ndarray | None = None) -> tuple[int, int, int, int] | None:
     if layer.locked:
         return None
@@ -2249,6 +2261,7 @@ def draw_brush(layer: Layer, x: int, y: int, radius: int, color: tuple[int, int,
     return x1, y1, x2, y2
 
 
+@profiled("stroke.mask_dab")
 def draw_mask_brush(layer: Layer, x: int, y: int, radius: int, value: int, opacity: float = 1.0, selection_mask: np.ndarray | None = None) -> tuple[int, int, int, int] | None:
     if layer.locked:
         return None
@@ -2276,6 +2289,7 @@ def draw_mask_brush(layer: Layer, x: int, y: int, radius: int, value: int, opaci
     return x1, y1, x2, y2
 
 
+@profiled("retouch.local_dab")
 def local_retouch(layer: Layer, x: int, y: int, radius: int, mode: str, opacity: float = 1.0, selection_mask: np.ndarray | None = None) -> tuple[int, int, int, int] | None:
     if layer.locked:
         return None
@@ -2315,6 +2329,7 @@ def local_retouch(layer: Layer, x: int, y: int, radius: int, mode: str, opacity:
     return x1, y1, x2, y2
 
 
+@profiled("retouch.clone_heal_dab")
 def clone_or_heal(
     layer: Layer,
     source_x: int,
@@ -2364,6 +2379,7 @@ def clone_or_heal(
     return x1, y1, x2, y2
 
 
+@profiled("retouch.spot_heal_dab")
 def spot_heal(
     layer: Layer,
     x: int,

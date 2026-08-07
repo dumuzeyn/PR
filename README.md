@@ -32,6 +32,10 @@ This repository starts with a real working editor and an architecture intended t
 - non-destructive adjustment layers with importable/exportable preset libraries for brightness/contrast, saturation, vibrance, temperature/tint, hue/saturation, exposure, color balance, levels, curves, threshold, posterize, invert and grayscale
 - undo/redo
 - command-based undo for strokes, moves and layer edits
+- tile-based compositor and canvas output: brush, eraser, retouch and healing strokes update only changed 256 px regions
+- cached filter stacks, masks and layer effects; opacity and blend changes reuse filtered pixels
+- sparse 128 px stroke history, so long diagonal strokes do not store one huge bounding rectangle
+- revision-safe background filters that discard stale results after newer document edits
 - `.prdx` projects with `manifest.json` and separate layer PNG files, without Base64-packed layers
 - resize, canvas resize, trim transparent pixels, reveal all layers, rotate, flip
 - brightness, contrast, saturation, hue/saturation, exposure, color balance, levels, curves, threshold, posterize, blur, sharpen, noise, median, edge detect, emboss, grayscale, invert
@@ -51,6 +55,18 @@ This repository starts with a real working editor and an architecture intended t
 ```
 
 The executable will be created in `dist\PhotoRedactor.exe`.
+
+## Performance diagnostics
+
+Set `PHOTO_REDACTOR_DEBUG_PERF=1` before starting the editor to collect timing counters for composition, dirty tiles, filters, effects and PIL/Tk canvas conversion. Profiling is disabled by default and does not write into the interface.
+
+Run the repeatable rendering benchmark with:
+
+```powershell
+python benchmarks\benchmark_rendering.py --include-4k
+```
+
+Measured results and the list of correctness fallbacks are recorded in [`PERFORMANCE.md`](PERFORMANCE.md).
 
 ## Download the automatic Windows build
 

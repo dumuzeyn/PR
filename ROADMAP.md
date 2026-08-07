@@ -25,19 +25,19 @@
 - Recovery and automation: autosave recovery file, manual recovery opening and action recording to JSON logs.
 - Adjustments: destructive and previewable non-destructive brightness, contrast, saturation, vibrance, temperature/tint, hue/saturation, exposure, color balance, levels, curves, threshold, posterize, grayscale and invert, with importable/exportable preset libraries.
 - Filters: Gaussian blur, sharpen, noise, median, edge detect, emboss, content-aware fill and red-eye reduction.
-- History: undo and redo snapshots.
+- History: sparse tile commands for strokes, property/list commands for layers and compact changed-field commands, with full snapshots reserved for global document operations.
 - Automation: simple batch resize/convert.
 - Transform: visual Free Transform with eight handles for scale/move, rotate, position, flips, selected pixels, perspective corner transforms and live warp previews.
 - Text: editable paragraph and path text, bold/italic/underline, baseline shift, tracking and transform handles that preserve editability.
 - Shapes: custom-shape presets and visual four-point Bezier editing with live handles.
 - Tool previews: real ellipse, line, polygon, star, custom shape and Bezier previews before creation.
-- Performance baseline: numpy arrays, OpenCV filters, cached composite preview, cached per-stroke selection masks and optimized brush spacing.
+- Performance: dirty-region 256 px composition, tiled Tk canvas output, cached filters/masks/effects/thumbnails, sparse stroke history, incremental selection previews, revision-safe background filters and an opt-in profiler/benchmark.
 - Export: PNG, JPEG, WebP, BMP, TIFF, plus `.prdx` project files.
 
 ## Next milestones toward the full list
 
 1. Smart objects: re-editable transforms, embedded payload management and richer linked-file status/conflict handling.
 2. RAW/color management: ICC profiles, 16/32-bit channels, Lab/CMYK workflows and richer metadata editing.
-3. GPU/tiled rendering: tile cache, dirty-region recomposition, scratch disk, background save.
+3. Large-document rendering: optional GPU acceleration, mipmap pyramid and scratch-disk eviction for caches that exceed RAM limits.
 4. Plugin API and actions: replayable command actions, batch execution, external filters.
 5. Advanced AI/generative tools: content-aware fill and generative expand.
