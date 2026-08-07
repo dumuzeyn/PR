@@ -6,7 +6,7 @@ from typing import Any, Protocol
 
 import numpy as np
 
-from .core import Document
+from .core import Document, render_shape_layer, render_text_layer
 from .performance import profiler
 
 
@@ -158,6 +158,66 @@ class LayerFieldsCommand:
 
 
 @dataclass
+class TextDataCommand:
+    label: str
+    layer_id: str
+    before: dict[str, Any]
+    after: dict[str, Any]
+    before_name: str
+    after_name: str
+
+    @property
+    def memory_bytes(self) -> int:
+        return max(128, _value_memory(self.before) + _value_memory(self.after))
+
+    def _apply(self, document: Document, data: dict[str, Any], name: str) -> None:
+        layer = document.get_layer(self.layer_id)
+        if layer is None:
+            return
+        layer.text_data = copy.deepcopy(data)
+        layer.name = name
+        render_text_layer(layer)
+        layer.touch_pixels()
+        document.dirty = True
+
+    def undo(self, document: Document) -> None:
+        self._apply(document, self.before, self.before_name)
+
+    def redo(self, document: Document) -> None:
+        self._apply(document, self.after, self.after_name)
+
+
+@dataclass
+class ShapeDataCommand:
+    label: str
+    layer_id: str
+    before: dict[str, Any]
+    after: dict[str, Any]
+    before_name: str
+    after_name: str
+
+    @property
+    def memory_bytes(self) -> int:
+        return max(128, _value_memory(self.before) + _value_memory(self.after))
+
+    def _apply(self, document: Document, data: dict[str, Any], name: str) -> None:
+        layer = document.get_layer(self.layer_id)
+        if layer is None:
+            return
+        layer.shape_data = copy.deepcopy(data)
+        layer.name = name
+        render_shape_layer(layer)
+        layer.touch_pixels()
+        document.dirty = True
+
+    def undo(self, document: Document) -> None:
+        self._apply(document, self.before, self.before_name)
+
+    def redo(self, document: Document) -> None:
+        self._apply(document, self.after, self.after_name)
+
+
+@dataclass
 class DocumentFieldsCommand:
     label: str
     before: dict[str, Any]
@@ -220,6 +280,31 @@ class LayerDeleteCommand:
     def redo(self, document: Document) -> None:
         document.layers = [item for item in document.layers if item.id != self.layer.id]
         document.active_layer = min(max(0, self.index - 1), max(0, len(document.layers) - 1))
+        document.dirty = True
+
+
+@dataclass
+class LayersDeleteCommand:
+    label: str
+    layers: list[tuple[int, Any]]
+    active_layer_id: str | None = None
+
+    @property
+    def memory_bytes(self) -> int:
+        return sum(_value_memory(layer.pixels) + _value_memory(layer.mask) + 512 for _, layer in self.layers)
+
+    def undo(self, document: Document) -> None:
+        for index, layer in sorted(self.layers, key=lambda item: item[0]):
+            if document.get_layer(layer.id) is None:
+                document.layers.insert(min(index, len(document.layers)), copy.deepcopy(layer))
+        active = document.get_layer(self.active_layer_id) if self.active_layer_id else None
+        document.active_layer = document.layers.index(active) if active is not None else min(document.active_layer, len(document.layers) - 1)
+        document.dirty = True
+
+    def redo(self, document: Document) -> None:
+        deleted_ids = {layer.id for _, layer in self.layers}
+        document.layers = [layer for layer in document.layers if layer.id not in deleted_ids]
+        document.active_layer = min(document.active_layer, max(0, len(document.layers) - 1))
         document.dirty = True
 
 

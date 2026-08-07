@@ -3,6 +3,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 import copy
 import json
+import math
 import os
 from pathlib import Path
 import time
@@ -12,11 +13,14 @@ from tkinter import colorchooser, filedialog, messagebox, simpledialog, ttk
 
 import cv2
 import numpy as np
-from PIL import Image, ImageGrab, ImageTk
+from PIL import Image, ImageDraw, ImageGrab, ImageTk
 
 from .core import (
     Document,
+    Layer,
     BLEND_MODES,
+    GradientEngine,
+    SourceAnchor,
     add_noise,
     adjust_brightness_contrast,
     adjust_color_balance,
@@ -51,6 +55,7 @@ from .core import (
     rgba_array_to_pil,
     reduce_red_eye,
     regular_polygon_points,
+    render_text_layer,
     RetouchStroke,
     selection_edge_confidence,
     selection_contour_points,
@@ -68,6 +73,7 @@ from .history import (
     History,
     LayerBlendModeCommand,
     LayerDeleteCommand,
+    LayersDeleteCommand,
     LayerFieldsCommand,
     LayerInsertCommand,
     LayerMoveCommand,
@@ -80,6 +86,8 @@ from .history import (
     PixelPatchCommand,
     PixelTilePatchCommand,
     SelectionMaskCommand,
+    ShapeDataCommand,
+    TextDataCommand,
     TilePatch,
 )
 from .rendering import RenderEngine
@@ -357,6 +365,30 @@ class PhotoRedactorApp(tk.Tk):
         self.selection_antialias = tk.BooleanVar(value=True)
         self.magic_contiguous = tk.BooleanVar(value=True)
         self.tolerance = tk.IntVar(value=24)
+        self.color_range_sample_hex = tk.StringVar(value="#000000")
+        self.clone_aligned = tk.BooleanVar(value=True)
+        self.clone_sampling = tk.StringVar(value="Текущий слой")
+        self.gradient_type = tk.StringVar(value="Линейный")
+        self.gradient_mode = tk.StringVar(value="Заливка")
+        self.gradient_shape = tk.StringVar(value="Прямоугольник")
+        self.gradient_object_fill = tk.StringVar(value="Градиент")
+        self.gradient_texture = tk.StringVar(value="Шахматная")
+        self.gradient_mid_enabled = tk.BooleanVar(value=False)
+        self.gradient_mid_position = tk.DoubleVar(value=0.5)
+        self.gradient_mid_color = (255, 90, 80, 255)
+        self.crop_aspect = tk.StringVar(value="Свободно")
+        self.crop_custom_width = tk.IntVar(value=1920)
+        self.crop_custom_height = tk.IntVar(value=1080)
+        self.text_font_family = tk.StringVar(value="Arial")
+        self.text_size = tk.IntVar(value=48)
+        self.text_bold = tk.BooleanVar(value=False)
+        self.text_italic = tk.BooleanVar(value=False)
+        self.text_underline = tk.BooleanVar(value=False)
+        self.text_align = tk.StringVar(value="left")
+        self.text_line_spacing = tk.IntVar(value=10)
+        self.text_tracking = tk.IntVar(value=0)
+        self.text_rotation = tk.DoubleVar(value=0.0)
+        self.text_box_width = tk.IntVar(value=0)
         self.quick_smooth = tk.IntVar(value=1)
         self.quick_edge_radius = tk.IntVar(value=2)
         self.quick_edge_strength = tk.DoubleVar(value=0.5)
@@ -389,6 +421,21 @@ class PhotoRedactorApp(tk.Tk):
         self._selection_dash_phase = 0
         self._selection_animation_id: str | None = None
         self._drag_preview_ids: list[int] = []
+        self._gradient_preview_id: int | None = None
+        self._gradient_preview_image: ImageTk.PhotoImage | None = None
+        self._crop_box: tuple[int, int, int, int] | None = None
+        self._crop_overlay_ids: list[int] = []
+        self._crop_drag_handle: str | None = None
+        self._crop_drag_origin_box: tuple[int, int, int, int] | None = None
+        self._text_editor: tk.Text | None = None
+        self._text_editor_window: int | None = None
+        self._text_editor_layer_id: str | None = None
+        self._text_editor_origin = (0, 0)
+        self._text_editor_box_width = 0
+        self._text_editor_before: dict[str, object] | None = None
+        self._text_property_after_id: str | None = None
+        self._text_property_before: dict[str, object] | None = None
+        self._loading_text_properties = False
         self._shape_drag_options: dict | None = None
         self.selection_box: tuple[int, int, int, int] | None = None
         self._lasso_points: list[tuple[int, int]] = []
@@ -408,6 +455,13 @@ class PhotoRedactorApp(tk.Tk):
         self._clone_source: tuple[int, int] | None = None
         self._clone_anchor_target: tuple[int, int] | None = None
         self._clone_anchor_source: tuple[int, int] | None = None
+        self._source_anchor = SourceAnchor()
+        self._clone_sample_pixels: np.ndarray | None = None
+        self._clone_sample_origin = (0, 0)
+        self._clone_source_marker_ids: list[int] = []
+        self.selected_layer_ids: set[str] = {self.doc.layer.id}
+        self._pixel_clipboard: np.ndarray | None = None
+        self._pixel_clipboard_origin = (0, 0)
         self._patch_start_bounds: tuple[int, int, int, int] | None = None
         self._patch_preview_id: int | None = None
         self._guide_doc_lines: list[tuple[str, int]] = []
@@ -452,6 +506,12 @@ class PhotoRedactorApp(tk.Tk):
         self.quick_edge_radius.trace_add("write", self.quick_preview_settings_changed)
         self.quick_edge_strength.trace_add("write", self.quick_preview_settings_changed)
         self.selection_mode.trace_add("write", self.selection_mode_changed)
+        for variable in (
+            self.text_font_family, self.text_size, self.text_bold, self.text_italic,
+            self.text_underline, self.text_align, self.text_line_spacing,
+            self.text_tracking, self.text_rotation, self.text_box_width,
+        ):
+            variable.trace_add("write", self.text_properties_changed)
         self.load_settings()
         self.refresh_recent_menu()
         self.refresh()
@@ -842,25 +902,175 @@ class PhotoRedactorApp(tk.Tk):
 
         self.status = ttk.Label(self, text="", anchor=tk.W)
         self.status.pack(side=tk.BOTTOM, fill=tk.X)
-        self.bind_all("<Control-z>", lambda _e: self.undo() if self._editor_active else None)
-        self.bind_all("<Control-y>", lambda _e: self.redo() if self._editor_active else None)
-        self.bind_all("<Control-s>", lambda _e: self.save() if self._editor_active else None)
-        self.bind_all("<Control-o>", lambda _e: self.open_file())
-        self.bind_all("<Control-n>", lambda _e: self.new_document())
-        self.bind_all("<plus>", lambda _e: self.set_zoom(self.zoom.get() * 1.25) if self._editor_active else None)
-        self.bind_all("<minus>", lambda _e: self.set_zoom(self.zoom.get() / 1.25) if self._editor_active else None)
+        self._build_shortcuts()
         self.bind_all("<KeyPress-space>", self.space_down)
         self.bind_all("<KeyRelease-space>", self.space_up)
-        self.bind_all("<Escape>", self.cancel_incomplete_interaction)
+
+    def _build_shortcuts(self) -> None:
+        bindings = {
+            "<Control-z>": self.shortcut_undo,
+            "<Control-y>": self.shortcut_redo,
+            "<Control-s>": self.shortcut_save,
+            "<Control-o>": self.shortcut_open,
+            "<Control-n>": self.shortcut_new,
+            "<Control-a>": self.shortcut_select_all,
+            "<Control-c>": self.shortcut_copy,
+            "<Control-x>": self.shortcut_cut,
+            "<Control-v>": self.shortcut_paste,
+            "<Delete>": self.shortcut_delete,
+            "<Escape>": self.cancel_incomplete_interaction,
+            "<Return>": self.shortcut_enter,
+            "<plus>": self.shortcut_zoom_in,
+            "<minus>": self.shortcut_zoom_out,
+            "<Key-x>": self.shortcut_swap_colors,
+            "<Key-d>": self.shortcut_reset_colors,
+        }
+        for sequence, callback in bindings.items():
+            self.bind_all(sequence, callback)
+
+    @staticmethod
+    def _widget_is_descendant(widget, parent) -> bool:
+        current = widget
+        while current is not None:
+            if current is parent:
+                return True
+            current = getattr(current, "master", None)
+        return False
+
+    def shortcut_context(self) -> str:
+        focus = self.focus_get()
+        if focus is not None and isinstance(focus, (tk.Text, tk.Entry, ttk.Entry, ttk.Spinbox)):
+            return "text"
+        if hasattr(self, "layer_list") and focus is not None and self._widget_is_descendant(focus, self.layer_list):
+            return "layers"
+        grabbed = self.grab_current()
+        if grabbed is not None and grabbed is not self:
+            return "modal"
+        return "canvas"
+
+    def shortcut_undo(self, _event=None):
+        if self.shortcut_context() == "text":
+            return None
+        if self._editor_active:
+            self.undo()
+        return "break"
+
+    def shortcut_redo(self, _event=None):
+        if self.shortcut_context() == "text":
+            return None
+        if self._editor_active:
+            self.redo()
+        return "break"
+
+    def shortcut_save(self, _event=None):
+        if self._editor_active:
+            self.save()
+        return "break"
+
+    def shortcut_open(self, _event=None):
+        self.open_file()
+        return "break"
+
+    def shortcut_new(self, _event=None):
+        self.new_document()
+        return "break"
+
+    def shortcut_select_all(self, _event=None):
+        context = self.shortcut_context()
+        if context == "text":
+            focus = self.focus_get()
+            if isinstance(focus, tk.Text):
+                focus.tag_add(tk.SEL, "1.0", "end-1c")
+                focus.mark_set(tk.INSERT, "1.0")
+            elif focus is not None:
+                focus.selection_range(0, tk.END)
+            return "break"
+        if context == "layers":
+            self.layer_list.selection_set(0, tk.END)
+            self.layer_selected(None)
+            return "break"
+        if context == "canvas" and self._editor_active:
+            self.select_all()
+            return "break"
+        return None
+
+    def shortcut_delete(self, _event=None):
+        context = self.shortcut_context()
+        if context == "text":
+            return None
+        if context == "layers":
+            self.delete_layer()
+        elif context == "canvas":
+            self.delete_selected_pixels()
+        return "break"
+
+    def shortcut_copy(self, _event=None):
+        if self.shortcut_context() == "text":
+            return None
+        self.copy_pixels()
+        return "break"
+
+    def shortcut_cut(self, _event=None):
+        if self.shortcut_context() == "text":
+            return None
+        self.copy_pixels()
+        self.delete_selected_pixels()
+        return "break"
+
+    def shortcut_paste(self, _event=None):
+        if self.shortcut_context() == "text":
+            return None
+        self.paste_pixels()
+        return "break"
+
+    def shortcut_enter(self, _event=None):
+        if self.shortcut_context() == "text":
+            return None
+        if self.tool.get() == "crop":
+            self.apply_crop_overlay()
+            return "break"
+        return None
+
+    def shortcut_zoom_in(self, _event=None):
+        if self._editor_active and self.shortcut_context() != "text":
+            self.set_zoom(self.zoom.get() * 1.25)
+            return "break"
+        return None
+
+    def shortcut_zoom_out(self, _event=None):
+        if self._editor_active and self.shortcut_context() != "text":
+            self.set_zoom(self.zoom.get() / 1.25)
+            return "break"
+        return None
+
+    def shortcut_swap_colors(self, _event=None):
+        if self.shortcut_context() == "canvas":
+            self.swap_colors()
+            return "break"
+        return None
+
+    def shortcut_reset_colors(self, _event=None):
+        if self.shortcut_context() == "canvas":
+            self.reset_colors()
+            return "break"
+        return None
 
     def cancel_incomplete_interaction(self, _event=None) -> str:
+        if self._text_editor is not None:
+            self.cancel_text_edit()
+            self.status_text("Редактирование текста отменено")
+            return "break"
         if hasattr(self, "canvas"):
             self.clear_drag_preview()
             self.clear_lasso_overlay()
             self.clear_quick_selection_preview()
+            self.clear_gradient_preview()
         self.drag_start = None
         self.last_point = None
         self._shape_drag_options = None
+        self._crop_box = None
+        self._crop_drag_handle = None
+        self._crop_drag_origin_box = None
         self._clone_anchor_target = None
         self._clone_anchor_source = None
         if hasattr(self, "canvas"):
@@ -1064,6 +1274,7 @@ class PhotoRedactorApp(tk.Tk):
 
     def _build_tools(self, parent: ttk.Frame) -> None:
         parent.configure(width=250)
+        self._build_color_control(parent)
         self.tool_split = ttk.PanedWindow(parent, orient=tk.VERTICAL)
         self.tool_split.pack(fill=tk.BOTH, expand=True)
         tool_area = ttk.Frame(self.tool_split)
@@ -1092,6 +1303,7 @@ class PhotoRedactorApp(tk.Tk):
             exposure=self.exposure,
             tonal_range=self.tonal_range,
             tolerance=self.tolerance,
+            color_range_sample_hex=self.color_range_sample_hex,
             selection_mode=self.selection_mode,
             quick_smooth=self.quick_smooth,
             quick_edge_radius=self.quick_edge_radius,
@@ -1112,10 +1324,82 @@ class PhotoRedactorApp(tk.Tk):
             selection_feather=self.selection_feather,
             selection_antialias=self.selection_antialias,
             magic_contiguous=self.magic_contiguous,
+            clone_aligned=self.clone_aligned,
+            clone_sampling=self.clone_sampling,
+            gradient_type=self.gradient_type,
+            gradient_mode=self.gradient_mode,
+            gradient_shape=self.gradient_shape,
+            gradient_object_fill=self.gradient_object_fill,
+            gradient_texture=self.gradient_texture,
+            gradient_mid_enabled=self.gradient_mid_enabled,
+            gradient_mid_position=self.gradient_mid_position,
+            pick_gradient_mid=self.pick_gradient_mid,
+            crop_aspect=self.crop_aspect,
+            crop_custom_width=self.crop_custom_width,
+            crop_custom_height=self.crop_custom_height,
+            text_font_family=self.text_font_family,
+            text_size=self.text_size,
+            text_bold=self.text_bold,
+            text_italic=self.text_italic,
+            text_underline=self.text_underline,
+            text_align=self.text_align,
+            text_line_spacing=self.text_line_spacing,
+            text_tracking=self.text_tracking,
+            text_rotation=self.text_rotation,
+            text_box_width=self.text_box_width,
+            finish_text_edit=self.finish_text_edit,
+            edit_active_text=self.edit_active_text_on_canvas,
             tooltip_factory=ToolTip,
         )
         self.tool_options_panel.pack(fill=tk.BOTH, expand=True)
         self.after_idle(self.apply_tool_pane_position)
+
+    def _build_color_control(self, parent: ttk.Frame) -> None:
+        frame = ttk.Frame(parent)
+        frame.pack(fill=tk.X, padx=8, pady=(6, 2))
+        self.color_control_canvas = tk.Canvas(frame, width=72, height=58, highlightthickness=0)
+        self.color_control_canvas.pack(side=tk.LEFT)
+        self.color_control_canvas.bind("<Button-1>", self.color_control_click)
+        labels = ttk.Frame(frame)
+        labels.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(4, 0))
+        self.foreground_hex_label = ttk.Label(labels)
+        self.foreground_hex_label.pack(anchor=tk.W)
+        self.background_hex_label = ttk.Label(labels)
+        self.background_hex_label.pack(anchor=tk.W)
+        actions = ttk.Frame(labels)
+        actions.pack(anchor=tk.W, pady=(2, 0))
+        swap = ttk.Button(actions, text="X", width=3, command=self.swap_colors)
+        swap.pack(side=tk.LEFT)
+        reset = ttk.Button(actions, text="D", width=3, command=self.reset_colors)
+        reset.pack(side=tk.LEFT, padx=(3, 0))
+        ToolTip(swap, "Поменять основной и дополнительный цвета местами.")
+        ToolTip(reset, "Сбросить цвета на черный и белый.")
+        self.refresh_color_control()
+
+    def refresh_color_control(self) -> None:
+        if not hasattr(self, "color_control_canvas"):
+            return
+        canvas = self.color_control_canvas
+        canvas.delete("all")
+        canvas.create_rectangle(26, 18, 66, 56, fill=self.color_hex(self.background), outline="#555555", width=2, tags="background")
+        canvas.create_rectangle(5, 3, 45, 41, fill=self.color_hex(self.foreground), outline="#222222", width=2, tags="foreground")
+        self.foreground_hex_label.configure(text=f"Основной {self.color_hex(self.foreground).upper()}")
+        self.background_hex_label.configure(text=f"Доп. {self.color_hex(self.background).upper()}")
+
+    def color_control_click(self, event) -> None:
+        if event.x <= 47 and event.y <= 43:
+            self.pick_foreground()
+        else:
+            self.pick_background()
+
+    def swap_colors(self) -> None:
+        self.foreground, self.background = self.background, self.foreground
+        self.refresh_color_control()
+
+    def reset_colors(self) -> None:
+        self.foreground = (0, 0, 0, 255)
+        self.background = (255, 255, 255, 255)
+        self.refresh_color_control()
 
     def select_tool(self, value: str) -> None:
         if value in self.tool_order:
@@ -1158,9 +1442,13 @@ class PhotoRedactorApp(tk.Tk):
 
     def tool_changed(self, *_args) -> None:
         new_tool = self.tool.get()
+        if self._text_editor is not None and new_tool != "text":
+            self.finish_text_edit()
         if new_tool != self._active_settings_tool:
             self.save_active_tool_settings()
             self.load_active_tool_settings(new_tool)
+        if new_tool == "text" and self.doc.layer.kind == "text":
+            self.load_text_properties_from_layer(self.doc.layer)
         self.cancel_incomplete_interaction()
         if hasattr(self, "tool_options_panel"):
             self.tool_options_panel.render()
@@ -1175,6 +1463,7 @@ class PhotoRedactorApp(tk.Tk):
         label = self.tool_label(new_tool)
         if label:
             self.status_text(f"Инструмент: {label}")
+        self.update_clone_source_marker()
 
     def tool_label(self, value: str) -> str:
         for label, tool_id, _description in TOOL_DEFINITIONS:
@@ -1249,6 +1538,7 @@ class PhotoRedactorApp(tk.Tk):
         frame.rowconfigure(0, weight=1)
         frame.columnconfigure(0, weight=1)
         self.canvas.bind("<ButtonPress-1>", self.pointer_down)
+        self.canvas.bind("<Alt-Button-1>", self.clone_source_click)
         self.canvas.bind("<B1-Motion>", self.pointer_drag)
         self.canvas.bind("<ButtonRelease-1>", self.pointer_up)
         self.canvas.bind("<Double-Button-1>", self.pointer_double_click)
@@ -1283,7 +1573,7 @@ class PhotoRedactorApp(tk.Tk):
 
     def _build_panels(self, parent: ttk.Frame) -> None:
         ttk.Label(parent, text="Слои").pack(anchor=tk.W, padx=8, pady=(8, 4))
-        self.layer_list = tk.Listbox(parent, height=16, exportselection=False)
+        self.layer_list = tk.Listbox(parent, height=16, exportselection=False, selectmode=tk.EXTENDED)
         self.layer_list.pack(fill=tk.BOTH, expand=False, padx=8)
         self.layer_list.bind("<Button-1>", self.layer_list_click)
         self.layer_list.bind("<<ListboxSelect>>", self.layer_selected)
@@ -1597,6 +1887,9 @@ class PhotoRedactorApp(tk.Tk):
             self.update_quick_selection_preview(force=True)
         if self._last_pointer_event is not None:
             self.update_brush_preview(self._last_pointer_event)
+        self.update_clone_source_marker()
+        if self._crop_box is not None and self.tool.get() == "crop":
+            self.draw_crop_overlay(self._crop_box)
 
     def _update_canvas_tiles(
         self,
@@ -1712,6 +2005,11 @@ class PhotoRedactorApp(tk.Tk):
         self.info.configure(text=f"{self.doc.width} x {self.doc.height}px\nСлоев: {len(self.doc.layers)}\nАктивный: {self.doc.layer.name}")
 
     def refresh_layers(self) -> None:
+        known_ids = {layer.id for layer in self.doc.layers}
+        selected_ids = set(getattr(self, "selected_layer_ids", set())) & known_ids
+        if not selected_ids and self.doc.layers:
+            selected_ids = {self.doc.layer.id}
+        self.selected_layer_ids = selected_ids
         self.layer_list.delete(0, tk.END)
         for i, layer in enumerate(reversed(self.doc.layers)):
             marker = "👁" if layer.visible else "  "
@@ -1723,7 +2021,10 @@ class PhotoRedactorApp(tk.Tk):
             filter_marker = "P" if layer.filters else " "
             self.layer_list.insert(tk.END, f"{marker} {mask_marker}{lock_marker}{kind_marker}{clip_marker}{fx_marker}{filter_marker} {layer.name}  {round(layer.opacity * 100)}%")
         self.layer_list.selection_clear(0, tk.END)
-        self.layer_list.selection_set(len(self.doc.layers) - 1 - self.doc.active_layer)
+        for row, layer in enumerate(reversed(self.doc.layers)):
+            if layer.id in self.selected_layer_ids:
+                self.layer_list.selection_set(row)
+        self.layer_list.activate(len(self.doc.layers) - 1 - self.doc.active_layer)
         self.layer_opacity.set(self.doc.layer.opacity)
         self.blend_mode.set(self.doc.layer.blend_mode)
         self.refresh_layer_previews()
@@ -1848,6 +2149,7 @@ class PhotoRedactorApp(tk.Tk):
     def brush_size_changed(self, *_args) -> None:
         if self._last_pointer_event is not None:
             self.update_brush_preview(self._last_pointer_event)
+        self.update_clone_source_marker()
         self.quick_preview_settings_changed()
 
     def quick_preview_settings_changed(self, *_args) -> None:
@@ -2026,22 +2328,35 @@ class PhotoRedactorApp(tk.Tk):
         self.drag_start = point
         self.last_point = point
         tool = self.tool.get()
+        if tool == "crop" and self._crop_box is not None:
+            handle = self.crop_handle_at(point)
+            if handle is not None:
+                self._crop_drag_handle = handle
+                self._crop_drag_origin_box = self._crop_box
+                self.status_text("Перетащите маркер кадрирования")
+            else:
+                x1, y1, x2, y2 = self._crop_box
+                if x1 <= point[0] <= x2 and y1 <= point[1] <= y2:
+                    self.drag_start = None
+                    return
         if tool.endswith("_shape"):
             self._shape_drag_options = self.current_shape_options(tool)
             self.clear_selection_overlay()
         if tool in ["brush", "eraser", "blur_tool", "sharpen_tool", "dodge", "burn", "clone", "healing", "spot_healing"]:
             if tool in ["clone", "healing"]:
                 if event.state & 0x0008:
-                    self._clone_source = point
-                    self.status_text(f"Источник штампа: {point[0]}, {point[1]}")
+                    self.set_clone_source(point)
+                    return
+                if self._source_anchor.point is None:
+                    self.status_text("Сначала задайте источник: Alt + левый клик")
                     self.drag_start = None
                     return
-                if self._clone_source is None:
-                    self.status_text("Сначала Alt+клик задает источник штампа")
-                    self.drag_start = None
-                    return
-                self._clone_anchor_target = point
-                self._clone_anchor_source = self._clone_source
+                self._source_anchor.aligned = bool(self.clone_aligned.get())
+                self._source_anchor.sampling = self.clone_sampling.get()
+                self._source_anchor.begin_stroke(point)
+                self._clone_anchor_target = self._source_anchor.stroke_target
+                self._clone_anchor_source = self._source_anchor.stroke_source
+                self.prepare_clone_sample()
             kind = "mask" if tool in ["brush", "eraser"] and self.paint_target.get() == "mask" else "pixels"
             self.begin_stroke(kind)
             self.paint_at(point)
@@ -2053,7 +2368,14 @@ class PhotoRedactorApp(tk.Tk):
             self.run_selection_command("Magic wand selection", lambda: self.doc.magic_wand_selection(self.doc.layer, point[0], point[1], int(self.tolerance.get()), mode, contiguous))
         elif tool == "color_range":
             mode = self.selection_mode_from_event(event)
+            lx, ly = point[0] - self.doc.layer.x, point[1] - self.doc.layer.y
+            if 0 <= lx < self.doc.layer.pixels.shape[1] and 0 <= ly < self.doc.layer.pixels.shape[0]:
+                sample = tuple(int(value) for value in self.doc.layer.pixels[ly, lx])
+                self.color_range_sample_hex.set(self.color_hex(sample).upper())
+                if hasattr(self, "tool_options_panel"):
+                    self.tool_options_panel.render()
             self.run_selection_command("Color range selection", lambda: self.doc.color_range_selection(self.doc.layer, point[0], point[1], int(self.tolerance.get()), mode))
+            self.status_text(f"Диапазон цвета {self.color_range_sample_hex.get()}, допуск {int(self.tolerance.get())}")
         elif tool == "quick_selection":
             self._quick_points = [point]
             self._quick_mode = self.selection_mode_from_event(event)
@@ -2066,32 +2388,9 @@ class PhotoRedactorApp(tk.Tk):
         elif tool == "eyedropper":
             self.pick_color_from_document(point)
         elif tool == "text":
-            data = self.text_layer_dialog("Text layer", {"text": "", "size": 48, "font_family": "Arial", "box_width": 0, "align": "left", "line_spacing": 10, "tracking": 0})
-            if data and data["text"]:
-                self.run_document_command(
-                    "Text layer",
-                    lambda: self.doc.add_text_layer(
-                        data["text"],
-                        point[0],
-                        point[1],
-                        self.foreground,
-                        data["size"],
-                        data["font_family"],
-                        data["box_width"],
-                        data["align"],
-                        data["line_spacing"],
-                        data["tracking"],
-                        data["bold"],
-                        data["italic"],
-                        data["underline"],
-                        data["path_mode"],
-                        data["path_amount"],
-                        data["baseline_shift"],
-                        data["rotation"],
-                    ),
-                )
-                self.doc.dirty = True
-                self.refresh()
+            if self._text_editor is not None:
+                self.finish_text_edit()
+            self.status_text("Клик создает строку текста, перетаскивание создает текстовый блок")
         elif tool == "move":
             if self.doc.layer.locked:
                 self.status_text("Слой заблокирован")
@@ -2126,8 +2425,10 @@ class PhotoRedactorApp(tk.Tk):
             self.doc.move_active_layer(dx, dy)
             self.drag_start = point
             self.request_canvas_refresh()
-        elif tool in ["select", "ellipse_select", "crop", "gradient", "rect_shape", "ellipse_shape", "line_shape", "bezier_shape", "polygon_shape", "star_shape", "custom_shape"]:
+        elif tool in ["select", "ellipse_select", "crop", "gradient", "text", "rect_shape", "ellipse_shape", "line_shape", "bezier_shape", "polygon_shape", "star_shape", "custom_shape"]:
             self.draw_selection(self.drag_start, point, event.state)
+            if tool == "gradient" and self.drag_start:
+                self.update_gradient_preview(self.drag_start, point)
         elif tool == "lasso" and self.drag_start:
             self._lasso_points.append(point)
             self.draw_lasso()
@@ -2154,12 +2455,35 @@ class PhotoRedactorApp(tk.Tk):
         tool = self.tool.get()
         if tool in ["brush", "eraser", "blur_tool", "sharpen_tool", "dodge", "burn", "clone", "healing", "spot_healing"]:
             self.end_stroke(f"{tool.title()} stroke")
+            self._source_anchor.end_stroke()
             self._clone_anchor_target = None
             self._clone_anchor_source = None
+            self._clone_sample_pixels = None
         elif tool == "move":
             self.end_move_layer()
         elif tool == "gradient" and self.drag_start:
-            self.run_pixel_delta_command("Gradient", lambda: apply_gradient(self.doc.layer, (*self.drag_start, *point), self.foreground, self.background, self.doc.layer_selection_mask(self.doc.layer)))
+            if self.gradient_mode.get() == "Объект":
+                self.create_gradient_object(self.drag_start, point)
+                self.refresh()
+            else:
+                kind = self.current_gradient_kind()
+                stops = self.current_gradient_stops()
+                self.run_pixel_delta_command(
+                    "Gradient",
+                    lambda: apply_gradient(
+                        self.doc.layer,
+                        (*self.drag_start, *point),
+                        self.foreground,
+                        self.background,
+                        self.doc.layer_selection_mask(self.doc.layer),
+                        kind,
+                        stops,
+                    ),
+                )
+            self.clear_gradient_preview()
+        elif tool == "text" and self.drag_start:
+            self.begin_text_editor(self.drag_start, point)
+            self.clear_crop_overlay()
         elif tool in ["rect_shape", "ellipse_shape", "line_shape", "bezier_shape", "polygon_shape", "star_shape", "custom_shape"] and self.drag_start:
             geometry = self.shape_geometry_for_drag(tool, self.drag_start, point, event.state)
             if shape_drag_is_meaningful(geometry):
@@ -2178,6 +2502,11 @@ class PhotoRedactorApp(tk.Tk):
                 feather = int(self.selection_feather.get())
                 antialias = bool(self.selection_antialias.get())
                 self.run_selection_command("Elliptical selection", lambda: self.doc.set_ellipse_selection(self.selection_box, mode, feather, antialias))
+            elif tool == "crop":
+                if self._crop_drag_handle is None:
+                    self._crop_box = self.crop_box_for_drag(self.drag_start, point)
+                self.draw_crop_overlay(self._crop_box)
+                self.status_text("Кадрирование готово: Enter или двойной клик применяет, Escape отменяет")
             self.draw_selection(self.drag_start, point, event.state)
         elif tool == "lasso" and len(self._lasso_points) >= 3:
             mode = self.selection_mode_from_event(event)
@@ -2227,8 +2556,16 @@ class PhotoRedactorApp(tk.Tk):
         self.drag_start = None
         self.last_point = None
         self._shape_drag_options = None
+        self._crop_drag_handle = None
+        self._crop_drag_origin_box = None
 
     def pointer_double_click(self, event) -> None:
+        if self.tool.get() == "crop" and self._crop_box is not None:
+            point = self.canvas_to_doc(event)
+            x1, y1, x2, y2 = self._crop_box
+            if x1 <= point[0] <= x2 and y1 <= point[1] <= y2:
+                self.apply_crop_overlay()
+            return
         if self.tool.get() == "polygon_lasso" and len(self._polygon_points) >= 3:
             mode = self.selection_mode_from_event(event)
             points = list(self._polygon_points)
@@ -2371,6 +2708,8 @@ class PhotoRedactorApp(tk.Tk):
                     tool == "healing",
                     selection_mask,
                     float(self.hardness.get()),
+                    self._clone_sample_pixels,
+                    self._clone_sample_origin,
                 )
         elif self._stroke_kind == "mask":
             changed = draw_mask_brush(self.doc.layer, point[0], point[1], int(self.brush_size.get()), 0 if tool == "eraser" else 255, float(self.opacity.get()), selection_mask)
@@ -2392,6 +2731,8 @@ class PhotoRedactorApp(tk.Tk):
         if changed is not None:
             rect = self.local_to_document_rect(changed, self.doc.layer)
             self.request_canvas_refresh(rect, self.doc.layer, self._stroke_kind)
+        elif tool in {"clone", "healing"}:
+            self.status_text("Источник и цель не пересекают доступные пиксели")
 
     def paint_line(self, start: tuple[int, int], end: tuple[int, int]) -> None:
         radius = max(1, int(self.brush_size.get()))
@@ -2414,7 +2755,11 @@ class PhotoRedactorApp(tk.Tk):
                 source = self.clone_source_for_point((x, y))
                 if source is not None:
                     amount = opacity if tool == "clone" else float(self.retouch_strength.get())
-                    changed = clone_or_heal(self.doc.layer, source[0], source[1], x, y, radius, amount, tool == "healing", selection_mask, float(self.hardness.get()))
+                    changed = clone_or_heal(
+                        self.doc.layer, source[0], source[1], x, y, radius, amount,
+                        tool == "healing", selection_mask, float(self.hardness.get()),
+                        self._clone_sample_pixels, self._clone_sample_origin,
+                    )
             elif self._stroke_kind == "mask":
                 changed = draw_mask_brush(self.doc.layer, x, y, radius, 0 if tool == "eraser" else 255, opacity, selection_mask)
             elif tool in ["blur_tool", "sharpen_tool", "dodge", "burn"]:
@@ -2436,18 +2781,64 @@ class PhotoRedactorApp(tk.Tk):
         if changed_rect is not None:
             rect = self.local_to_document_rect(changed_rect, self.doc.layer)
             self.request_canvas_refresh(rect, self.doc.layer, self._stroke_kind)
+        elif tool in {"clone", "healing"}:
+            self.status_text("Источник и цель не пересекают доступные пиксели")
 
     @staticmethod
     def local_to_document_rect(rect: tuple[int, int, int, int], layer) -> tuple[int, int, int, int]:
         return rect[0] + layer.x, rect[1] + layer.y, rect[2] + layer.x, rect[3] + layer.y
 
     def clone_source_for_point(self, point: tuple[int, int]) -> tuple[int, int] | None:
-        if self._clone_anchor_source is None or self._clone_anchor_target is None:
-            return self._clone_source
-        return (
-            self._clone_anchor_source[0] + point[0] - self._clone_anchor_target[0],
-            self._clone_anchor_source[1] + point[1] - self._clone_anchor_target[1],
-        )
+        return self._source_anchor.source_for(point)
+
+    def clone_source_click(self, event) -> str:
+        if self.tool.get() not in {"clone", "healing"}:
+            return "break"
+        self.canvas.focus_set()
+        self.set_clone_source(self.canvas_to_doc(event))
+        return "break"
+
+    def set_clone_source(self, point: tuple[int, int]) -> None:
+        if point[0] < 0 or point[1] < 0 or point[0] >= self.doc.width or point[1] >= self.doc.height:
+            self.status_text("Источник должен находиться внутри холста")
+            return
+        self._source_anchor.set_source(point)
+        self._clone_source = point
+        self.drag_start = None
+        self.last_point = None
+        self.update_clone_source_marker()
+        self.status_text(f"Источник выбран: {point[0]}, {point[1]}. Теперь проведите кистью по цели.")
+
+    def prepare_clone_sample(self) -> None:
+        mode = self.clone_sampling.get()
+        if mode == "Текущий слой":
+            self._clone_sample_pixels = self.doc.layer.pixels.copy()
+            self._clone_sample_origin = (self.doc.layer.x, self.doc.layer.y)
+            return
+        temporary = copy.copy(self.doc)
+        if mode == "Текущий и ниже":
+            temporary.layers = list(self.doc.layers[: self.doc.active_layer + 1])
+            temporary.active_layer = len(temporary.layers) - 1
+        else:
+            temporary.layers = list(self.doc.layers)
+        self._clone_sample_pixels = temporary.composite(False).copy()
+        self._clone_sample_origin = (0, 0)
+
+    def update_clone_source_marker(self) -> None:
+        for item_id in self._clone_source_marker_ids:
+            self.canvas.delete(item_id)
+        self._clone_source_marker_ids.clear()
+        if self._source_anchor.point is None or self.tool.get() not in {"clone", "healing"}:
+            return
+        cx, cy = self.doc_to_canvas(*self._source_anchor.point)
+        radius = max(4.0, float(self.brush_size.get()) * float(self.zoom.get()))
+        self._clone_source_marker_ids = [
+            self.canvas.create_oval(cx - radius, cy - radius, cx + radius, cy + radius, outline="#ffb000", dash=(5, 3), width=2),
+            self.canvas.create_line(cx - 7, cy, cx + 7, cy, fill="#ffb000", width=2),
+            self.canvas.create_line(cx, cy - 7, cx, cy + 7, fill="#ffb000", width=2),
+        ]
+        for item_id in self._clone_source_marker_ids:
+            self.canvas.tag_raise(item_id)
 
     def begin_patch_drag(self, point: tuple[int, int]) -> None:
         if self.doc.layer.locked:
@@ -2549,8 +2940,14 @@ class PhotoRedactorApp(tk.Tk):
     def draw_selection(self, start: tuple[int, int] | None, end: tuple[int, int], state: int = 0) -> None:
         if not start:
             return
-        self.clear_drag_preview()
         tool = self.tool.get()
+        if tool == "crop":
+            if self._crop_drag_handle is not None and self._crop_drag_origin_box is not None:
+                self._crop_box = self.resize_crop_box(self._crop_drag_origin_box, self._crop_drag_handle, end)
+            else:
+                self._crop_box = self.crop_box_for_drag(start, end)
+            self.draw_crop_overlay(self._crop_box)
+            return
         is_shape = tool.endswith("_shape")
         if is_shape:
             shape_options = self._shape_drag_options or self.current_shape_options(tool)
@@ -2564,36 +2961,514 @@ class PhotoRedactorApp(tk.Tk):
             x1, y1, x2, y2 = geometry["box"]
             canvas_box = (*self.doc_to_canvas(x1, y1), *self.doc_to_canvas(x2, y2))
             if shape == "ellipse":
-                self._drag_preview_ids.append(self.canvas.create_oval(*canvas_box, fill=fill, outline=visible_outline, width=width))
+                self.update_drag_preview_item("oval", canvas_box, fill=fill, outline=visible_outline, width=width)
             elif shape == "line":
                 line = geometry["line"]
                 coords = (*self.doc_to_canvas(line[0], line[1]), *self.doc_to_canvas(line[2], line[3]))
-                self._drag_preview_ids.append(self.canvas.create_line(*coords, fill=outline, width=width))
+                self.update_drag_preview_item("line", coords, fill=outline, width=width)
             elif shape == "bezier":
                 curve = [value for point in geometry["points"] for value in self.doc_to_canvas(point[0], point[1])]
-                self._drag_preview_ids.append(self.canvas.create_line(*curve, fill=outline, width=width, smooth=True))
+                self.update_drag_preview_item("line", curve, fill=outline, width=width, smooth=True)
             elif shape in {"polygon", "star", "custom"}:
                 polygon = [value for point in geometry["points"] for value in self.doc_to_canvas(point[0], point[1])]
-                self._drag_preview_ids.append(self.canvas.create_polygon(*polygon, fill=fill, outline=visible_outline, width=width))
+                self.update_drag_preview_item("polygon", polygon, fill=fill, outline=visible_outline, width=width)
             else:
-                self._drag_preview_ids.append(self.canvas.create_rectangle(*canvas_box, fill=fill, outline=visible_outline, width=width))
+                self.update_drag_preview_item("rectangle", canvas_box, fill=fill, outline=visible_outline, width=width)
         else:
             x1, y1 = self.doc_to_canvas(start[0], start[1])
             x2, y2 = self.doc_to_canvas(end[0], end[1])
             coords = [x1, y1, x2, y2]
             if tool == "ellipse_select":
-                self._drag_preview_ids.append(self.canvas.create_oval(*coords, outline="#50e3ff", dash=(5, 4), width=2))
+                self.update_drag_preview_item("oval", coords, outline="#50e3ff", dash=(5, 4), width=2)
             elif tool == "gradient":
-                self._drag_preview_ids.append(self.canvas.create_line(*coords, fill="#50e3ff", width=2))
+                self.update_drag_preview_item("line", coords, fill="#50e3ff", width=2, arrow=tk.LAST)
             else:
-                self._drag_preview_ids.append(self.canvas.create_rectangle(*coords, outline="#50e3ff", dash=(5, 4), width=2))
+                self.update_drag_preview_item("rectangle", coords, outline="#50e3ff", dash=(5, 4), width=2)
         for item_id in self._drag_preview_ids:
             self.canvas.tag_raise(item_id)
+
+    def update_drag_preview_item(self, kind: str, coords, **options) -> None:
+        item_id = self._drag_preview_ids[0] if self._drag_preview_ids else None
+        if item_id is not None and self.canvas.type(item_id) != kind:
+            self.clear_drag_preview()
+            item_id = None
+        if item_id is None:
+            creator = {
+                "oval": self.canvas.create_oval,
+                "line": self.canvas.create_line,
+                "polygon": self.canvas.create_polygon,
+                "rectangle": self.canvas.create_rectangle,
+            }[kind]
+            item_id = creator(*coords, **options)
+            self._drag_preview_ids = [item_id]
+        else:
+            self.canvas.coords(item_id, *coords)
+            self.canvas.itemconfigure(item_id, **options)
 
     def clear_drag_preview(self) -> None:
         for item_id in self._drag_preview_ids:
             self.canvas.delete(item_id)
         self._drag_preview_ids.clear()
+
+    def current_gradient_kind(self) -> str:
+        return {
+            "Линейный": "linear",
+            "Радиальный": "radial",
+            "Отраженный": "reflected",
+            "Ромб": "diamond",
+            "Угловой": "angular",
+        }.get(self.gradient_type.get(), "linear")
+
+    def begin_text_editor(self, start: tuple[int, int], end: tuple[int, int], layer_id: str | None = None) -> None:
+        self.cancel_text_edit()
+        existing = self.doc.get_layer(layer_id) if layer_id else None
+        if existing is not None and existing.text_data is not None:
+            data = existing.text_data
+            x, y = int(data.get("x", start[0])), int(data.get("y", start[1]))
+            box_width = max(0, int(data.get("box_width", 0)))
+            initial_text = str(data.get("text", ""))
+            self._text_editor_before = copy.deepcopy(data)
+            self._text_editor_layer_id = existing.id
+            self.load_text_properties_from_layer(existing)
+        else:
+            x, y = int(start[0]), int(start[1])
+            box_width = abs(int(end[0]) - x) if abs(int(end[0]) - x) >= 6 else 0
+            initial_text = ""
+            self._text_editor_before = None
+            self._text_editor_layer_id = None
+            self.text_box_width.set(box_width)
+        self._text_editor_origin = (x, y)
+        self._text_editor_box_width = box_width
+        visible_width = box_width or min(520, max(260, self.doc.width - x))
+        visible_height = max(72, abs(int(end[1]) - int(start[1])) if box_width else int(self.text_size.get()) * 2)
+        editor = tk.Text(
+            self.canvas,
+            wrap=tk.WORD if box_width else tk.NONE,
+            width=max(8, round(visible_width / max(7, int(self.text_size.get()) * 0.55))),
+            height=max(2, round(visible_height / max(14, int(self.text_size.get()) * 1.2))),
+            undo=True,
+            borderwidth=2,
+            relief=tk.SOLID,
+            padx=4,
+            pady=3,
+        )
+        editor.insert("1.0", initial_text)
+        cx, cy = self.doc_to_canvas(x, y)
+        self._text_editor_window = self.canvas.create_window(cx, cy, window=editor, anchor=tk.NW)
+        self._text_editor = editor
+        self.update_text_editor_style()
+        editor.focus_set()
+        editor.mark_set(tk.INSERT, tk.END)
+        self.status_text("Введите текст на холсте. Кнопка 'Готово' завершает редактирование.")
+
+    def edit_active_text_on_canvas(self) -> None:
+        layer = self.doc.layer
+        if layer.kind != "text" or layer.text_data is None:
+            self.status_text("Сначала выберите текстовый слой")
+            return
+        x = int(layer.text_data.get("x", 0))
+        y = int(layer.text_data.get("y", 0))
+        width = max(240, int(layer.text_data.get("box_width", 0)))
+        self.begin_text_editor((x, y), (x + width, y + int(layer.text_data.get("size", 48)) * 3), layer.id)
+
+    def update_text_editor_style(self) -> None:
+        editor = self._text_editor
+        if editor is None:
+            return
+        styles = []
+        if self.text_bold.get():
+            styles.append("bold")
+        if self.text_italic.get():
+            styles.append("italic")
+        font = tkfont.Font(
+            family=self.text_font_family.get() or "Arial",
+            size=max(8, round(int(self.text_size.get()) * float(self.zoom.get()) * 0.75)),
+            weight="bold" if "bold" in styles else "normal",
+            slant="italic" if "italic" in styles else "roman",
+            underline=bool(self.text_underline.get()),
+        )
+        editor.configure(font=font, foreground=self.color_hex(self.foreground), insertbackground=self.color_hex(self.foreground))
+        editor._photoredactor_font = font
+        editor.tag_configure("paragraph", justify=self.text_align.get(), spacing3=max(0, int(self.text_line_spacing.get())))
+        editor.tag_add("paragraph", "1.0", tk.END)
+
+    def finish_text_edit(self) -> None:
+        editor = self._text_editor
+        if editor is None:
+            return
+        text = editor.get("1.0", "end-1c")
+        layer_id = self._text_editor_layer_id
+        origin = self._text_editor_origin
+        box_width = max(0, int(self.text_box_width.get() or self._text_editor_box_width))
+        before = copy.deepcopy(self._text_editor_before)
+        self._destroy_text_editor()
+        if layer_id is not None:
+            layer = self.doc.get_layer(layer_id)
+            if layer is None or before is None:
+                return
+            self.doc.active_layer = self.doc.layers.index(layer)
+            self.apply_text_values(layer, text, origin, box_width)
+            after = copy.deepcopy(layer.text_data or {})
+            if before != after:
+                self.push_command(TextDataCommand("Edit text", layer.id, before, after, f"Text: {str(before.get('text', ''))[:24]}", layer.name))
+        elif text:
+            layer = self.doc.add_text_layer(
+                text, origin[0], origin[1], self.foreground, int(self.text_size.get()),
+                self.text_font_family.get(), box_width, self.text_align.get(),
+                int(self.text_line_spacing.get()), int(self.text_tracking.get()),
+                bool(self.text_bold.get()), bool(self.text_italic.get()), bool(self.text_underline.get()),
+                rotation=float(self.text_rotation.get()),
+            )
+            self.selected_layer_ids = {layer.id}
+            self.push_command(LayerInsertCommand("Text layer", self.doc.active_layer, copy.deepcopy(layer)))
+        self.refresh()
+
+    def cancel_text_edit(self) -> None:
+        if self._text_editor is not None:
+            self._destroy_text_editor()
+
+    def _destroy_text_editor(self) -> None:
+        if self._text_editor_window is not None:
+            self.canvas.delete(self._text_editor_window)
+        if self._text_editor is not None:
+            self._text_editor.destroy()
+        self._text_editor = None
+        self._text_editor_window = None
+        self._text_editor_layer_id = None
+        self._text_editor_before = None
+
+    def apply_text_values(self, layer: Layer, text: str, origin: tuple[int, int], box_width: int) -> None:
+        data = layer.text_data or {}
+        data.update({
+            "text": text,
+            "x": int(origin[0]),
+            "y": int(origin[1]),
+            "color": list(self.foreground),
+            "size": int(self.text_size.get()),
+            "font_family": self.text_font_family.get(),
+            "box_width": max(0, int(box_width)),
+            "align": self.text_align.get(),
+            "line_spacing": max(0, int(self.text_line_spacing.get())),
+            "tracking": int(self.text_tracking.get()),
+            "bold": bool(self.text_bold.get()),
+            "italic": bool(self.text_italic.get()),
+            "underline": bool(self.text_underline.get()),
+            "rotation": float(self.text_rotation.get()),
+        })
+        layer.text_data = data
+        layer.name = f"Text: {text[:24]}"
+        render_text_layer(layer)
+        layer.touch_pixels()
+        self.doc.dirty = True
+
+    def load_text_properties_from_layer(self, layer: Layer) -> None:
+        if layer.text_data is None:
+            return
+        data = layer.text_data
+        self._loading_text_properties = True
+        try:
+            self.text_font_family.set(str(data.get("font_family", "Arial")))
+            self.text_size.set(int(data.get("size", 48)))
+            self.text_bold.set(bool(data.get("bold", False)))
+            self.text_italic.set(bool(data.get("italic", False)))
+            self.text_underline.set(bool(data.get("underline", False)))
+            self.text_align.set(str(data.get("align", "left")))
+            self.text_line_spacing.set(int(data.get("line_spacing", 10)))
+            self.text_tracking.set(int(data.get("tracking", 0)))
+            self.text_rotation.set(float(data.get("rotation", 0.0)))
+            self.text_box_width.set(int(data.get("box_width", 0)))
+            color = data.get("color")
+            if isinstance(color, list) and len(color) == 4:
+                self.foreground = tuple(int(value) for value in color)
+                self.refresh_color_control()
+        finally:
+            self._loading_text_properties = False
+
+    def text_properties_changed(self, *_args) -> None:
+        if self._loading_text_properties:
+            return
+        if self._text_editor is not None:
+            self.update_text_editor_style()
+            return
+        if not self._editor_active or self.tool.get() != "text":
+            return
+        layer = self.doc.layer
+        if layer.kind != "text" or layer.text_data is None:
+            return
+        if self._text_property_before is None:
+            self._text_property_before = copy.deepcopy(layer.text_data)
+        self.apply_text_values(
+            layer,
+            str(layer.text_data.get("text", "")),
+            (int(layer.text_data.get("x", 0)), int(layer.text_data.get("y", 0))),
+            int(self.text_box_width.get()),
+        )
+        self.request_canvas_refresh()
+        if self._text_property_after_id is not None:
+            self.after_cancel(self._text_property_after_id)
+        self._text_property_after_id = self.after(350, self.commit_text_property_history)
+
+    def commit_text_property_history(self) -> None:
+        self._text_property_after_id = None
+        before = self._text_property_before
+        self._text_property_before = None
+        layer = self.doc.layer
+        if before is None or layer.kind != "text" or layer.text_data is None:
+            return
+        after = copy.deepcopy(layer.text_data)
+        if before != after:
+            before_name = f"Text: {str(before.get('text', ''))[:24]}"
+            self.push_command(TextDataCommand("Text properties", layer.id, before, after, before_name, layer.name))
+
+    def current_gradient_stops(self) -> list[dict[str, object]]:
+        stops: list[dict[str, object]] = [
+            {"position": 0.0, "color": list(self.foreground)},
+            {"position": 1.0, "color": list(self.background)},
+        ]
+        if self.gradient_mid_enabled.get():
+            stops.append({
+                "position": float(np.clip(self.gradient_mid_position.get(), 0.01, 0.99)),
+                "color": list(self.gradient_mid_color),
+            })
+        return sorted(stops, key=lambda stop: float(stop["position"]))
+
+    def pick_gradient_mid(self) -> None:
+        color = colorchooser.askcolor(color=self.color_hex(self.gradient_mid_color), title="Средняя точка градиента")[0]
+        if color:
+            self.gradient_mid_color = tuple(map(int, color)) + (255,)
+            self.gradient_mid_enabled.set(True)
+            if hasattr(self, "tool_options_panel"):
+                self.tool_options_panel.render()
+
+    def update_gradient_preview(self, start: tuple[int, int], end: tuple[int, int]) -> None:
+        if start == end:
+            return
+        pixels = GradientEngine.render(
+            self.doc.width,
+            self.doc.height,
+            start,
+            end,
+            self.current_gradient_stops(),
+            self.current_gradient_kind(),
+        )
+        alpha = np.full((self.doc.height, self.doc.width), 190, dtype=np.uint8)
+        if self.gradient_mode.get() == "Объект":
+            if self.gradient_object_fill.get() == "Текстура":
+                yy, xx = np.mgrid[0:self.doc.height, 0:self.doc.width]
+                size = 18
+                texture_kind = self.gradient_texture.get()
+                if texture_kind == "Точки":
+                    dx = np.mod(xx, size) - size / 2.0
+                    dy = np.mod(yy, size) - size / 2.0
+                    selector = (dx * dx + dy * dy) <= (size * 0.24) ** 2
+                elif texture_kind == "Полосы":
+                    selector = np.mod((xx + yy) // size, 2) == 0
+                else:
+                    selector = np.mod(xx // size + yy // size, 2) == 0
+                pixels = np.where(selector[:, :, None], np.array(self.foreground), np.array(self.background)).astype(np.uint8)
+            mask_image = Image.new("L", (self.doc.width, self.doc.height), 0)
+            draw = ImageDraw.Draw(mask_image)
+            box = (
+                min(int(start[0]), int(end[0])),
+                min(int(start[1]), int(end[1])),
+                max(int(start[0]), int(end[0])),
+                max(int(start[1]), int(end[1])),
+            )
+            shape = self.gradient_shape.get()
+            if shape == "Эллипс":
+                draw.ellipse(box, fill=220)
+            elif shape == "Многоугольник":
+                draw.polygon(regular_polygon_points(box, max(3, int(self.polygon_sides.get()))), fill=220)
+            elif shape == "Звезда":
+                draw.polygon(star_points(box, max(3, int(self.star_points_count.get())), float(self.star_inner_ratio.get())), fill=220)
+            elif shape == "Произвольная":
+                draw.polygon(custom_shape_points(CUSTOM_SHAPE_PRESETS.get(self.custom_shape_preset.get()), box), fill=220)
+            else:
+                draw.rectangle(box, fill=220)
+            alpha = np.array(mask_image, dtype=np.uint8)
+        elif self.doc.selection_mask is not None:
+            alpha = np.minimum(alpha, self.doc.selection_mask)
+        pixels[:, :, 3] = np.minimum(pixels[:, :, 3], alpha)
+        image = Image.fromarray(pixels, "RGBA")
+        scale = float(self.zoom.get())
+        if scale != 1.0:
+            image = image.resize(
+                (max(1, round(self.doc.width * scale)), max(1, round(self.doc.height * scale))),
+                Image.Resampling.BILINEAR,
+            )
+        self._gradient_preview_image = ImageTk.PhotoImage(image)
+        x, y = self.doc_to_canvas(0, 0)
+        if self._gradient_preview_id is None:
+            self._gradient_preview_id = self.canvas.create_image(x, y, image=self._gradient_preview_image, anchor=tk.NW)
+        else:
+            self.canvas.coords(self._gradient_preview_id, x, y)
+            self.canvas.itemconfigure(self._gradient_preview_id, image=self._gradient_preview_image)
+        self.canvas.tag_raise(self._gradient_preview_id)
+        for item_id in self._drag_preview_ids:
+            self.canvas.tag_raise(item_id)
+
+    def clear_gradient_preview(self) -> None:
+        if self._gradient_preview_id is not None:
+            self.canvas.delete(self._gradient_preview_id)
+            self._gradient_preview_id = None
+        self._gradient_preview_image = None
+
+    def create_gradient_object(self, start: tuple[int, int], end: tuple[int, int]) -> None:
+        shape = {
+            "Прямоугольник": "rectangle",
+            "Эллипс": "ellipse",
+            "Многоугольник": "polygon",
+            "Звезда": "star",
+            "Произвольная": "custom",
+        }.get(self.gradient_shape.get(), "rectangle")
+        gradient = {
+            "type": self.current_gradient_kind(),
+            "start": list(start),
+            "end": list(end),
+            "stops": self.current_gradient_stops(),
+            "opacity": 1.0,
+        }
+        texture = {
+            "type": {"Шахматная": "checker", "Полосы": "stripes", "Точки": "dots"}.get(self.gradient_texture.get(), "checker"),
+            "size": 18,
+            "color_a": list(self.foreground),
+            "color_b": list(self.background),
+        }
+        use_texture = self.gradient_object_fill.get() == "Текстура"
+        layer = self.doc.add_shape_layer(
+            shape,
+            (*start, *end),
+            self.foreground,
+            self.background,
+            int(self.shape_stroke_width.get()),
+            int(self.polygon_sides.get() if shape == "polygon" else self.star_points_count.get()),
+            float(self.star_inner_ratio.get()),
+            custom_points=CUSTOM_SHAPE_PRESETS.get(self.custom_shape_preset.get()),
+            gradient=None if use_texture else gradient,
+            texture=texture if use_texture else None,
+        )
+        self.push_command(LayerInsertCommand("Gradient object", self.doc.active_layer, copy.deepcopy(layer)))
+
+    def crop_box_for_drag(self, start: tuple[int, int], end: tuple[int, int]) -> tuple[int, int, int, int]:
+        sx, sy = start
+        ex, ey = end
+        ratios = {
+            "1:1": 1.0,
+            "4:3": 4.0 / 3.0,
+            "3:2": 3.0 / 2.0,
+            "16:9": 16.0 / 9.0,
+            "Исходное": self.doc.width / max(1, self.doc.height),
+            "Свое": max(1, int(self.crop_custom_width.get())) / max(1, int(self.crop_custom_height.get())),
+        }
+        ratio = ratios.get(self.crop_aspect.get())
+        if ratio is not None:
+            dx, dy = ex - sx, ey - sy
+            sign_x = -1 if dx < 0 else 1
+            sign_y = -1 if dy < 0 else 1
+            width, height = abs(dx), abs(dy)
+            if height == 0 or width / max(1, height) > ratio:
+                height = round(width / ratio)
+            else:
+                width = round(height * ratio)
+            ex, ey = sx + sign_x * width, sy + sign_y * height
+        x1, x2 = sorted((max(0, min(self.doc.width, sx)), max(0, min(self.doc.width, ex))))
+        y1, y2 = sorted((max(0, min(self.doc.height, sy)), max(0, min(self.doc.height, ey))))
+        return int(x1), int(y1), int(x2), int(y2)
+
+    def crop_handle_at(self, point: tuple[int, int]) -> str | None:
+        if self._crop_box is None:
+            return None
+        x1, y1, x2, y2 = self._crop_box
+        handles = {
+            "nw": (x1, y1), "n": ((x1 + x2) / 2, y1), "ne": (x2, y1),
+            "w": (x1, (y1 + y2) / 2), "e": (x2, (y1 + y2) / 2),
+            "sw": (x1, y2), "s": ((x1 + x2) / 2, y2), "se": (x2, y2),
+        }
+        threshold = max(3.0, 9.0 / max(0.05, float(self.zoom.get())))
+        nearest = None
+        best = threshold
+        for name, (hx, hy) in handles.items():
+            distance = math.hypot(point[0] - hx, point[1] - hy)
+            if distance <= best:
+                nearest, best = name, distance
+        return nearest
+
+    def resize_crop_box(
+        self,
+        box: tuple[int, int, int, int],
+        handle: str,
+        point: tuple[int, int],
+    ) -> tuple[int, int, int, int]:
+        x1, y1, x2, y2 = box
+        px = max(0, min(self.doc.width, int(point[0])))
+        py = max(0, min(self.doc.height, int(point[1])))
+        if "w" in handle:
+            x1 = px
+        if "e" in handle:
+            x2 = px
+        if "n" in handle:
+            y1 = py
+        if "s" in handle:
+            y2 = py
+        if len(handle) == 2 and self.crop_aspect.get() != "Свободно":
+            anchor_x = x2 if "w" in handle else x1
+            anchor_y = y2 if "n" in handle else y1
+            return self.crop_box_for_drag((anchor_x, anchor_y), (px, py))
+        left, right = sorted((x1, x2))
+        top, bottom = sorted((y1, y2))
+        return int(left), int(top), int(right), int(bottom)
+
+    def draw_crop_overlay(self, box: tuple[int, int, int, int]) -> None:
+        self.clear_crop_overlay()
+        x1, y1, x2, y2 = box
+        left, top = self.doc_to_canvas(0, 0)
+        right, bottom = self.doc_to_canvas(self.doc.width, self.doc.height)
+        cx1, cy1 = self.doc_to_canvas(x1, y1)
+        cx2, cy2 = self.doc_to_canvas(x2, y2)
+        shade = {"fill": "#111111", "outline": "", "stipple": "gray50"}
+        self._crop_overlay_ids.extend([
+            self.canvas.create_rectangle(left, top, right, cy1, **shade),
+            self.canvas.create_rectangle(left, cy2, right, bottom, **shade),
+            self.canvas.create_rectangle(left, cy1, cx1, cy2, **shade),
+            self.canvas.create_rectangle(cx2, cy1, right, cy2, **shade),
+            self.canvas.create_rectangle(cx1, cy1, cx2, cy2, outline="#f5f5f5", width=2),
+        ])
+        for fraction in (1 / 3, 2 / 3):
+            gx = cx1 + (cx2 - cx1) * fraction
+            gy = cy1 + (cy2 - cy1) * fraction
+            self._crop_overlay_ids.append(self.canvas.create_line(gx, cy1, gx, cy2, fill="#e0e0e0", dash=(4, 4)))
+            self._crop_overlay_ids.append(self.canvas.create_line(cx1, gy, cx2, gy, fill="#e0e0e0", dash=(4, 4)))
+        handles = [
+            (cx1, cy1), ((cx1 + cx2) / 2, cy1), (cx2, cy1),
+            (cx1, (cy1 + cy2) / 2), (cx2, (cy1 + cy2) / 2),
+            (cx1, cy2), ((cx1 + cx2) / 2, cy2), (cx2, cy2),
+        ]
+        for hx, hy in handles:
+            self._crop_overlay_ids.append(self.canvas.create_rectangle(hx - 4, hy - 4, hx + 4, hy + 4, fill="#ffffff", outline="#1976d2"))
+        for item_id in self._crop_overlay_ids:
+            self.canvas.tag_raise(item_id)
+
+    def clear_crop_overlay(self) -> None:
+        if not hasattr(self, "canvas"):
+            return
+        for item_id in self._crop_overlay_ids:
+            self.canvas.delete(item_id)
+        self._crop_overlay_ids.clear()
+
+    def apply_crop_overlay(self) -> None:
+        if self._crop_box is None:
+            self.status_text("Сначала протяните рамку кадрирования")
+            return
+        x1, y1, x2, y2 = self._crop_box
+        if x2 - x1 < 2 or y2 - y1 < 2:
+            self.status_text("Область кадрирования слишком мала")
+            return
+        self.run_document_command("Crop", lambda: self.doc.crop(self._crop_box))
+        self.doc.clear_selection()
+        self.selection_box = None
+        self._crop_box = None
+        self.clear_crop_overlay()
+        self.refresh()
 
     def draw_lasso(self) -> None:
         self.delete_lasso_overlay()
@@ -2717,22 +3592,92 @@ class PhotoRedactorApp(tk.Tk):
         options = self._shape_drag_options or self.current_shape_options(tool)
         shape = str(geometry["shape"])
         box = tuple(int(v) for v in geometry.get("line", geometry["box"]))
-        self.run_document_command(
-            "Shape layer",
-            lambda: self.doc.add_shape_layer(
-                shape,
-                box,
-                options["fill"],
-                options["stroke"],
-                int(options["stroke_width"]),
-                int(options["sides"]),
-                float(options["inner_ratio"]),
-                custom_points=options["custom_points"],
-            ),
+        layer = self.doc.add_shape_layer(
+            shape,
+            box,
+            options["fill"],
+            options["stroke"],
+            int(options["stroke_width"]),
+            int(options["sides"]),
+            float(options["inner_ratio"]),
+            custom_points=options["custom_points"],
         )
+        self.push_command(LayerInsertCommand("Shape layer", self.doc.active_layer, copy.deepcopy(layer)))
+
+    def run_shape_data_command(self, label: str, edit) -> None:
+        layer = self.doc.layer
+        if layer.kind != "shape" or layer.shape_data is None:
+            return
+        before = copy.deepcopy(layer.shape_data)
+        before_name = layer.name
+        edit()
+        after = copy.deepcopy(layer.shape_data or {})
+        if before != after or before_name != layer.name:
+            self.push_command(ShapeDataCommand(label, layer.id, before, after, before_name, layer.name))
 
     def clear_selection(self) -> None:
         self.run_selection_command("Clear selection", self.doc.clear_selection)
+
+    def copy_pixels(self) -> None:
+        if not self._editor_active:
+            return
+        layer = self.doc.layer
+        selection = self.doc.layer_selection_mask(layer)
+        if selection is None:
+            self._pixel_clipboard = layer.pixels.copy()
+            self._pixel_clipboard_origin = (layer.x, layer.y)
+        else:
+            ys, xs = np.where(selection > 0)
+            if len(xs) == 0:
+                return
+            x1, y1, x2, y2 = int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1
+            pixels = layer.pixels[y1:y2, x1:x2].copy()
+            coverage = selection[y1:y2, x1:x2].astype(np.float32) / 255.0
+            pixels[:, :, 3] = np.clip(pixels[:, :, 3].astype(np.float32) * coverage, 0, 255).astype(np.uint8)
+            self._pixel_clipboard = pixels
+            self._pixel_clipboard_origin = (layer.x + x1, layer.y + y1)
+        self.status_text("Пиксели скопированы")
+
+    def paste_pixels(self) -> None:
+        if self._pixel_clipboard is None:
+            self.status_text("Буфер пикселей пуст")
+            return
+        layer = Layer(
+            "Вставленные пиксели",
+            self._pixel_clipboard.copy(),
+            x=int(self._pixel_clipboard_origin[0]),
+            y=int(self._pixel_clipboard_origin[1]),
+        )
+        self.doc.layers.append(layer)
+        self.doc.active_layer = len(self.doc.layers) - 1
+        self.doc.dirty = True
+        self.selected_layer_ids = {layer.id}
+        self.push_command(LayerInsertCommand("Paste pixels", self.doc.active_layer, copy.deepcopy(layer)))
+        self.refresh()
+
+    def delete_selected_pixels(self) -> None:
+        if not self._editor_active or self.doc.selection_mask is None:
+            self.status_text("Удаление пикселей: сначала создайте выделение")
+            return
+        layer = self.doc.layer
+        if layer.locked:
+            self.status_text("Слой заблокирован")
+            return
+        selection = self.doc.layer_selection_mask(layer)
+        if selection is None or not np.any(selection):
+            self.status_text("Выделение не пересекает активный слой")
+            return
+
+        def erase() -> None:
+            coverage = selection.astype(np.float32) / 255.0
+            layer.pixels[:, :, 3] = np.clip(
+                layer.pixels[:, :, 3].astype(np.float32) * (1.0 - coverage),
+                0,
+                255,
+            ).astype(np.uint8)
+            layer.touch_pixels()
+
+        self.run_pixel_delta_command("Delete selected pixels", erase)
 
     def select_all(self) -> None:
         self.run_selection_command("Select all", self.doc.select_all)
@@ -3448,14 +4393,17 @@ class PhotoRedactorApp(tk.Tk):
             self.run_background("Export image", worker)
 
     def pick_foreground(self) -> None:
-        color = colorchooser.askcolor(title="Foreground")[0]
+        color = colorchooser.askcolor(color=self.color_hex(self.foreground), title="Основной цвет")[0]
         if color:
             self.foreground = tuple(map(int, color)) + (255,)
+            self.refresh_color_control()
+            self.text_properties_changed()
 
     def pick_background(self) -> None:
-        color = colorchooser.askcolor(title="Background")[0]
+        color = colorchooser.askcolor(color=self.color_hex(self.background), title="Дополнительный цвет")[0]
         if color:
             self.background = tuple(map(int, color)) + (255,)
+            self.refresh_color_control()
 
     def pick_color_from_document(self, point: tuple[int, int]) -> None:
         x, y = point
@@ -3463,7 +4411,8 @@ class PhotoRedactorApp(tk.Tk):
             return
         rgba = self.render_engine.render(self.doc, False)[y, x]
         self.foreground = tuple(int(v) for v in rgba)
-        self.status_text(f"Picked RGBA: {self.foreground}")
+        self.refresh_color_control()
+        self.status_text(f"Основной цвет: {self.color_hex(self.foreground).upper()}")
 
     def show_image_statistics(self) -> None:
         stats = image_statistics(self.render_engine.render(self.doc, False))
@@ -3636,9 +4585,24 @@ class PhotoRedactorApp(tk.Tk):
     def delete_layer(self) -> None:
         if len(self.doc.layers) <= 1:
             return
+        selected = set(getattr(self, "selected_layer_ids", set()))
+        if len(selected) > 1:
+            active_id = self.doc.layer.id
+            deletions = [(index, copy.deepcopy(layer)) for index, layer in enumerate(self.doc.layers) if layer.id in selected]
+            if len(deletions) >= len(self.doc.layers):
+                deletions = deletions[1:]
+            deleted_ids = {layer.id for _, layer in deletions}
+            self.doc.layers = [layer for layer in self.doc.layers if layer.id not in deleted_ids]
+            self.doc.active_layer = min(self.doc.active_layer, len(self.doc.layers) - 1)
+            self.doc.dirty = True
+            self.selected_layer_ids = {self.doc.layer.id}
+            self.push_command(LayersDeleteCommand("Delete layers", deletions, active_id))
+            self.refresh()
+            return
         index = self.doc.active_layer
         deleted = copy.deepcopy(self.doc.layer)
         self.doc.delete_active_layer()
+        self.selected_layer_ids = {self.doc.layer.id}
         self.push_command(LayerDeleteCommand("Delete layer", index, deleted))
         self.refresh()
 
@@ -4539,8 +5503,18 @@ class PhotoRedactorApp(tk.Tk):
     def layer_selected(self, _event) -> None:
         sel = self.layer_list.curselection()
         if sel:
-            self.doc.active_layer = len(self.doc.layers) - 1 - sel[0]
-            self.refresh_layers()
+            self.selected_layer_ids = {self.doc.layers[len(self.doc.layers) - 1 - row].id for row in sel}
+            active_row = int(self.layer_list.index(tk.ACTIVE))
+            active_index = len(self.doc.layers) - 1 - active_row
+            if not (0 <= active_index < len(self.doc.layers)) or self.doc.layers[active_index].id not in self.selected_layer_ids:
+                active_index = len(self.doc.layers) - 1 - sel[0]
+            self.doc.active_layer = active_index
+            if self.tool.get() == "text" and self.doc.layer.kind == "text":
+                self.load_text_properties_from_layer(self.doc.layer)
+            self.layer_opacity.set(self.doc.layer.opacity)
+            self.blend_mode.set(self.doc.layer.blend_mode)
+            self.refresh_layer_previews()
+            self.info.configure(text=f"{self.doc.width} x {self.doc.height}px\nСлоев: {len(self.doc.layers)}\nВыбрано: {len(self.selected_layer_ids)}")
 
     def layer_list_click(self, event) -> str | None:
         if int(event.x) > 28 or not self.doc.layers:
@@ -4687,7 +5661,7 @@ class PhotoRedactorApp(tk.Tk):
         except ValueError:
             messagebox.showerror("Shape layer", "Use: shape,stroke_width,sides,inner_ratio[,p0x,p0y,p1x,p1y,p2x,p2y,p3x,p3y]")
             return
-        self.run_document_command(
+        self.run_shape_data_command(
             "Edit shape layer",
             lambda: self.doc.edit_shape_layer(shape=shape, fill=self.foreground, stroke=self.background, stroke_width=stroke_width, sides=sides, inner_ratio=inner_ratio, control_points=new_control_points),
         )
@@ -4732,8 +5706,12 @@ class PhotoRedactorApp(tk.Tk):
             canvas.create_line(*coords, fill="#50e3ff", width=3, smooth=True)
             for index, (px, py) in enumerate(p):
                 color = "#50e3ff" if index in {0, 3} else "#ffd166"
-                canvas.create_oval(px - 7, py - 7, px + 7, py + 7, fill=color, outline="#111318", width=2)
-                canvas.create_text(px, py - 14, text=f"P{index}", fill=color)
+                if index in {0, 3}:
+                    canvas.create_oval(px - 8, py - 8, px + 8, py + 8, fill=color, outline="#111318", width=2)
+                else:
+                    canvas.create_rectangle(px - 8, py - 8, px + 8, py + 8, fill=color, outline="#111318", width=2)
+                label = ("P0 начало", "P1 ручка", "P2 ручка", "P3 конец")[index]
+                canvas.create_text(px, py - 17, text=label, fill=color, font=("Segoe UI", 9, "bold"))
 
         def press(event) -> None:
             active_point[0] = None
@@ -4752,10 +5730,11 @@ class PhotoRedactorApp(tk.Tk):
             redraw()
 
         def accept() -> None:
-            self.run_document_command("Edit Bezier points", lambda: self.doc.edit_shape_layer(control_points=[tuple(point) for point in points]))
+            self.run_shape_data_command("Edit Bezier points", lambda: self.doc.edit_shape_layer(control_points=[tuple(point) for point in points]))
             dialog.destroy()
             self.refresh()
 
+        ttk.Label(buttons, text="Круги - концы, квадраты - управляющие ручки.").pack(side=tk.LEFT)
         ttk.Button(buttons, text="ОК", command=accept).pack(side=tk.RIGHT, padx=(6, 0))
         ttk.Button(buttons, text="Отмена", command=dialog.destroy).pack(side=tk.RIGHT)
         ToolTip(canvas, "Перетаскивайте конечные P0/P3 и управляющие P1/P2.")

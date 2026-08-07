@@ -36,6 +36,126 @@ BLEND_MODES = [
 ]
 
 
+@dataclass
+class SourceAnchor:
+    point: tuple[int, int] | None = None
+    stroke_source: tuple[int, int] | None = None
+    stroke_target: tuple[int, int] | None = None
+    aligned: bool = True
+    sampling: str = "current"
+    offset: tuple[int, int] | None = None
+
+    def set_source(self, point: tuple[int, int]) -> None:
+        self.point = (int(point[0]), int(point[1]))
+        self.stroke_source = None
+        self.stroke_target = None
+        self.offset = None
+
+    def begin_stroke(self, target: tuple[int, int]) -> bool:
+        if self.point is None:
+            return False
+        self.stroke_target = (int(target[0]), int(target[1]))
+        if self.aligned and self.offset is not None:
+            self.stroke_source = (self.stroke_target[0] + self.offset[0], self.stroke_target[1] + self.offset[1])
+        else:
+            self.stroke_source = self.point
+        if self.aligned and self.offset is None:
+            self.offset = (self.stroke_source[0] - self.stroke_target[0], self.stroke_source[1] - self.stroke_target[1])
+        return True
+
+    def source_for(self, target: tuple[int, int]) -> tuple[int, int] | None:
+        if self.point is None:
+            return None
+        if self.stroke_source is None or self.stroke_target is None:
+            return self.point
+        return (
+            self.stroke_source[0] + int(target[0]) - self.stroke_target[0],
+            self.stroke_source[1] + int(target[1]) - self.stroke_target[1],
+        )
+
+    def end_stroke(self) -> None:
+        self.stroke_source = None
+        self.stroke_target = None
+
+
+class GradientEngine:
+    TYPES = ("linear", "radial", "reflected", "diamond", "angular")
+
+    @staticmethod
+    def normalize_stops(stops: list[Any] | None) -> list[tuple[float, tuple[int, int, int, int]]]:
+        normalized: list[tuple[float, tuple[int, int, int, int]]] = []
+        for stop in stops or []:
+            if isinstance(stop, dict):
+                position, color = stop.get("position", 0.0), stop.get("color", [0, 0, 0, 255])
+            else:
+                position, color = stop
+            rgba = tuple(int(np.clip(value, 0, 255)) for value in list(color)[:4])
+            if len(rgba) == 3:
+                rgba = (*rgba, 255)
+            if len(rgba) != 4:
+                continue
+            normalized.append((float(np.clip(position, 0.0, 1.0)), rgba))
+        if len(normalized) < 2:
+            normalized = [(0.0, (0, 0, 0, 255)), (1.0, (255, 255, 255, 255))]
+        normalized.sort(key=lambda item: item[0])
+        return normalized
+
+    @staticmethod
+    def coordinates(
+        width: int,
+        height: int,
+        start: tuple[float, float],
+        end: tuple[float, float],
+        kind: str = "linear",
+        origin: tuple[float, float] = (0.0, 0.0),
+    ) -> np.ndarray:
+        yy, xx = np.mgrid[0:height, 0:width].astype(np.float32)
+        xx += float(origin[0])
+        yy += float(origin[1])
+        sx, sy = float(start[0]), float(start[1])
+        dx, dy = float(end[0]) - sx, float(end[1]) - sy
+        length = max(1e-6, math.hypot(dx, dy))
+        ux, uy = dx / length, dy / length
+        rx, ry = xx - sx, yy - sy
+        along = (rx * ux + ry * uy) / length
+        across = (-rx * uy + ry * ux) / length
+        kind = kind if kind in GradientEngine.TYPES else "linear"
+        if kind == "radial":
+            values = np.sqrt(rx * rx + ry * ry) / length
+        elif kind == "reflected":
+            values = np.abs(along)
+        elif kind == "diamond":
+            values = np.abs(along) + np.abs(across)
+        elif kind == "angular":
+            base = math.atan2(dy, dx)
+            values = (np.arctan2(ry, rx) - base) / (2.0 * math.pi)
+            values = np.mod(values, 1.0)
+        else:
+            values = along
+        return np.clip(values, 0.0, 1.0)
+
+    @classmethod
+    def render(
+        cls,
+        width: int,
+        height: int,
+        start: tuple[float, float],
+        end: tuple[float, float],
+        stops: list[Any] | None,
+        kind: str = "linear",
+        origin: tuple[float, float] = (0.0, 0.0),
+    ) -> np.ndarray:
+        values = cls.coordinates(width, height, start, end, kind, origin)
+        normalized = cls.normalize_stops(stops)
+        positions = np.array([item[0] for item in normalized], dtype=np.float32)
+        colors = np.array([item[1] for item in normalized], dtype=np.float32)
+        output = np.empty((height, width, 4), dtype=np.float32)
+        flat = values.reshape(-1)
+        for channel in range(4):
+            output[:, :, channel] = np.interp(flat, positions, colors[:, channel]).reshape(height, width)
+        return np.clip(output, 0, 255).astype(np.uint8)
+
+
 def blank_rgba(width: int, height: int, color=(255, 255, 255, 255)) -> np.ndarray:
     arr = np.zeros((height, width, 4), dtype=np.uint8)
     arr[:, :] = color
@@ -630,7 +750,7 @@ class Document:
         path_amount: int = 0,
         baseline_shift: int = 0,
         rotation: float = 0.0,
-    ) -> None:
+    ) -> Layer:
         layer = Layer(
             name=f"Text: {text[:24]}",
             pixels=blank_rgba(self.width, self.height, (0, 0, 0, 0)),
@@ -659,6 +779,7 @@ class Document:
         self.layers.append(layer)
         self.active_layer = len(self.layers) - 1
         self.dirty = True
+        return layer
 
     def add_shape_layer(
         self,
@@ -671,7 +792,9 @@ class Document:
         inner_ratio: float = 0.5,
         control_points: list[tuple[float, float]] | None = None,
         custom_points: list[tuple[float, float]] | None = None,
-    ) -> None:
+        gradient: dict[str, Any] | None = None,
+        texture: dict[str, Any] | None = None,
+    ) -> Layer:
         shape_box = normalized_box(box)
         if shape == "bezier" and control_points is None:
             x1, y1, x2, y2 = shape_box
@@ -690,12 +813,15 @@ class Document:
                 "inner_ratio": float(inner_ratio),
                 "control_points": None if control_points is None else [[float(x), float(y)] for x, y in control_points],
                 "custom_points": None if custom_points is None else [[float(x), float(y)] for x, y in custom_points],
+                "gradient": None if gradient is None else json.loads(json.dumps(gradient)),
+                "texture": None if texture is None else json.loads(json.dumps(texture)),
             },
         )
         render_shape_layer(layer)
         self.layers.append(layer)
         self.active_layer = len(self.layers) - 1
         self.dirty = True
+        return layer
 
     def edit_shape_layer(
         self,
@@ -1095,9 +1221,18 @@ class Document:
         lx, ly = int(x) - layer.x, int(y) - layer.y
         if lx < 0 or ly < 0 or lx >= layer.pixels.shape[1] or ly >= layer.pixels.shape[0]:
             return
-        seed = layer.pixels[ly, lx].astype(np.int16)
-        diff = np.abs(layer.pixels.astype(np.int16) - seed).max(axis=2)
-        local = (diff <= int(tolerance)).astype(np.uint8) * 255
+        tolerance = max(0, int(tolerance))
+        seed_rgba = layer.pixels[ly, lx]
+        if tolerance == 0:
+            local = np.all(layer.pixels == seed_rgba, axis=2).astype(np.uint8) * 255
+        else:
+            rgb = layer.pixels[:, :, :3].astype(np.float32) / 255.0
+            lab = cv2.cvtColor(rgb, cv2.COLOR_RGB2LAB)
+            seed_lab = lab[ly, lx]
+            color_distance = np.linalg.norm(lab - seed_lab, axis=2)
+            alpha_distance = np.abs(layer.pixels[:, :, 3].astype(np.float32) - float(seed_rgba[3])) / 255.0 * 100.0
+            perceptual_distance = np.sqrt(color_distance * color_distance + alpha_distance * alpha_distance)
+            local = (perceptual_distance <= tolerance * 0.8).astype(np.uint8) * 255
         self.apply_selection_mask(self._layer_mask_to_document(layer, local), mode)
 
     def _quick_selection_mask(
@@ -2595,33 +2730,38 @@ def clone_or_heal(
     heal: bool = False,
     selection_mask: np.ndarray | None = None,
     hardness: float = 0.5,
+    source_pixels: np.ndarray | None = None,
+    source_origin: tuple[int, int] | None = None,
 ) -> tuple[int, int, int, int] | None:
     if layer.locked:
         return None
     radius = max(1, int(radius))
-    sx, sy = int(source_x) - layer.x, int(source_y) - layer.y
+    source_image = layer.pixels if source_pixels is None else source_pixels
+    source_offset = (layer.x, layer.y) if source_origin is None else source_origin
+    sx, sy = int(source_x) - int(source_offset[0]), int(source_y) - int(source_offset[1])
     tx, ty = int(target_x) - layer.x, int(target_y) - layer.y
-    x1 = max(0, tx - radius)
-    y1 = max(0, ty - radius)
-    x2 = min(layer.pixels.shape[1], tx + radius + 1)
-    y2 = min(layer.pixels.shape[0], ty + radius + 1)
+    target_h, target_w = layer.pixels.shape[:2]
+    source_h, source_w = source_image.shape[:2]
+    ox1 = max(-radius, -tx, -sx)
+    oy1 = max(-radius, -ty, -sy)
+    ox2 = min(radius + 1, target_w - tx, source_w - sx)
+    oy2 = min(radius + 1, target_h - ty, source_h - sy)
+    x1, y1, x2, y2 = tx + ox1, ty + oy1, tx + ox2, ty + oy2
     if x1 >= x2 or y1 >= y2:
         return None
-    sx1 = sx + (x1 - tx)
-    sy1 = sy + (y1 - ty)
+    sx1 = sx + ox1
+    sy1 = sy + oy1
     sx2 = sx1 + (x2 - x1)
     sy2 = sy1 + (y2 - y1)
-    if sx1 < 0 or sy1 < 0 or sx2 > layer.pixels.shape[1] or sy2 > layer.pixels.shape[0]:
-        return None
     full_mask = retouch_falloff_mask(radius, hardness)
-    mx1 = x1 - (tx - radius)
-    my1 = y1 - (ty - radius)
+    mx1 = ox1 + radius
+    my1 = oy1 + radius
     mask = full_mask[my1 : my1 + (y2 - y1), mx1 : mx1 + (x2 - x1)].copy()
     if selection_mask is not None:
         mask *= selection_mask[y1:y2, x1:x2].astype(np.float32) / 255.0
         if not np.any(mask > 0.0):
             return None
-    src = layer.pixels[sy1:sy2, sx1:sx2].astype(np.float32)
+    src = source_image[sy1:sy2, sx1:sx2].astype(np.float32)
     dst = layer.pixels[y1:y2, x1:x2].astype(np.float32)
     edited = src.copy()
     if heal:
@@ -2707,28 +2847,27 @@ def flood_fill(layer: Layer, x: int, y: int, color: tuple[int, int, int, int], t
         layer.pixels[region] = np.array(color, dtype=np.uint8)
 
 
-def apply_gradient(layer: Layer, box: tuple[int, int, int, int], start: tuple[int, int, int, int], end: tuple[int, int, int, int], selection_mask: np.ndarray | None = None) -> None:
+def apply_gradient(
+    layer: Layer,
+    vector: tuple[int, int, int, int],
+    start: tuple[int, int, int, int],
+    end: tuple[int, int, int, int],
+    selection_mask: np.ndarray | None = None,
+    kind: str = "linear",
+    stops: list[Any] | None = None,
+) -> None:
     if layer.locked:
         return
-    x1, y1, x2, y2 = normalized_box(box)
-    x1 -= layer.x
-    x2 -= layer.x
-    y1 -= layer.y
-    y2 -= layer.y
-    x1, y1 = max(0, x1), max(0, y1)
-    x2, y2 = min(layer.pixels.shape[1], x2), min(layer.pixels.shape[0], y2)
-    if x1 >= x2 or y1 >= y2:
-        return
-    width = x2 - x1
-    t = np.linspace(0, 1, width, dtype=np.float32)
-    grad = np.array(start, dtype=np.float32) * (1 - t[:, None]) + np.array(end, dtype=np.float32) * t[:, None]
-    patch = np.tile(grad[None, :, :], (y2 - y1, 1, 1)).astype(np.uint8)
+    x1, y1, x2, y2 = (int(value) for value in vector)
+    gradient_stops = stops or [(0.0, start), (1.0, end)]
+    height, width = layer.pixels.shape[:2]
+    patch = GradientEngine.render(width, height, (x1, y1), (x2, y2), gradient_stops, kind, (layer.x, layer.y))
     if selection_mask is None:
-        layer.pixels[y1:y2, x1:x2] = patch
+        layer.pixels[:] = patch
     else:
-        coverage = selection_mask[y1:y2, x1:x2].astype(np.float32) / 255.0
-        target = layer.pixels[y1:y2, x1:x2].astype(np.float32)
-        layer.pixels[y1:y2, x1:x2] = np.clip(
+        coverage = selection_mask.astype(np.float32) / 255.0
+        target = layer.pixels.astype(np.float32)
+        layer.pixels[:] = np.clip(
             target * (1.0 - coverage[:, :, None]) + patch.astype(np.float32) * coverage[:, :, None],
             0,
             255,
@@ -2922,6 +3061,59 @@ def render_shape_layer(layer: Layer) -> None:
     data = layer.shape_data
     if str(data.get("shape", "rectangle")).lower() == "boolean":
         render_boolean_shape_layer(layer)
+        return
+    gradient = data.get("gradient")
+    if isinstance(gradient, dict):
+        height, width = layer.pixels.shape[:2]
+        mask = shape_data_to_mask(data, (height, width))
+        start = tuple(gradient.get("start", data.get("box", [0, 0])[:2]))
+        end = tuple(gradient.get("end", data.get("box", [0, 0, 1, 1])[2:4]))
+        pixels = GradientEngine.render(
+            width,
+            height,
+            start,
+            end,
+            gradient.get("stops"),
+            str(gradient.get("type", "linear")),
+        )
+        opacity = float(np.clip(gradient.get("opacity", 1.0), 0.0, 1.0))
+        pixels[:, :, 3] = np.clip(pixels[:, :, 3].astype(np.float32) * (mask.astype(np.float32) / 255.0) * opacity, 0, 255).astype(np.uint8)
+        stroke = data.get("stroke")
+        stroke_width = max(0, int(data.get("stroke_width", 0)))
+        if stroke is not None and stroke_width > 0:
+            stroke_color = np.array(stroke, dtype=np.uint8)
+            kernel = np.ones((stroke_width * 2 + 1, stroke_width * 2 + 1), dtype=np.uint8)
+            edge = (cv2.dilate(mask, kernel) > 0) & (cv2.erode(mask, kernel) == 0)
+            pixels[edge] = stroke_color
+        layer.pixels = pixels
+        return
+    texture = data.get("texture")
+    if isinstance(texture, dict):
+        height, width = layer.pixels.shape[:2]
+        mask = shape_data_to_mask(data, (height, width))
+        yy, xx = np.mgrid[0:height, 0:width]
+        size = max(2, int(texture.get("size", 18)))
+        kind = str(texture.get("type", "checker"))
+        if kind == "dots":
+            cx = np.mod(xx, size) - size / 2.0
+            cy = np.mod(yy, size) - size / 2.0
+            selector = (cx * cx + cy * cy) <= (size * 0.24) ** 2
+        elif kind == "stripes":
+            selector = np.mod((xx + yy) // size, 2) == 0
+        else:
+            selector = np.mod(xx // size + yy // size, 2) == 0
+        first = np.array(texture.get("color_a", data.get("fill", [255, 255, 255, 255])), dtype=np.uint8)
+        second = np.array(texture.get("color_b", data.get("stroke", [0, 0, 0, 255]) or [0, 0, 0, 255]), dtype=np.uint8)
+        pixels = np.where(selector[:, :, None], first, second).astype(np.uint8)
+        pixels[:, :, 3] = np.clip(pixels[:, :, 3].astype(np.float32) * (mask.astype(np.float32) / 255.0), 0, 255).astype(np.uint8)
+        stroke = data.get("stroke")
+        stroke_width = max(0, int(data.get("stroke_width", 0)))
+        if stroke is not None and stroke_width > 0:
+            stroke_color = np.array(stroke, dtype=np.uint8)
+            kernel = np.ones((stroke_width * 2 + 1, stroke_width * 2 + 1), dtype=np.uint8)
+            edge = (cv2.dilate(mask, kernel) > 0) & (cv2.erode(mask, kernel) == 0)
+            pixels[edge] = stroke_color
+        layer.pixels = pixels
         return
     pil = rgba_array_to_pil(layer.pixels)
     draw = ImageDraw.Draw(pil)

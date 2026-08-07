@@ -179,6 +179,64 @@ class StartupTests(unittest.TestCase):
         self.assertFalse(self.app.doc.layers[0].visible)
         self.assertEqual(self.app.doc.active_layer, active)
 
+    def test_shape_preview_reuses_one_canvas_item(self) -> None:
+        self.app.create_document_from_settings(
+            {"width": 160, "height": 100, "dpi": 72, "background": (255, 255, 255, 255), "include_clipboard": False}
+        )
+        self.app.tool.set("line_shape")
+        self.app.draw_selection((10, 10), (60, 30))
+        first = list(self.app._drag_preview_ids)
+        self.app.draw_selection((10, 10), (120, 70))
+        self.assertEqual(self.app._drag_preview_ids, first)
+        self.assertEqual(len(first), 1)
+
+    def test_ctrl_a_in_layers_selects_every_layer(self) -> None:
+        self.app.create_document_from_settings(
+            {"width": 80, "height": 60, "dpi": 72, "background": (255, 255, 255, 255), "include_clipboard": False}
+        )
+        self.app.doc.add_layer("Two")
+        self.app.doc.add_layer("Three")
+        self.app.refresh_layers()
+        self.app.layer_list.focus_set()
+        self.app.update()
+        self.app.shortcut_select_all()
+        self.assertEqual(len(self.app.layer_list.curselection()), 3)
+        self.assertEqual(len(self.app.selected_layer_ids), 3)
+
+    def test_delete_on_canvas_uses_exact_selection_and_undo(self) -> None:
+        self.app.create_document_from_settings(
+            {"width": 20, "height": 16, "dpi": 72, "background": (255, 255, 255, 255), "include_clipboard": False}
+        )
+        self.app.doc.set_rect_selection((4, 3, 12, 10))
+        self.app.delete_selected_pixels()
+        self.assertEqual(int(self.app.doc.layer.pixels[5, 6, 3]), 0)
+        self.assertEqual(int(self.app.doc.layer.pixels[1, 1, 3]), 255)
+        self.app.undo()
+        self.assertEqual(int(self.app.doc.layer.pixels[5, 6, 3]), 255)
+
+    def test_crop_waits_for_explicit_apply(self) -> None:
+        self.app.create_document_from_settings(
+            {"width": 100, "height": 80, "dpi": 72, "background": (255, 255, 255, 255), "include_clipboard": False}
+        )
+        self.app._crop_box = self.app.crop_box_for_drag((10, 12), (70, 62))
+        self.app.draw_crop_overlay(self.app._crop_box)
+        self.assertEqual((self.app.doc.width, self.app.doc.height), (100, 80))
+        self.app.apply_crop_overlay()
+        self.assertEqual((self.app.doc.width, self.app.doc.height), (60, 50))
+
+    def test_text_is_created_from_in_canvas_editor(self) -> None:
+        self.app.create_document_from_settings(
+            {"width": 240, "height": 140, "dpi": 72, "background": (255, 255, 255, 255), "include_clipboard": False}
+        )
+        self.app.tool.set("text")
+        self.app.begin_text_editor((20, 25), (180, 90))
+        self.assertIsNotNone(self.app._text_editor)
+        self.app._text_editor.insert("1.0", "Текст на холсте")
+        self.app.finish_text_edit()
+        self.assertEqual(self.app.doc.layer.kind, "text")
+        self.assertEqual(self.app.doc.layer.text_data["box_width"], 160)
+        self.assertIn("Текст на холсте", self.app.doc.layer.text_data["text"])
+
 
 if __name__ == "__main__":
     unittest.main()
