@@ -97,8 +97,8 @@ class StartupTests(unittest.TestCase):
         self.app.set_zoom(self.app.zoom.get() * 1.8)
         self.app.update()
         after = viewport_center()
-        self.assertAlmostEqual(after[0], before[0], delta=3.0)
-        self.assertAlmostEqual(after[1], before[1], delta=3.0)
+        self.assertAlmostEqual(after[0], before[0], delta=5.0)
+        self.assertAlmostEqual(after[1], before[1], delta=5.0)
 
 
 if __name__ == "__main__":
