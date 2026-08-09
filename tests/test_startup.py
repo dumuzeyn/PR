@@ -91,6 +91,31 @@ class StartupTests(unittest.TestCase):
         finally:
             tk.Toplevel.wait_window = original_wait
 
+    def test_new_document_preset_double_click_creates_selected_canvas(self) -> None:
+        original_wait = tk.Toplevel.wait_window
+
+        def choose_preset(_window, target=None) -> None:
+            binding = self.app._new_document_preset_canvas.tag_bind("preset-3", "<Double-Button-1>")
+            self.assertTrue(binding)
+            self.app._new_document_accept_preset(3)
+
+        tk.Toplevel.wait_window = choose_preset
+        try:
+            settings = self.app.new_document_dialog()
+        finally:
+            tk.Toplevel.wait_window = original_wait
+        preset = self.app.available_document_presets()[3]
+        self.assertIsNotNone(settings)
+        self.assertEqual((settings["width"], settings["height"]), (preset["width"], preset["height"]))
+
+    def test_editor_shows_tool_names_and_explicit_options_title(self) -> None:
+        move_button = self.app.tool_palette.buttons["move"]
+        self.assertEqual(str(move_button.cget("text")), "Перемещение")
+        self.assertEqual(str(move_button.cget("compound")), "left")
+        self.app.tool.set("blur_tool")
+        self.app.update()
+        self.assertEqual(str(self.app.tool_options_panel.title.cget("text")), "Параметры: Размытие")
+
     def test_custom_canvas_size_is_reused(self) -> None:
         self.app.save_settings = lambda: None
         self.app.remember_custom_canvas(777, 555, 144, "Прозрачный")
@@ -290,7 +315,7 @@ class StartupTests(unittest.TestCase):
         self.app.state("normal")
         self.app.geometry("1280x720+0+0")
         self.app.update()
-        minimum_canvas_width = 700 if self.app.winfo_width() >= 1200 else 620
+        minimum_canvas_width = 700 if self.app.winfo_width() >= 1200 else 520
         self.assertGreaterEqual(self.app.canvas.winfo_width(), minimum_canvas_width)
         self.assertGreaterEqual(self.app.canvas.winfo_height(), 520)
         self.assertLessEqual(self.app.right_tabs.winfo_width(), 360)

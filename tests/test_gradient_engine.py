@@ -67,3 +67,25 @@ def test_gradient_and_texture_shape_objects_stay_editable() -> None:
     assert texture_layer.shape_data["texture"]["type"] == "checker"
     colors = np.unique(texture_layer.pixels[6:20, 6:20, :3].reshape(-1, 3), axis=0)
     assert len(colors) == 2
+
+
+def test_gradient_shape_renders_only_its_local_region(monkeypatch) -> None:
+    calls: list[tuple[int, int]] = []
+    original = GradientEngine.render
+
+    def capture(width, height, *args, **kwargs):
+        calls.append((width, height))
+        return original(width, height, *args, **kwargs)
+
+    monkeypatch.setattr(GradientEngine, "render", staticmethod(capture))
+    document = Document.new(1800, 1200, (0, 0, 0, 0))
+    gradient = {
+        "type": "linear",
+        "start": [300, 240],
+        "end": [620, 500],
+        "stops": [{"position": 0.0, "color": list(BLACK)}, {"position": 1.0, "color": list(WHITE)}],
+    }
+    document.add_shape_layer("ellipse", (300, 240, 620, 500), BLACK, WHITE, 2, gradient=gradient)
+    assert calls
+    assert calls[-1][0] < document.width / 2
+    assert calls[-1][1] < document.height / 2

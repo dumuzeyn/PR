@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import tkinter as tk
 from PIL import Image, ImageDraw, ImageTk
 
@@ -117,5 +118,17 @@ def action_icon(master: tk.Misc, action: str, size: int = 15, color: str = TOKEN
         else:
             points = [(p(3), p(4)), (center, p(size - 4)), (p(size - 3), p(4))]
         draw.line(points, fill=color, width=width, joint="curve")
+    elif action == "settings":
+        radius = p(size * 0.28)
+        inner = p(size * 0.12)
+        for angle in range(0, 360, 45):
+            radians = math.radians(angle)
+            x1 = center + int(radius * 0.9 * math.cos(radians))
+            y1 = center + int(radius * 0.9 * math.sin(radians))
+            x2 = center + int(radius * 1.35 * math.cos(radians))
+            y2 = center + int(radius * 1.35 * math.sin(radians))
+            draw.line((x1, y1, x2, y2), fill=color, width=width)
+        draw.ellipse((center - radius, center - radius, center + radius, center + radius), outline=color, width=width)
+        draw.ellipse((center - inner, center - inner, center + inner, center + inner), outline=color, width=width)
     image = image.resize((size, size), Image.Resampling.LANCZOS)
     return ImageTk.PhotoImage(image, master=master)

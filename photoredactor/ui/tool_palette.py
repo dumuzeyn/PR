@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from tkinter import messagebox, ttk
 
 from .scrollable_frame import ScrollableFrame
-from .icons import SHORTCUTS, TOOL_GROUPS, tool_icon
+from .icons import SHORTCUTS, TOOL_GROUPS, action_icon, tool_icon
 from .theme import TOKENS
 
 ToolDefinition = tuple[str, str, str]
@@ -54,11 +54,19 @@ class ToolPalette(ttk.Frame):
         self.tooltip_factory = tooltip_factory
         self._images: dict[str, tk.PhotoImage] = {}
         header = ttk.Frame(self)
-        header.pack(fill=tk.X, padx=5, pady=(6, 3))
-        settings_image = tool_icon(self, "custom_shape", 17, TOKENS.TEXT_SECONDARY)
+        header.pack(fill=tk.X, padx=8, pady=(8, 5))
+        ttk.Label(header, text="Инструменты", style="PanelTitle.TLabel").pack(side=tk.LEFT)
+        settings_image = action_icon(self, "settings", 15, TOKENS.TEXT_SECONDARY)
         self._images["settings"] = settings_image
-        settings = ttk.Button(header, image=settings_image, command=configure_tools, width=3)
-        settings.pack(anchor=tk.CENTER)
+        settings = ttk.Button(
+            header,
+            image=settings_image,
+            text="Настроить",
+            compound=tk.LEFT,
+            command=configure_tools,
+            style="Quiet.TButton",
+        )
+        settings.pack(side=tk.RIGHT)
         if self.tooltip_factory is not None:
             self.tooltip_factory(settings, "Настроить панель инструментов")
         self.scroller = ScrollableFrame(self, height=280)
@@ -91,13 +99,15 @@ class ToolPalette(ttk.Frame):
             button = ttk.Radiobutton(
                 self.scroller.content,
                 image=image,
+                text=label,
+                compound=tk.LEFT,
                 value=value,
                 variable=self.tool_var,
                 command=lambda v=value: self.select_tool(v),
                 style="Tool.TRadiobutton",
                 takefocus=True,
             )
-            button.pack(anchor=tk.CENTER, padx=2, pady=(top_pad, 1))
+            button.pack(fill=tk.X, padx=3, pady=(top_pad, 1))
             if self.tooltip_factory is not None:
                 shortcut = SHORTCUTS.get(value)
                 title = f"{label} ({shortcut})" if shortcut else label

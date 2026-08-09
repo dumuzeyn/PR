@@ -3463,14 +3463,19 @@ def render_shape_layer(layer: Layer) -> None:
     gradient = data.get("gradient")
     if isinstance(gradient, dict):
         height, width = layer.pixels.shape[:2]
-        mask = shape_data_to_mask(data, (height, width))
-        start = tuple(gradient.get("start", data.get("box", [0, 0])[:2]))
-        end = tuple(gradient.get("end", data.get("box", [0, 0, 1, 1])[2:4]))
+        region = shape_render_region(data, width, height)
+        if region is None:
+            return
+        x1, y1, x2, y2 = region
+        local_data = translated_shape_data(data, -x1, -y1)
+        mask = shape_data_to_mask(local_data, (y2 - y1, x2 - x1))
+        start = tuple(float(value) for value in gradient.get("start", data.get("box", [0, 0])[:2]))
+        end = tuple(float(value) for value in gradient.get("end", data.get("box", [0, 0, 1, 1])[2:4]))
         pixels = GradientEngine.render(
-            width,
-            height,
-            start,
-            end,
+            x2 - x1,
+            y2 - y1,
+            (start[0] - x1, start[1] - y1),
+            (end[0] - x1, end[1] - y1),
             gradient.get("stops"),
             str(gradient.get("type", "linear")),
         )
@@ -3483,13 +3488,18 @@ def render_shape_layer(layer: Layer) -> None:
             kernel = np.ones((stroke_width * 2 + 1, stroke_width * 2 + 1), dtype=np.uint8)
             edge = (cv2.dilate(mask, kernel) > 0) & (cv2.erode(mask, kernel) == 0)
             pixels[edge] = stroke_color
-        layer.pixels = pixels
+        layer.pixels[y1:y2, x1:x2] = pixels
         return
     texture = data.get("texture")
     if isinstance(texture, dict):
         height, width = layer.pixels.shape[:2]
-        mask = shape_data_to_mask(data, (height, width))
-        yy, xx = np.mgrid[0:height, 0:width]
+        region = shape_render_region(data, width, height)
+        if region is None:
+            return
+        x1, y1, x2, y2 = region
+        local_data = translated_shape_data(data, -x1, -y1)
+        mask = shape_data_to_mask(local_data, (y2 - y1, x2 - x1))
+        yy, xx = np.mgrid[y1:y2, x1:x2]
         size = max(2, int(texture.get("size", 18)))
         kind = str(texture.get("type", "checker"))
         if kind == "dots":
@@ -3511,7 +3521,7 @@ def render_shape_layer(layer: Layer) -> None:
             kernel = np.ones((stroke_width * 2 + 1, stroke_width * 2 + 1), dtype=np.uint8)
             edge = (cv2.dilate(mask, kernel) > 0) & (cv2.erode(mask, kernel) == 0)
             pixels[edge] = stroke_color
-        layer.pixels = pixels
+        layer.pixels[y1:y2, x1:x2] = pixels
         return
     pil = rgba_array_to_pil(layer.pixels)
     draw = ImageDraw.Draw(pil)
@@ -3546,6 +3556,26 @@ def render_shape_layer(layer: Layer) -> None:
     else:
         draw.rectangle(box, fill=fill, outline=outline, width=stroke_width)
     layer.pixels = pil_to_rgba_array(pil)
+
+
+def shape_render_region(data: dict[str, Any], width: int, height: int) -> tuple[int, int, int, int] | None:
+    box = normalized_box(tuple(int(value) for value in data.get("box", [0, 0, 1, 1])))
+    margin = max(1, int(data.get("stroke_width", 0)) * 2 + 1)
+    x1 = max(0, box[0] - margin)
+    y1 = max(0, box[1] - margin)
+    x2 = min(width, box[2] + margin + 1)
+    y2 = min(height, box[3] + margin + 1)
+    return None if x1 >= x2 or y1 >= y2 else (x1, y1, x2, y2)
+
+
+def translated_shape_data(data: dict[str, Any], dx: int, dy: int) -> dict[str, Any]:
+    translated = dict(data)
+    box = list(data.get("box", [0, 0, 1, 1]))
+    translated["box"] = [box[0] + dx, box[1] + dy, box[2] + dx, box[3] + dy]
+    points = data.get("control_points")
+    if isinstance(points, list):
+        translated["control_points"] = [[float(point[0]) + dx, float(point[1]) + dy] for point in points]
+    return translated
 
 
 def render_boolean_shape_layer(layer: Layer) -> None:

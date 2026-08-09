@@ -20,7 +20,7 @@
 - Layer import: place embedded images, place linked images, update/relink linked layers and load several image files as layers.
 - Shape layers: editable rectangle, ellipse, line, Bezier curve, polygon, star and boolean-combination layers.
 - View helpers: grid overlay, numeric guides and channel preview for RGB/Red/Green/Blue/Alpha.
-- UI: centralized dark DesignTokens theme, compact icon toolbar with Russian tooltips and shortcuts, horizontal contextual options, tabbed Properties/Layers/History, visible color swatches, canvas-first responsive layout and compact status feedback.
+- UI: centralized neutral DesignTokens theme with light controls and a dark canvas workspace, readable icon-and-name toolbar with Russian tooltips and shortcuts, explicitly labeled horizontal contextual options, tabbed Properties/Layers/History, visible color swatches, canvas-first responsive layout and compact status feedback.
 - Object UX: corner-based shape creation with Shift/Alt modifiers, reusable real-shape preview items, direct alpha-aware Shape/Text selection, topmost visible-layer mapping, synchronized canvas/layer selection, screen-stable handles, modifier-aware resize and keyboard nudging.
 - Analysis: eyedropper, metadata/EXIF viewer, histogram and image statistics.
 - Recovery and automation: autosave recovery file, manual recovery opening and action recording to JSON logs.

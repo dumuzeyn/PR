@@ -451,6 +451,7 @@ class PhotoRedactorApp(tk.Tk):
         self._drag_preview_ids: list[int] = []
         self._gradient_preview_id: int | None = None
         self._gradient_preview_image: ImageTk.PhotoImage | None = None
+        self._last_gradient_preview_at = 0.0
         self._crop_box: tuple[int, int, int, int] | None = None
         self._crop_overlay_ids: list[int] = []
         self._crop_drag_handle: str | None = None
@@ -760,18 +761,18 @@ class PhotoRedactorApp(tk.Tk):
         ToolTip(open_button, "Открывает PNG, JPEG, WebP, BMP, TIFF и проекты PhotoRedactor.")
 
         if clipboard_image is not None:
-            clipboard_box = tk.Frame(actions, background="#292d32", padx=12, pady=12)
+            clipboard_box = tk.Frame(actions, background=TOKENS.SURFACE_HOVER, padx=12, pady=12)
             clipboard_box.pack(fill=tk.X, pady=(12, 8))
             preview = clipboard_image.copy()
             preview.thumbnail((72, 72), Image.Resampling.LANCZOS)
-            preview_canvas = Image.new("RGBA", (72, 72), (55, 59, 65, 255))
+            preview_canvas = Image.new("RGBA", (72, 72), (228, 230, 232, 255))
             preview_canvas.alpha_composite(preview, ((72 - preview.width) // 2, (72 - preview.height) // 2))
             self._startup_clipboard_preview = ImageTk.PhotoImage(preview_canvas)
-            tk.Label(clipboard_box, image=self._startup_clipboard_preview, background="#292d32").pack(side=tk.LEFT, padx=(0, 12))
-            clipboard_text = tk.Frame(clipboard_box, background="#292d32")
+            tk.Label(clipboard_box, image=self._startup_clipboard_preview, background=TOKENS.SURFACE_HOVER).pack(side=tk.LEFT, padx=(0, 12))
+            clipboard_text = tk.Frame(clipboard_box, background=TOKENS.SURFACE_HOVER)
             clipboard_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-            tk.Label(clipboard_text, text="Изображение в буфере", font=("Segoe UI Semibold", 10), foreground="#f5f7fa", background="#292d32").pack(anchor=tk.W)
-            tk.Label(clipboard_text, text=f"{clipboard_image.width} x {clipboard_image.height} px", foreground="#aeb5bf", background="#292d32").pack(anchor=tk.W)
+            tk.Label(clipboard_text, text="Изображение в буфере", font=("Segoe UI Semibold", 10), foreground=TOKENS.TEXT_PRIMARY, background=TOKENS.SURFACE_HOVER).pack(anchor=tk.W)
+            tk.Label(clipboard_text, text=f"{clipboard_image.width} x {clipboard_image.height} px", foreground=TOKENS.TEXT_SECONDARY, background=TOKENS.SURFACE_HOVER).pack(anchor=tk.W)
             paste_button = ttk.Button(clipboard_text, text="Открыть как новый холст", command=self.create_from_clipboard)
             paste_button.pack(anchor=tk.W, pady=(7, 0))
             ToolTip(paste_button, "Создает холст точно по размеру изображения в буфере.")
@@ -916,7 +917,7 @@ class PhotoRedactorApp(tk.Tk):
         self._build_menu()
         self.editor_root = ttk.Frame(self, style="App.TFrame")
         self.editor_root.pack(fill=tk.BOTH, expand=True)
-        options_bar = ttk.Frame(self.editor_root, style="Topbar.TFrame", height=42)
+        options_bar = ttk.Frame(self.editor_root, style="Topbar.TFrame", height=46)
         options_bar.pack(fill=tk.X)
         options_bar.pack_propagate(False)
         self._build_tool_options(options_bar)
@@ -924,7 +925,7 @@ class PhotoRedactorApp(tk.Tk):
         root = ttk.PanedWindow(self.editor_root, orient=tk.HORIZONTAL)
         root.pack(fill=tk.BOTH, expand=True)
 
-        left = ttk.Frame(root, width=58, style="Panel.TFrame")
+        left = ttk.Frame(root, width=188, style="Panel.TFrame")
         center = ttk.Frame(root, style="Workspace.TFrame")
         right = ttk.Frame(root, width=292, style="Panel.TFrame")
         root.add(left, weight=0)
@@ -1381,7 +1382,7 @@ class PhotoRedactorApp(tk.Tk):
         view.add_command(label="Настроить панель инструментов...", command=self.configure_tool_palette)
 
     def _build_tools(self, parent: ttk.Frame) -> None:
-        parent.configure(width=58)
+        parent.configure(width=188)
         parent.pack_propagate(False)
         self.tool_palette = ToolPalette(
             parent,
@@ -3853,6 +3854,13 @@ class PhotoRedactorApp(tk.Tk):
     def update_gradient_preview(self, start: tuple[int, int], end: tuple[int, int]) -> None:
         if start == end:
             return
+        if self.gradient_mode.get() == "Объект":
+            now = time.perf_counter()
+            if now - self._last_gradient_preview_at < 1 / 30:
+                return
+            self._last_gradient_preview_at = now
+            self.update_gradient_object_preview(start, end)
+            return
         pixels = GradientEngine.render(
             self.doc.width,
             self.doc.height,
@@ -3862,41 +3870,7 @@ class PhotoRedactorApp(tk.Tk):
             self.current_gradient_kind(),
         )
         alpha = np.full((self.doc.height, self.doc.width), 190, dtype=np.uint8)
-        if self.gradient_mode.get() == "Объект":
-            if self.gradient_object_fill.get() == "Текстура":
-                yy, xx = np.mgrid[0:self.doc.height, 0:self.doc.width]
-                size = 18
-                texture_kind = self.gradient_texture.get()
-                if texture_kind == "Точки":
-                    dx = np.mod(xx, size) - size / 2.0
-                    dy = np.mod(yy, size) - size / 2.0
-                    selector = (dx * dx + dy * dy) <= (size * 0.24) ** 2
-                elif texture_kind == "Полосы":
-                    selector = np.mod((xx + yy) // size, 2) == 0
-                else:
-                    selector = np.mod(xx // size + yy // size, 2) == 0
-                pixels = np.where(selector[:, :, None], np.array(self.foreground), np.array(self.background)).astype(np.uint8)
-            mask_image = Image.new("L", (self.doc.width, self.doc.height), 0)
-            draw = ImageDraw.Draw(mask_image)
-            box = (
-                min(int(start[0]), int(end[0])),
-                min(int(start[1]), int(end[1])),
-                max(int(start[0]), int(end[0])),
-                max(int(start[1]), int(end[1])),
-            )
-            shape = self.gradient_shape.get()
-            if shape == "Эллипс":
-                draw.ellipse(box, fill=220)
-            elif shape == "Многоугольник":
-                draw.polygon(regular_polygon_points(box, max(3, int(self.polygon_sides.get()))), fill=220)
-            elif shape == "Звезда":
-                draw.polygon(star_points(box, max(3, int(self.star_points_count.get())), float(self.star_inner_ratio.get())), fill=220)
-            elif shape == "Произвольная":
-                draw.polygon(custom_shape_points(CUSTOM_SHAPE_PRESETS.get(self.custom_shape_preset.get()), box), fill=220)
-            else:
-                draw.rectangle(box, fill=220)
-            alpha = np.array(mask_image, dtype=np.uint8)
-        elif self.doc.selection_mask is not None:
+        if self.doc.selection_mask is not None:
             alpha = np.minimum(alpha, self.doc.selection_mask)
         pixels[:, :, 3] = np.minimum(pixels[:, :, 3], alpha)
         image = Image.fromarray(pixels, "RGBA")
@@ -3917,11 +3891,61 @@ class PhotoRedactorApp(tk.Tk):
         for item_id in self._drag_preview_ids:
             self.canvas.tag_raise(item_id)
 
+    def update_gradient_object_preview(self, start: tuple[int, int], end: tuple[int, int]) -> None:
+        x1, x2 = sorted((int(start[0]), int(end[0])))
+        y1, y2 = sorted((int(start[1]), int(end[1])))
+        scale = max(0.01, float(self.zoom.get()))
+        width = max(2, round((x2 - x1) * scale))
+        height = max(2, round((y2 - y1) * scale))
+        local_start = ((start[0] - x1) * scale, (start[1] - y1) * scale)
+        local_end = ((end[0] - x1) * scale, (end[1] - y1) * scale)
+        if self.gradient_object_fill.get() == "Текстура":
+            yy, xx = np.mgrid[0:height, 0:width]
+            size = max(2, round(18 * scale))
+            texture_kind = self.gradient_texture.get()
+            if texture_kind == "Точки":
+                dx = np.mod(xx, size) - size / 2.0
+                dy = np.mod(yy, size) - size / 2.0
+                selector = (dx * dx + dy * dy) <= (size * 0.24) ** 2
+            elif texture_kind == "Полосы":
+                selector = np.mod((xx + yy) // size, 2) == 0
+            else:
+                selector = np.mod(xx // size + yy // size, 2) == 0
+            pixels = np.where(selector[:, :, None], np.array(self.foreground), np.array(self.background)).astype(np.uint8)
+        else:
+            pixels = GradientEngine.render(width, height, local_start, local_end, self.current_gradient_stops(), self.current_gradient_kind())
+        mask_image = Image.new("L", (width, height), 0)
+        draw = ImageDraw.Draw(mask_image)
+        box = (0, 0, width - 1, height - 1)
+        shape = self.gradient_shape.get()
+        if shape == "Эллипс":
+            draw.ellipse(box, fill=220)
+        elif shape == "Многоугольник":
+            draw.polygon(regular_polygon_points(box, max(3, int(self.polygon_sides.get()))), fill=220)
+        elif shape == "Звезда":
+            draw.polygon(star_points(box, max(3, int(self.star_points_count.get())), float(self.star_inner_ratio.get())), fill=220)
+        elif shape == "Произвольная":
+            draw.polygon(custom_shape_points(CUSTOM_SHAPE_PRESETS.get(self.custom_shape_preset.get()), box), fill=220)
+        else:
+            draw.rectangle(box, fill=220)
+        pixels[:, :, 3] = np.minimum(pixels[:, :, 3], np.array(mask_image, dtype=np.uint8))
+        self._gradient_preview_image = ImageTk.PhotoImage(Image.fromarray(pixels, "RGBA"))
+        x, y = self.doc_to_canvas(x1, y1)
+        if self._gradient_preview_id is None:
+            self._gradient_preview_id = self.canvas.create_image(x, y, image=self._gradient_preview_image, anchor=tk.NW)
+        else:
+            self.canvas.coords(self._gradient_preview_id, x, y)
+            self.canvas.itemconfigure(self._gradient_preview_id, image=self._gradient_preview_image)
+        self.canvas.tag_raise(self._gradient_preview_id)
+        for item_id in self._drag_preview_ids:
+            self.canvas.tag_raise(item_id)
+
     def clear_gradient_preview(self) -> None:
         if self._gradient_preview_id is not None:
             self.canvas.delete(self._gradient_preview_id)
             self._gradient_preview_id = None
         self._gradient_preview_image = None
+        self._last_gradient_preview_at = 0.0
 
     def create_gradient_object(self, start: tuple[int, int], end: tuple[int, int]) -> None:
         shape = {
@@ -4827,7 +4851,19 @@ class PhotoRedactorApp(tk.Tk):
                 self.remember_custom_canvas(canvas_width, canvas_height, canvas_dpi, background.get())
             dialog.destroy()
 
+        def accept_preset(index: int) -> str:
+            select_preset(index)
+            accept()
+            return "break"
+
         swap_button.configure(command=swap_orientation)
+        for index in range(len(presets)):
+            preset_list.tag_bind(
+                f"preset-{index}",
+                "<Double-Button-1>",
+                lambda _event, selected=index: accept_preset(selected),
+            )
+        self._new_document_accept_preset = accept_preset
         preset_list.bind("<Up>", lambda _event: move_preset_selection(-1))
         preset_list.bind("<Down>", lambda _event: move_preset_selection(1))
         preset_list.bind("<MouseWheel>", scroll_presets)

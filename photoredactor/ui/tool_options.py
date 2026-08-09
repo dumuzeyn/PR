@@ -145,8 +145,10 @@ class ToolOptionsPanel(ttk.Frame):
         self._gradient_render_after_id: str | None = None
         self.gradient_mode.trace_add("write", self._gradient_layout_changed)
         self.gradient_object_fill.trace_add("write", self._gradient_layout_changed)
-        self.title = ttk.Label(self, text="Параметры инструмента")
-        self.title.pack(side=tk.LEFT if compact else tk.TOP, anchor=tk.W, padx=(10, 8), pady=7)
+        self.title = ttk.Label(self, text="Параметры инструмента", style="ToolOptionsTitle.TLabel" if compact else "TLabel")
+        self.title.pack(side=tk.LEFT if compact else tk.TOP, anchor=tk.W, padx=(4, 8), pady=4 if compact else 7)
+        if compact:
+            ttk.Separator(self, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=(0, 5), pady=7)
         self.body = ttk.Frame(self)
         self.body.pack(side=tk.LEFT if compact else tk.TOP, fill=tk.BOTH, expand=True)
         self.render()
@@ -166,7 +168,7 @@ class ToolOptionsPanel(ttk.Frame):
             child.destroy()
         tool = self.tool_var.get()
         label = self.label_by_id.get(tool, tool)
-        self.title.configure(text=label)
+        self.title.configure(text=f"Параметры: {label}" if self.compact else label)
         if self.compact:
             self._render_compact(tool)
             return

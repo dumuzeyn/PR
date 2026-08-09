@@ -7,20 +7,20 @@ from tkinter import ttk
 
 @dataclass(frozen=True)
 class DesignTokens:
-    BACKGROUND: str = "#17191d"
-    WORKSPACE: str = "#202329"
-    SURFACE: str = "#1e2126"
-    SURFACE_HOVER: str = "#292d34"
-    SURFACE_ACTIVE: str = "#15171b"
-    SURFACE_SELECTED: str = "#24384a"
-    BORDER: str = "#343941"
-    BORDER_ACTIVE: str = "#4aa8f0"
-    TEXT_PRIMARY: str = "#e7eaee"
-    TEXT_SECONDARY: str = "#9da5af"
-    TEXT_DISABLED: str = "#656c75"
-    ACCENT: str = "#3b9ee8"
-    ACCENT_HOVER: str = "#55adf0"
-    DANGER: str = "#e05d68"
+    BACKGROUND: str = "#e8e9eb"
+    WORKSPACE: str = "#34363a"
+    SURFACE: str = "#f4f4f5"
+    SURFACE_HOVER: str = "#e4e6e8"
+    SURFACE_ACTIVE: str = "#d7dade"
+    SURFACE_SELECTED: str = "#d6e7f4"
+    BORDER: str = "#b8bdc3"
+    BORDER_ACTIVE: str = "#2f78b7"
+    TEXT_PRIMARY: str = "#1d2329"
+    TEXT_SECONDARY: str = "#5f6872"
+    TEXT_DISABLED: str = "#989fa7"
+    ACCENT: str = "#2f78b7"
+    ACCENT_HOVER: str = "#3f87c2"
+    DANGER: str = "#b23b45"
     SPACING_XS: int = 4
     SPACING_SM: int = 8
     SPACING_MD: int = 12
@@ -75,6 +75,8 @@ def configure_theme(root: tk.Misc, tokens: DesignTokens = TOKENS) -> ttk.Style:
     )
     style.configure("Primary.TButton", background=tokens.ACCENT, foreground="#ffffff", bordercolor=tokens.ACCENT, padding=(10, 5))
     style.map("Primary.TButton", background=[("active", tokens.ACCENT_HOVER), ("pressed", tokens.ACCENT)])
+    style.configure("Quiet.TButton", background=tokens.SURFACE, bordercolor=tokens.SURFACE, padding=(5, 3))
+    style.map("Quiet.TButton", background=[("active", tokens.SURFACE_HOVER), ("pressed", tokens.SURFACE_ACTIVE)])
     style.configure("Danger.TButton", foreground=tokens.DANGER)
     style.configure(
         "Tool.TRadiobutton",
@@ -82,7 +84,7 @@ def configure_theme(root: tk.Misc, tokens: DesignTokens = TOKENS) -> ttk.Style:
         foreground=tokens.TEXT_PRIMARY,
         indicatorcolor=tokens.SURFACE,
         borderwidth=0,
-        padding=7,
+        padding=(8, 6),
         relief="flat",
     )
     style.layout(
@@ -92,8 +94,15 @@ def configure_theme(root: tk.Misc, tokens: DesignTokens = TOKENS) -> ttk.Style:
     style.map(
         "Tool.TRadiobutton",
         background=[("selected", tokens.SURFACE_SELECTED), ("active", tokens.SURFACE_HOVER)],
-        foreground=[("selected", tokens.ACCENT)],
+        foreground=[("selected", tokens.TEXT_PRIMARY)],
         indicatorcolor=[("selected", tokens.ACCENT)],
+    )
+    style.configure(
+        "ToolOptionsTitle.TLabel",
+        background=tokens.BACKGROUND,
+        foreground=tokens.TEXT_PRIMARY,
+        font=("Segoe UI Semibold", 9),
+        padding=(10, 5),
     )
     for widget in ("TEntry", "TSpinbox", "TCombobox"):
         style.configure(widget, fieldbackground=tokens.SURFACE_HOVER, background=tokens.SURFACE_HOVER, foreground=tokens.TEXT_PRIMARY, bordercolor=tokens.BORDER, arrowcolor=tokens.TEXT_SECONDARY, padding=4)
@@ -104,7 +113,7 @@ def configure_theme(root: tk.Misc, tokens: DesignTokens = TOKENS) -> ttk.Style:
     style.configure("TScrollbar", background=tokens.SURFACE_HOVER, troughcolor=tokens.SURFACE, bordercolor=tokens.SURFACE, arrowcolor=tokens.TEXT_SECONDARY, width=9)
     style.map("TScrollbar", background=[("active", tokens.TEXT_DISABLED)])
     style.configure("TNotebook", background=tokens.SURFACE, borderwidth=0, tabmargins=0)
-    style.configure("TNotebook.Tab", background=tokens.SURFACE, foreground=tokens.TEXT_SECONDARY, padding=(10, 7), borderwidth=0)
+    style.configure("TNotebook.Tab", background=tokens.SURFACE_HOVER, foreground=tokens.TEXT_SECONDARY, padding=(10, 7), borderwidth=0)
     style.map("TNotebook.Tab", background=[("selected", tokens.SURFACE_SELECTED), ("active", tokens.SURFACE_HOVER)], foreground=[("selected", tokens.TEXT_PRIMARY)])
     style.configure("TPanedwindow", background=tokens.BORDER, sashwidth=1)
     style.configure("TSeparator", background=tokens.BORDER)

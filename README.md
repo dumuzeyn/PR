@@ -26,7 +26,7 @@ This repository starts with a real working editor and an architecture intended t
 - text layer font, size, block width, wrapping, alignment, line-spacing, tracking, bold/italic/underline, baseline shift, text-on-arc/wave and editable transform handles
 - grid and guide overlays plus RGB/Red/Green/Blue/Alpha channel preview
 - Russian main interface labels and hover tooltips for the tool palette
-- modern dark desktop layout with an icon toolbar, contextual options across the top, a canvas-first workspace, tabbed Properties/Layers/History and a compact status bar
+- neutral light desktop panels with a dark canvas workspace, a named icon-and-text toolbar, clearly labeled contextual options across the top, tabbed Properties/Layers/History and a compact status bar
 - direct Shape/Text selection on the canvas with auto-select, synchronized layers, eight resize handles, modifier-aware resize and arrow-key nudging
 - recovery autosave and manual recovery opening
 - replayable action recording in JSON v2, action playback and batch execution
@@ -55,6 +55,10 @@ This repository starts with a real working editor and an architecture intended t
 .\run.ps1
 ```
 
+## Dependency policy
+
+PhotoRedactor does not depend on placeholder packages or simulated AI libraries. Runtime dependencies are established projects installed from their real distributions: NumPy, OpenCV, Pillow and rawpy. New dependencies must be checked for a genuine upstream project, an importable implementation and actual use in the packaged application before they are added.
+
 ## Build exe
 
 ```powershell
@@ -81,8 +85,8 @@ Every push to `master` starts the `Build PhotoRedactor for Windows` workflow. Op
 
 ## Tool panel
 
-- The left side is a narrow, scrollable icon toolbar grouped by purpose. Names, shortcuts and explanations appear in tooltips.
-- The contextual options bar is horizontal at the top and only shows controls for the active tool. Rare controls stay under `Дополнительно`.
+- The left side is a scrollable icon-and-name toolbar, so tools remain understandable without memorizing symbols. Shortcuts and explanations also appear in tooltips.
+- The contextual options bar is horizontal at the top, starts with `Параметры: <инструмент>` and only shows controls for the active tool. Rare controls stay under `Дополнительно`.
 - Gradient controls change with the mode: raster fill, gradient object and texture object do not show each other's irrelevant settings.
 - Foreground/background, fill/stroke and gradient colors are shown as clickable color swatches instead of duplicate text buttons.
 - `Инструменты -> Настроить панель инструментов...` changes visible tools and their order.
