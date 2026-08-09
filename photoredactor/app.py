@@ -974,6 +974,7 @@ class PhotoRedactorApp(tk.Tk):
         }
         for sequence, callback in bindings.items():
             self.bind_all(sequence, callback)
+        self.bind_all("<Control-KeyPress>", self.shortcut_control_key)
         tool_shortcuts = {
             "v": "move", "h": "hand", "b": "brush", "e": "eraser", "j": "healing", "s": "clone",
             "g": "gradient", "t": "text", "i": "eyedropper", "c": "crop", "m": "select", "l": "lasso",
@@ -981,6 +982,44 @@ class PhotoRedactorApp(tk.Tk):
         }
         for key, tool in tool_shortcuts.items():
             self.bind_all(f"<Key-{key}>", lambda _event, value=tool: self.shortcut_tool(value))
+
+    def shortcut_control_key(self, event):
+        """Use physical Windows key codes so shortcuts survive a Russian layout."""
+        callbacks_by_keycode = {
+            90: self.shortcut_undo,
+            89: self.shortcut_redo,
+            83: self.shortcut_save,
+            79: self.shortcut_open,
+            78: self.shortcut_new,
+            65: self.shortcut_select_all,
+            67: self.shortcut_copy,
+            88: self.shortcut_cut,
+            86: self.shortcut_paste,
+        }
+        callbacks_by_keysym = {
+            "z": self.shortcut_undo,
+            "cyrillic_ya": self.shortcut_undo,
+            "y": self.shortcut_redo,
+            "cyrillic_en": self.shortcut_redo,
+            "s": self.shortcut_save,
+            "cyrillic_yeru": self.shortcut_save,
+            "o": self.shortcut_open,
+            "cyrillic_shcha": self.shortcut_open,
+            "n": self.shortcut_new,
+            "cyrillic_te": self.shortcut_new,
+            "a": self.shortcut_select_all,
+            "cyrillic_ef": self.shortcut_select_all,
+            "c": self.shortcut_copy,
+            "cyrillic_es": self.shortcut_copy,
+            "x": self.shortcut_cut,
+            "cyrillic_che": self.shortcut_cut,
+            "v": self.shortcut_paste,
+            "cyrillic_em": self.shortcut_paste,
+        }
+        callback = callbacks_by_keycode.get(int(getattr(event, "keycode", -1)))
+        if callback is None:
+            callback = callbacks_by_keysym.get(str(getattr(event, "keysym", "")).lower())
+        return callback(event) if callback is not None else None
 
     def shortcut_tool(self, tool: str):
         if self.shortcut_context() == "canvas" and self._editor_active:

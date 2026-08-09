@@ -116,6 +116,14 @@ class StartupTests(unittest.TestCase):
         self.app.update()
         self.assertEqual(str(self.app.tool_options_panel.title.cget("text")), "Параметры: Размытие")
 
+    def test_ctrl_z_uses_physical_key_with_russian_layout(self) -> None:
+        calls: list[str] = []
+        self.app._editor_active = True
+        self.app.undo = lambda: calls.append("undo")
+        event = SimpleNamespace(keycode=90, keysym="Cyrillic_ya", state=0x0004)
+        self.assertEqual(self.app.shortcut_control_key(event), "break")
+        self.assertEqual(calls, ["undo"])
+
     def test_custom_canvas_size_is_reused(self) -> None:
         self.app.save_settings = lambda: None
         self.app.remember_custom_canvas(777, 555, 144, "Прозрачный")

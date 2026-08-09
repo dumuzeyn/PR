@@ -4,6 +4,7 @@ import tkinter as tk
 from types import SimpleNamespace
 import unittest
 
+from photoredactor.ui.icons import TOOL_GROUPS, tool_icon_bitmap
 from photoredactor.ui.tool_palette import ToolPaletteDialog
 
 
@@ -78,6 +79,12 @@ class ToolPaletteDialogTests(unittest.TestCase):
         self.dialog.update()
         self.assertEqual(self.dialog.order, ["second", "third", "first"])
         self.assertIsNone(self.dialog._drag_ghost)
+
+    def test_every_tool_has_a_nonempty_distinct_icon(self) -> None:
+        bitmaps = {tool: tool_icon_bitmap(tool, 24) for tool in TOOL_GROUPS}
+        signatures = {tool: bitmap.tobytes() for tool, bitmap in bitmaps.items()}
+        self.assertTrue(all(bitmap.getbbox() is not None for bitmap in bitmaps.values()))
+        self.assertEqual(len(set(signatures.values())), len(signatures))
 
 
 if __name__ == "__main__":
