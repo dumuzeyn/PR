@@ -1,0 +1,21 @@
+{
+  "format": "PhotoRedactor action v2",
+  "name": "Веб-миниатюра",
+  "steps": [
+    {
+      "command": "resize_image",
+      "params": {
+        "width": 1280,
+        "height": 720
+      },
+      "label": "Размер 1280 x 720"
+    },
+    {
+      "command": "set_bit_depth",
+      "params": {
+        "bit_depth": 8
+      },
+      "label": "8 бит"
+    }
+  ]
+}

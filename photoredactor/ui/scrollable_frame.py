@@ -5,13 +5,13 @@ from tkinter import ttk
 
 
 class ScrollableFrame(ttk.Frame):
-    def __init__(self, parent: tk.Widget, *, height: int = 260) -> None:
+    def __init__(self, parent: tk.Widget, *, height: int = 260, width: int = 240) -> None:
         super().__init__(parent)
         self.canvas = tk.Canvas(self, highlightthickness=0, borderwidth=0)
         self.scrollbar = ttk.Scrollbar(self, orient=tk.VERTICAL, command=self.canvas.yview)
         self.content = ttk.Frame(self.canvas)
         self._window_id = self.canvas.create_window((0, 0), window=self.content, anchor=tk.NW)
-        self.canvas.configure(yscrollcommand=self.scrollbar.set, height=height)
+        self.canvas.configure(yscrollcommand=self.scrollbar.set, height=height, width=width)
         self.canvas.grid(row=0, column=0, sticky="nsew")
         self.scrollbar.grid(row=0, column=1, sticky="ns")
         self.rowconfigure(0, weight=1)
@@ -53,4 +53,3 @@ class ScrollableFrame(ttk.Frame):
         if self.scrollbar.winfo_ismapped():
             self.canvas.yview_scroll(-1 if event.delta > 0 else 1, "units")
         return "break"
-

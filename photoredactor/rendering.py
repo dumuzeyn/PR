@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 import json
+import os
 from typing import Iterable
 
 import cv2
@@ -19,6 +20,7 @@ from .core import (
     render_layer_effects,
 )
 from .performance import PerformanceProfiler, profiler
+from .large_document import MipmapPyramid, ScratchCache, gpu_status
 
 
 Rect = tuple[int, int, int, int]
@@ -34,12 +36,17 @@ class RenderEngine:
         self._document: Document | None = None
         self._composites: dict[bool, np.ndarray] = {}
         self._dirty_tiles: dict[bool, set[Tile]] = {False: set(), True: set()}
-        self._filtered_cache: dict[str, tuple[tuple[object, ...], np.ndarray]] = {}
+        cache_mb = max(16, int(os.environ.get("PHOTO_REDACTOR_CACHE_MB", "256")))
+        self.scratch = ScratchCache(memory_limit=cache_mb * 1024 * 1024)
+        self.mipmaps = MipmapPyramid(self.scratch)
+        self.gpu = gpu_status()
+        self._filtered_cache: dict[str, tuple[object, ...]] = {}
         self._mask_cache: dict[str, tuple[tuple[object, ...], np.ndarray | None]] = {}
         self._effects_cache: dict[str, tuple[tuple[object, ...], list[tuple[np.ndarray, int, int, float, str]]]] = {}
         self._filter_dirty: dict[str, Rect] = {}
         self._mask_dirty: dict[str, Rect] = {}
         self._last_changed_tiles: set[Tile] = set()
+        self._render_revision = 0
 
     def ensure_document(self, document: Document) -> None:
         if self._document is document:
@@ -52,6 +59,7 @@ class RenderEngine:
 
     def clear_layer_caches(self) -> None:
         self._filtered_cache.clear()
+        self.scratch.clear()
         self._mask_cache.clear()
         self._effects_cache.clear()
         self._filter_dirty.clear()
@@ -78,7 +86,9 @@ class RenderEngine:
         if clipped is None:
             return
         if layer is not None:
-            if kind == "mask":
+            if kind == "transform":
+                pass
+            elif kind == "mask":
                 layer.touch_mask()
                 if source_rect is not None:
                     local = (
@@ -114,6 +124,7 @@ class RenderEngine:
             self._dirty_tiles[checker].clear()
             self._last_changed_tiles = set(self.all_tiles(document))
             self.profiler.count("render.full")
+            self._render_revision += 1
             return cached
 
         dirty = self._dirty_tiles[checker]
@@ -127,11 +138,16 @@ class RenderEngine:
             self.profiler.count("render.partial")
             self.profiler.count("render.tiles_composited", len(dirty))
             dirty.clear()
+            self._render_revision += 1
         return cached
 
     @property
     def last_changed_tiles(self) -> set[Tile]:
         return set(self._last_changed_tiles)
+
+    @property
+    def render_revision(self) -> int:
+        return self._render_revision
 
     def composite_region(self, document: Document, rect: Rect, checker: bool = False) -> np.ndarray:
         x1, y1, x2, y2 = rect
@@ -148,6 +164,9 @@ class RenderEngine:
                 shifted = replace(layer, x=layer.x - x1, y=layer.y - y1)
                 apply_adjustment_layer(out, shifted, clipping)
                 continue
+            if not self._layer_intersects_region(layer, rect):
+                previous_alpha = np.zeros((y2 - y1, x2 - x1), dtype=np.uint8)
+                continue
             pixels = self.filtered_pixels(layer)
             alpha_mask = self.layer_mask(layer) if layer.mask_enabled else None
             if layer.clipping and previous_alpha is not None:
@@ -159,25 +178,58 @@ class RenderEngine:
             previous_alpha = self._layer_alpha_region(rect, layer, pixels, alpha_mask)
         return out
 
+    def _layer_intersects_region(self, layer: Layer, rect: Rect) -> bool:
+        if layer.kind == "shape" and layer.shape_data is not None:
+            raw_box = layer.shape_data.get("box", [0, 0, 1, 1])
+            sx1, sx2 = sorted((int(raw_box[0]) + layer.x, int(raw_box[2]) + layer.x))
+            sy1, sy2 = sorted((int(raw_box[1]) + layer.y, int(raw_box[3]) + layer.y))
+            stroke = max(1, int(layer.shape_data.get("stroke_width", 0)))
+            bounds = (sx1 - stroke, sy1 - stroke, sx2 + stroke + 1, sy2 + stroke + 1)
+        else:
+            height, width = layer.pixels.shape[:2]
+            bounds = (layer.x, layer.y, layer.x + width, layer.y + height)
+        if layer.filters:
+            bounds = self._expand_rect(bounds, self._filter_halo(layer.filters))
+        bounds = self._expand_for_effects(bounds, layer)
+        return bounds[0] < rect[2] and bounds[2] > rect[0] and bounds[1] < rect[3] and bounds[3] > rect[1]
+
     def filtered_pixels(self, layer: Layer) -> np.ndarray:
         signature = (layer.pixels_revision, self._json_signature(layer.filters))
-        cached = self._filtered_cache.get(layer.id)
-        if cached is not None and cached[0] == signature:
+        cached_signature = self._filtered_cache.get(layer.id)
+        cache_key = ("filtered", layer.id, signature)
+        old_cache_key = ("filtered", layer.id, cached_signature) if cached_signature is not None else None
+        cached = self.scratch.get(old_cache_key) if old_cache_key is not None else None
+        if cached is not None and cached_signature == signature:
             self.profiler.count("render.filter_cache_hit")
-            return cached[1]
+            return cached
         dirty = self._filter_dirty.pop(layer.id, None)
         if cached is not None and dirty is not None and layer.filters and self._supports_local_filters(layer.filters):
             with self.profiler.measure("render.filter_stack.partial"):
-                pixels = cached[1]
+                pixels = cached
                 self._update_filtered_region(layer, pixels, dirty)
-            self._filtered_cache[layer.id] = (signature, pixels)
+            self._filtered_cache[layer.id] = signature
+            self.scratch.put(cache_key, pixels)
+            if old_cache_key != cache_key:
+                self.scratch.delete(old_cache_key)
             self.profiler.count("render.filter_partial")
             return pixels
         with self.profiler.measure("render.filter_stack"):
             pixels = layer.pixels if not layer.filters else apply_filter_stack(layer.pixels, layer.filters)
-        self._filtered_cache[layer.id] = (signature, pixels)
+        self._filtered_cache[layer.id] = signature
+        self.scratch.put(cache_key, pixels)
+        if old_cache_key is not None and old_cache_key != cache_key:
+            self.scratch.delete(old_cache_key)
         self.profiler.count("render.filter_cache_miss")
         return pixels
+
+    def render_for_zoom(self, document: Document, zoom: float, checker: bool = True) -> tuple[np.ndarray, int]:
+        """Return an appropriately sized mipmap for zoomed-out canvas display."""
+        composite = self.render(document, checker)
+        key = (id(document), checker, document.width, document.height, self._render_revision)
+        return self.mipmaps.for_zoom(key, composite, zoom)
+
+    def cache_status(self) -> dict[str, object]:
+        return {**self.scratch.stats, "gpu": dict(self.gpu)}
 
     def _update_filtered_region(self, layer: Layer, filtered: np.ndarray, dirty: Rect) -> None:
         halo = self._filter_halo(layer.filters)

@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 import base64
+import hashlib
 import io
 import json
 import math
@@ -15,6 +16,7 @@ import numpy as np
 from PIL import ExifTags, Image, ImageDraw, ImageFont
 
 from .performance import profiled, profiler
+from .color_management import BIT_DEPTHS, COLOR_MODELS, color_settings, convert_icc, display_rgba, profile_bytes, profile_name, quantize_rgba, rgb_to_cmyk, rgb_to_lab
 
 
 _checker_cache: dict[tuple[int, int, int], np.ndarray] = {}
@@ -34,6 +36,7 @@ BLEND_MODES = [
     "Color",
     "Luminosity",
 ]
+RAW_EXTENSIONS = {".3fr", ".arw", ".cr2", ".cr3", ".dng", ".erf", ".kdc", ".mef", ".mos", ".mrw", ".nef", ".nrw", ".orf", ".pef", ".raf", ".raw", ".rw2", ".sr2", ".srf", ".x3f"}
 
 
 @dataclass
@@ -180,6 +183,17 @@ def decode_png(text: str) -> np.ndarray:
     return pil_to_rgba_array(Image.open(io.BytesIO(base64.b64decode(text))))
 
 
+def file_fingerprint(path: str | Path) -> dict[str, Any]:
+    """Return a stable linked-file identity without keeping the file open."""
+    source = Path(path)
+    stat = source.stat()
+    digest = hashlib.sha256()
+    with source.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return {"size": int(stat.st_size), "mtime_ns": int(stat.st_mtime_ns), "sha256": digest.hexdigest()}
+
+
 def image_metadata(image: Image.Image, path: str | Path) -> dict[str, Any]:
     metadata: dict[str, Any] = {
         "source_path": str(path),
@@ -228,12 +242,25 @@ class Layer:
     shape_data: dict[str, Any] | None = None
     adjustment: dict[str, Any] | None = None
     smart_data: dict[str, Any] | None = None
+    smart_source: np.ndarray | None = field(default=None, repr=False, compare=False)
+    working_pixels: np.ndarray | None = field(default=None, repr=False, compare=False)
+    working_model: str = "RGBA"
     id: str = field(default_factory=lambda: uuid.uuid4().hex)
     pixels_revision: int = field(default=0, repr=False, compare=False)
     mask_revision: int = field(default=0, repr=False, compare=False)
 
     def touch_pixels(self) -> None:
         self.pixels_revision += 1
+        if self.working_pixels is not None:
+            if self.working_model == "Lab":
+                self.working_pixels = rgb_to_lab(self.pixels)
+            elif self.working_model == "CMYK":
+                alpha = self.pixels[:, :, 3].astype(np.float32) / 255.0
+                self.working_pixels = np.dstack((rgb_to_cmyk(self.pixels), alpha))
+            elif self.working_pixels.dtype == np.uint16:
+                self.working_pixels = self.pixels.astype(np.uint16) * 257
+            elif self.working_pixels.dtype == np.float32:
+                self.working_pixels = self.pixels.astype(np.float32) / 255.0
 
     def touch_mask(self) -> None:
         self.mask_revision += 1
@@ -261,6 +288,9 @@ class Layer:
             shape_data=None if self.shape_data is None else json.loads(json.dumps(self.shape_data)),
             adjustment=None if self.adjustment is None else dict(self.adjustment),
             smart_data=None if self.smart_data is None else json.loads(json.dumps(self.smart_data, ensure_ascii=False)),
+            smart_source=None if self.smart_source is None else self.smart_source.copy(),
+            working_pixels=None if self.working_pixels is None else self.working_pixels.copy(),
+            working_model=self.working_model,
         )
 
 
@@ -288,6 +318,8 @@ class Document:
 
     @classmethod
     def from_image(cls, path: str | Path) -> "Document":
+        if Path(path).suffix.lower() in RAW_EXTENSIONS:
+            return cls.from_raw(path)
         image = Image.open(path)
         arr = pil_to_rgba_array(image)
         h, w = arr.shape[:2]
@@ -295,6 +327,40 @@ class Document:
         doc = cls(width=w, height=h, dpi=dpi, metadata=image_metadata(image, path))
         doc.layers.append(Layer(Path(path).stem, arr))
         doc.path = str(path)
+        return doc
+
+    @classmethod
+    def from_raw(cls, path: str | Path) -> "Document":
+        try:
+            import rawpy
+        except ImportError as exc:
+            raise RuntimeError("Для открытия RAW требуется компонент rawpy. Переустановите полную сборку PhotoRedactor.") from exc
+        with rawpy.imread(str(path)) as raw:
+            rgb16 = raw.postprocess(use_camera_wb=True, output_bps=16, no_auto_bright=False)
+            rgba16 = np.dstack((rgb16, np.full(rgb16.shape[:2], 65535, dtype=np.uint16)))
+            metadata = raw.metadata
+            white_balance = raw.camera_whitebalance
+            raw_info = {
+                "camera": " ".join(part for part in (str(metadata.make or ""), str(metadata.model or "")) if part).strip(),
+                "iso": float(metadata.iso_speed or 0),
+                "shutter": float(metadata.shutter or 0),
+                "aperture": float(metadata.aperture or 0),
+                "focal_length": float(metadata.focal_len or 0),
+                "timestamp": str(metadata.timestamp or ""),
+                "white_balance": [] if white_balance is None else [float(value) for value in white_balance],
+            }
+        h, w = rgba16.shape[:2]
+        layer = Layer(Path(path).stem, display_rgba(rgba16), working_pixels=rgba16)
+        doc = cls(
+            width=w,
+            height=h,
+            bit_depth=16,
+            metadata={"source": str(Path(path).resolve()), "format": "RAW", "raw": raw_info},
+            layers=[layer],
+            path=str(path),
+        )
+        doc.assign_color_profile("sRGB")
+        doc.dirty = False
         return doc
 
     @property
@@ -343,6 +409,9 @@ class Document:
                     "shape_data": None if layer.shape_data is None else dict(layer.shape_data),
                     "adjustment": None if layer.adjustment is None else dict(layer.adjustment),
                     "smart_data": None if layer.smart_data is None else json.loads(json.dumps(layer.smart_data, ensure_ascii=False)),
+                    "smart_source": None if layer.smart_source is None else layer.smart_source.copy(),
+                    "working_pixels": None if layer.working_pixels is None else layer.working_pixels.copy(),
+                    "working_model": layer.working_model,
                     "pixels": layer.pixels.copy(),
                 }
                 for layer in self.layers
@@ -387,6 +456,9 @@ class Document:
                     shape_data=raw.get("shape_data"),
                     adjustment=raw.get("adjustment"),
                     smart_data=raw.get("smart_data"),
+                    smart_source=None if raw.get("smart_source") is None else raw["smart_source"].copy(),
+                    working_pixels=None if raw.get("working_pixels") is None else raw["working_pixels"].copy(),
+                    working_model=raw.get("working_model", "RGBA"),
                     id=raw.get("id", uuid.uuid4().hex),
                 )
             )
@@ -426,6 +498,7 @@ class Document:
                     "shape_data": layer.shape_data,
                     "adjustment": layer.adjustment,
                     "smart_data": layer.smart_data,
+                    "smart_source": None if layer.smart_source is None else encode_png(layer.smart_source),
                     "pixels": encode_png(layer.pixels),
                 }
                 for layer in self.layers
@@ -467,6 +540,7 @@ class Document:
                     shape_data=raw.get("shape_data"),
                     adjustment=raw.get("adjustment"),
                     smart_data=raw.get("smart_data"),
+                    smart_source=None if raw.get("smart_source") is None else decode_png(raw["smart_source"]),
                     id=raw.get("id", uuid.uuid4().hex),
                 )
             )
@@ -527,12 +601,23 @@ class Document:
                         "shape_data": layer.shape_data,
                         "adjustment": layer.adjustment,
                         "smart_data": layer.smart_data,
+                        "smart_source": f"smart/{i:04d}.png" if layer.smart_source is not None else None,
+                        "working_pixels": f"working/{i:04d}.npy" if layer.working_pixels is not None else None,
+                        "working_model": layer.working_model,
                         "pixels": layer_path,
                     }
                 )
                 buf = io.BytesIO()
                 rgba_array_to_pil(layer.pixels).save(buf, "PNG")
                 zf.writestr(layer_path, buf.getvalue())
+                if layer.smart_source is not None:
+                    smart_buf = io.BytesIO()
+                    rgba_array_to_pil(layer.smart_source).save(smart_buf, "PNG")
+                    zf.writestr(f"smart/{i:04d}.png", smart_buf.getvalue())
+                if layer.working_pixels is not None:
+                    working_buf = io.BytesIO()
+                    np.save(working_buf, layer.working_pixels, allow_pickle=False)
+                    zf.writestr(f"working/{i:04d}.npy", working_buf.getvalue())
                 if layer.mask is not None:
                     mask_buf = io.BytesIO()
                     rgba_array_to_pil(np.dstack([layer.mask] * 4)).save(mask_buf, "PNG")
@@ -586,6 +671,9 @@ class Document:
                         shape_data=raw.get("shape_data"),
                         adjustment=raw.get("adjustment"),
                         smart_data=raw.get("smart_data"),
+                        smart_source=None if not raw.get("smart_source") else pil_to_rgba_array(Image.open(io.BytesIO(zf.read(raw["smart_source"])))),
+                        working_pixels=None if not raw.get("working_pixels") else np.load(io.BytesIO(zf.read(raw["working_pixels"])), allow_pickle=False),
+                        working_model=raw.get("working_model", "RGBA"),
                         id=raw.get("id", uuid.uuid4().hex),
                     )
                 )
@@ -620,15 +708,75 @@ class Document:
             return out
 
     def export_flat(self, path: str | Path, quality: int = 95) -> None:
-        img = rgba_array_to_pil(self.composite(checker=False))
+        composite = self.composite(checker=False)
+        img = rgba_array_to_pil(composite)
         suffix = Path(path).suffix.lower()
         if suffix in [".jpg", ".jpeg"]:
             img.convert("RGB").save(path, quality=max(1, min(100, int(quality))), subsampling=0)
         elif suffix == ".webp":
             img.save(path, quality=max(1, min(100, int(quality))))
+        elif suffix in {".tif", ".tiff"} and self.bit_depth == 16:
+            bgra = cv2.cvtColor(composite.astype(np.uint16) * 257, cv2.COLOR_RGBA2BGRA)
+            if not cv2.imwrite(str(path), bgra):
+                raise OSError(f"Could not write TIFF: {path}")
         else:
             img.save(path)
         self.dirty = False
+
+    def set_bit_depth(self, bit_depth: int) -> None:
+        bit_depth = int(bit_depth)
+        if bit_depth not in BIT_DEPTHS:
+            raise ValueError("Bit depth must be 8, 16 or 32")
+        for layer in self.layers:
+            if layer.working_model == "RGBA":
+                source = layer.working_pixels if layer.working_pixels is not None else layer.pixels
+                layer.working_pixels = None if bit_depth == 8 else quantize_rgba(source, bit_depth)
+                layer.pixels = display_rgba(source)
+            layer.pixels_revision += 1
+        self.bit_depth = bit_depth
+        self.metadata["bit_depth"] = bit_depth
+        self.dirty = True
+
+    def set_color_model(self, color_model: str) -> None:
+        if color_model not in COLOR_MODELS:
+            raise ValueError(f"Unsupported color model: {color_model}")
+        for layer in self.layers:
+            if layer.kind == "adjustment" or layer.pixels.size == 0:
+                continue
+            if color_model == "Lab":
+                layer.working_pixels = rgb_to_lab(layer.pixels)
+            elif color_model == "CMYK":
+                alpha = layer.pixels[:, :, 3].astype(np.float32) / 255.0
+                layer.working_pixels = np.dstack((rgb_to_cmyk(layer.pixels), alpha))
+            else:
+                layer.working_pixels = None if self.bit_depth == 8 else quantize_rgba(layer.pixels, self.bit_depth)
+            layer.working_model = color_model
+            layer.pixels_revision += 1
+        self.color_model = color_model
+        self.metadata["color_model"] = color_model
+        self.dirty = True
+
+    def assign_color_profile(self, profile: str | Path | bytes | None) -> None:
+        settings = color_settings(self.metadata)
+        settings["profile_name"] = profile_name(profile)
+        raw = profile_bytes(profile)
+        if raw is None:
+            settings.pop("icc_base64", None)
+        else:
+            settings["icc_base64"] = base64.b64encode(raw).decode("ascii")
+        self.dirty = True
+
+    def convert_color_profile(self, destination: str | Path | bytes | None) -> None:
+        settings = color_settings(self.metadata)
+        encoded = settings.get("icc_base64")
+        source: str | bytes | None = base64.b64decode(encoded) if encoded else settings.get("profile_name", "sRGB")
+        for layer in self.layers:
+            if layer.kind == "adjustment" or layer.pixels.size == 0:
+                continue
+            layer.pixels = convert_icc(layer.pixels, source, destination)
+            layer.touch_pixels()
+        self.assign_color_profile(destination)
+        self.dirty = True
 
     def add_layer(self, name="Layer", pixels: np.ndarray | None = None) -> None:
         if pixels is None:
@@ -672,7 +820,7 @@ class Document:
         self.dirty = True
         return True
 
-    def place_image(self, path: str | Path, linked: bool = False) -> None:
+    def place_image(self, path: str | Path, linked: bool = False) -> Layer:
         image = Image.open(path)
         pixels = pil_to_rgba_array(image)
         h, w = pixels.shape[:2]
@@ -687,7 +835,10 @@ class Document:
                 "linked": bool(linked),
                 "source_path": source_path,
                 "original_size": [w, h],
+                "fingerprint": file_fingerprint(source_path),
+                "transform": {"width": w, "height": h, "angle": 0.0, "flip_horizontal": False, "flip_vertical": False},
             },
+            smart_source=pixels.copy(),
         )
         self.layers.append(layer)
         self.active_layer = len(self.layers) - 1
@@ -695,6 +846,23 @@ class Document:
         embedded.append({"name": layer.name, "source_path": source_path, "size": [w, h], "linked": bool(linked)})
         self.metadata["embedded_images"] = embedded
         self.dirty = True
+        return layer
+
+    def linked_layer_status(self, layer: Layer | None = None) -> dict[str, Any]:
+        layer = layer or self.layer
+        data = layer.smart_data or {}
+        path = data.get("source_path")
+        if layer.kind != "linked" or not path:
+            return {"status": "embedded", "path": path}
+        if not Path(path).exists():
+            return {"status": "missing", "path": path}
+        saved = data.get("fingerprint") or {}
+        stat = Path(path).stat()
+        if saved and int(saved.get("size", -1)) == stat.st_size and int(saved.get("mtime_ns", -1)) == stat.st_mtime_ns:
+            return {"status": "current", "path": path, "saved": saved, "current": saved}
+        current = file_fingerprint(path)
+        modified = bool(saved) and (current.get("sha256") != saved.get("sha256"))
+        return {"status": "modified" if modified else "current", "path": path, "saved": saved, "current": current}
 
     def update_linked_layer(self) -> bool:
         layer = self.layer
@@ -705,17 +873,17 @@ class Document:
         image = Image.open(source_path)
         pixels = pil_to_rgba_array(image)
         source_h, source_w = pixels.shape[:2]
-        target_h, target_w = layer.pixels.shape[:2]
-        if (source_w, source_h) != (target_w, target_h):
-            pixels = cv2.resize(pixels, (target_w, target_h), interpolation=cv2.INTER_CUBIC)
-        layer.pixels = pixels
+        layer.smart_source = pixels.copy()
         layer.kind = "linked"
         layer.smart_data = {
             **smart_data,
             "linked": True,
             "source_path": str(Path(source_path).resolve()),
             "original_size": [source_w, source_h],
+            "fingerprint": file_fingerprint(source_path),
         }
+        render_smart_object(layer)
+        layer.touch_pixels()
         self.dirty = True
         return True
 
@@ -730,6 +898,54 @@ class Document:
             "source_path": str(Path(path).resolve()),
         }
         return self.update_linked_layer()
+
+    def convert_active_smart_to_embedded(self) -> bool:
+        layer = self.layer
+        if layer.kind not in {"linked", "embedded"}:
+            return False
+        layer.kind = "embedded"
+        layer.smart_data = {**(layer.smart_data or {}), "linked": False}
+        self.dirty = True
+        return True
+
+    def replace_active_smart_contents(self, path: str | Path, linked: bool | None = None) -> bool:
+        layer = self.layer
+        if layer.kind not in {"linked", "embedded"} or not Path(path).exists():
+            return False
+        pixels = pil_to_rgba_array(Image.open(path))
+        h, w = pixels.shape[:2]
+        keep_linked = layer.kind == "linked" if linked is None else bool(linked)
+        layer.smart_source = pixels.copy()
+        layer.kind = "linked" if keep_linked else "embedded"
+        layer.smart_data = {
+            **(layer.smart_data or {}),
+            "linked": keep_linked,
+            "source_path": str(Path(path).resolve()),
+            "original_size": [w, h],
+            "fingerprint": file_fingerprint(path),
+        }
+        render_smart_object(layer)
+        layer.touch_pixels()
+        self.dirty = True
+        return True
+
+    def reset_active_smart_transform(self) -> bool:
+        layer = self.layer
+        if layer.kind not in {"linked", "embedded"} or layer.smart_source is None:
+            return False
+        center_x = layer.x + layer.pixels.shape[1] / 2.0
+        center_y = layer.y + layer.pixels.shape[0] / 2.0
+        h, w = layer.smart_source.shape[:2]
+        layer.smart_data = {
+            **(layer.smart_data or {}),
+            "transform": {"width": w, "height": h, "angle": 0.0, "flip_horizontal": False, "flip_vertical": False},
+        }
+        render_smart_object(layer)
+        layer.x = round(center_x - w / 2.0)
+        layer.y = round(center_y - h / 2.0)
+        layer.touch_pixels()
+        self.dirty = True
+        return True
 
     def add_text_layer(
         self,
@@ -1065,11 +1281,21 @@ class Document:
         for layer in self.layers:
             new_w = max(1, round(layer.pixels.shape[1] * width / self.width))
             new_h = max(1, round(layer.pixels.shape[0] * height / self.height))
-            layer.pixels = cv2.resize(layer.pixels, (new_w, new_h), interpolation=interpolation)
+            if layer.kind in {"linked", "embedded"} and layer.smart_source is not None:
+                data = dict(layer.smart_data or {})
+                transform = dict(data.get("transform") or {})
+                transform["width"] = max(1, round(int(transform.get("width", layer.smart_source.shape[1])) * width / self.width))
+                transform["height"] = max(1, round(int(transform.get("height", layer.smart_source.shape[0])) * height / self.height))
+                data["transform"] = transform
+                layer.smart_data = data
+                render_smart_object(layer)
+            else:
+                layer.pixels = cv2.resize(layer.pixels, (new_w, new_h), interpolation=interpolation)
             if layer.mask is not None:
-                layer.mask = cv2.resize(layer.mask, (new_w, new_h), interpolation=cv2.INTER_NEAREST)
+                layer.mask = cv2.resize(layer.mask, (layer.pixels.shape[1], layer.pixels.shape[0]), interpolation=cv2.INTER_NEAREST)
             layer.x = round(layer.x * width / self.width)
             layer.y = round(layer.y * height / self.height)
+            layer.touch_pixels()
         self.width, self.height = width, height
         if self.selection_mask is not None:
             self.selection_mask = cv2.resize(self.selection_mask, (width, height), interpolation=cv2.INTER_NEAREST)
@@ -1101,6 +1327,39 @@ class Document:
                 new_mask[y1:y2, x1:x2] = mask[sy1 : sy1 + (y2 - y1), sx1 : sx1 + (x2 - x1)]
             self.saved_selections[name] = new_mask
         self.dirty = True
+
+    def generative_expand(self, left: int, top: int, right: int, bottom: int, method: str = "content-aware") -> Layer:
+        left, top, right, bottom = (max(0, int(value)) for value in (left, top, right, bottom))
+        if left + top + right + bottom == 0:
+            raise ValueError("At least one expansion margin must be greater than zero")
+        original = self.composite(False)
+        expanded = generative_expand_pixels(original, left, top, right, bottom, method)
+        generated = expanded.copy()
+        generated[top : top + self.height, left : left + self.width] = 0
+        for layer in self.layers:
+            layer.x += left
+            layer.y += top
+        generated_layer = Layer("Генеративное расширение", generated)
+        self.layers.insert(0, generated_layer)
+        self.active_layer += 1
+        self.width += left + right
+        self.height += top + bottom
+        if self.selection_mask is not None:
+            selection = np.zeros((self.height, self.width), dtype=np.uint8)
+            selection[top : top + self.selection_mask.shape[0], left : left + self.selection_mask.shape[1]] = self.selection_mask
+            self.selection_mask = selection
+        self.saved_selections = {
+            name: _expanded_mask(mask, left, top, self.width, self.height) for name, mask in self.saved_selections.items()
+        }
+        self.metadata["last_generative_expand"] = {
+            "left": left,
+            "top": top,
+            "right": right,
+            "bottom": bottom,
+            "method": method,
+        }
+        self.dirty = True
+        return generated_layer
 
     def crop(self, box: tuple[int, int, int, int]) -> None:
         x1, y1, x2, y2 = normalized_box(box)
@@ -1675,6 +1934,36 @@ class Document:
             layer.x = int(x)
         if y is not None:
             layer.y = int(y)
+        if layer.kind in {"linked", "embedded"}:
+            if layer.smart_source is None:
+                layer.smart_source = layer.pixels.copy()
+            data = dict(layer.smart_data or {})
+            transform = dict(data.get("transform") or {})
+            current_w = int(transform.get("width", layer.pixels.shape[1]))
+            current_h = int(transform.get("height", layer.pixels.shape[0]))
+            center_x = layer.x + layer.pixels.shape[1] / 2.0
+            center_y = layer.y + layer.pixels.shape[0] / 2.0
+            transform.update(
+                {
+                    "width": max(1, int(width if width is not None else current_w)),
+                    "height": max(1, int(height if height is not None else current_h)),
+                    "angle": float(transform.get("angle", 0.0)) + float(angle),
+                    "flip_horizontal": bool(transform.get("flip_horizontal", False)) ^ bool(flip_horizontal),
+                    "flip_vertical": bool(transform.get("flip_vertical", False)) ^ bool(flip_vertical),
+                }
+            )
+            data["transform"] = transform
+            layer.smart_data = data
+            render_smart_object(layer)
+            if x is None:
+                layer.x = round(center_x - layer.pixels.shape[1] / 2.0)
+            if y is None:
+                layer.y = round(center_y - layer.pixels.shape[0] / 2.0)
+            if layer.mask is not None and layer.mask.shape != layer.pixels.shape[:2]:
+                layer.mask = cv2.resize(layer.mask, (layer.pixels.shape[1], layer.pixels.shape[0]), interpolation=cv2.INTER_NEAREST)
+            layer.touch_pixels()
+            self.dirty = True
+            return
         target_w = max(1, int(width or layer.pixels.shape[1]))
         target_h = max(1, int(height or layer.pixels.shape[0]))
         if (target_w, target_h) != (layer.pixels.shape[1], layer.pixels.shape[0]):
@@ -1886,6 +2175,94 @@ def shape_drag_is_meaningful(geometry: dict[str, Any], minimum: int = 3) -> bool
     if geometry.get("shape") in {"line", "bezier"}:
         return math.hypot(x2 - x1, y2 - y1) >= minimum
     return x2 - x1 >= minimum and y2 - y1 >= minimum
+
+
+def layer_contains_point(layer: Layer, point: tuple[int, int], tolerance: int = 5) -> bool:
+    """Hit-test the rendered object alpha, including thin lines and Bezier curves."""
+    if not layer.visible or layer.kind == "adjustment" or layer.pixels.size == 0:
+        return False
+    local_x = int(point[0]) - int(layer.x)
+    local_y = int(point[1]) - int(layer.y)
+    height, width = layer.pixels.shape[:2]
+    radius = max(0, int(tolerance))
+    x1, x2 = max(0, local_x - radius), min(width, local_x + radius + 1)
+    y1, y2 = max(0, local_y - radius), min(height, local_y + radius + 1)
+    if x1 >= x2 or y1 >= y2:
+        return False
+    alpha = layer.pixels[y1:y2, x1:x2, 3]
+    if layer.kind == "shape" and layer.shape_data is not None:
+        kind = str(layer.shape_data.get("shape", "rectangle")).lower()
+        if kind not in {"line", "bezier"} and 0 <= local_x < width and 0 <= local_y < height:
+            return bool(layer.pixels[local_y, local_x, 3] > 8)
+    return bool(np.any(alpha > 8))
+
+
+def topmost_layer_at(
+    document: Document,
+    point: tuple[int, int],
+    *,
+    kinds: tuple[str, ...] = ("shape", "text"),
+    tolerance: int = 5,
+) -> int | None:
+    for index in range(len(document.layers) - 1, -1, -1):
+        layer = document.layers[index]
+        if layer.kind in kinds and layer_contains_point(layer, point, tolerance):
+            return index
+    return None
+
+
+def resize_box_from_handle(
+    box: tuple[int, int, int, int],
+    handle: str,
+    point: tuple[int, int],
+    *,
+    keep_proportions: bool = False,
+    from_center: bool = False,
+    minimum: int = 2,
+) -> tuple[int, int, int, int]:
+    x1, y1, x2, y2 = normalized_box(box)
+    px, py = int(point[0]), int(point[1])
+    cx, cy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
+    original_ratio = max(1e-6, (x2 - x1) / max(1, y2 - y1))
+    if "w" in handle:
+        x1 = px
+        if from_center:
+            x2 = round(cx + (cx - px))
+    if "e" in handle:
+        x2 = px
+        if from_center:
+            x1 = round(cx - (px - cx))
+    if "n" in handle:
+        y1 = py
+        if from_center:
+            y2 = round(cy + (cy - py))
+    if "s" in handle:
+        y2 = py
+        if from_center:
+            y1 = round(cy - (py - cy))
+    x1, y1, x2, y2 = normalized_box((x1, y1, x2, y2))
+    if keep_proportions and len(handle) == 2:
+        width, height = max(minimum, x2 - x1), max(minimum, y2 - y1)
+        if width / height > original_ratio:
+            height = max(minimum, round(width / original_ratio))
+        else:
+            width = max(minimum, round(height * original_ratio))
+        if "w" in handle:
+            x1 = x2 - width
+        else:
+            x2 = x1 + width
+        if "n" in handle:
+            y1 = y2 - height
+        else:
+            y2 = y1 + height
+        if from_center:
+            x1, x2 = round(cx - width / 2), round(cx + width / 2)
+            y1, y2 = round(cy - height / 2), round(cy + height / 2)
+    if x2 - x1 < minimum:
+        x2 = x1 + minimum
+    if y2 - y1 < minimum:
+        y2 = y1 + minimum
+    return int(x1), int(y1), int(x2), int(y2)
 
 
 def selection_contour_points(mask: np.ndarray | None, threshold: int = 128) -> list[np.ndarray]:
@@ -2326,6 +2703,27 @@ def rotate_bound(arr: np.ndarray, angle: float, interpolation: int) -> np.ndarra
     matrix[1, 2] += new_h / 2.0 - center[1]
     border = 0 if arr.ndim == 2 else (0, 0, 0, 0)
     return cv2.warpAffine(arr, matrix, (new_w, new_h), flags=interpolation, borderMode=cv2.BORDER_CONSTANT, borderValue=border)
+
+
+def render_smart_object(layer: Layer) -> np.ndarray:
+    """Render a smart layer from its immutable source and stored transform."""
+    if layer.smart_source is None:
+        return layer.pixels
+    source = layer.smart_source
+    transform = (layer.smart_data or {}).get("transform") or {}
+    target_w = max(1, int(transform.get("width", source.shape[1])))
+    target_h = max(1, int(transform.get("height", source.shape[0])))
+    shrinking = target_w < source.shape[1] or target_h < source.shape[0]
+    rendered = cv2.resize(source, (target_w, target_h), interpolation=cv2.INTER_AREA if shrinking else cv2.INTER_CUBIC)
+    if bool(transform.get("flip_horizontal", False)):
+        rendered = cv2.flip(rendered, 1)
+    if bool(transform.get("flip_vertical", False)):
+        rendered = cv2.flip(rendered, 0)
+    angle = float(transform.get("angle", 0.0)) % 360.0
+    if abs(angle) > 0.001:
+        rendered = rotate_bound(rendered, angle, cv2.INTER_CUBIC)
+    layer.pixels = np.ascontiguousarray(rendered)
+    return layer.pixels
 
 
 def warp_pixels(arr: np.ndarray, mode: str, amount: float = 0.35, wavelength: float = 96.0, interpolation: int = cv2.INTER_CUBIC) -> np.ndarray:
@@ -3512,6 +3910,48 @@ def content_aware_fill(arr: np.ndarray, selection_mask: np.ndarray | None, radiu
     out[:, :, :3] = rgb
     out[:, :, 3] = np.where(mask > 0, np.maximum(alpha, out[:, :, 3]), out[:, :, 3]).astype(np.uint8)
     return out
+
+
+def _expanded_mask(mask: np.ndarray, left: int, top: int, width: int, height: int) -> np.ndarray:
+    result = np.zeros((height, width), dtype=np.uint8)
+    result[top : top + mask.shape[0], left : left + mask.shape[1]] = mask
+    return result
+
+
+def generative_expand_pixels(
+    arr: np.ndarray,
+    left: int,
+    top: int,
+    right: int,
+    bottom: int,
+    method: str = "content-aware",
+) -> np.ndarray:
+    """Expand an image with deterministic local edge synthesis and preserve its center exactly."""
+    margins = tuple(max(0, int(value)) for value in (top, bottom, left, right))
+    if not any(margins):
+        return arr.copy()
+    mode = str(method).lower().strip()
+    border_mode = cv2.BORDER_REPLICATE if mode in {"edge", "extend"} else cv2.BORDER_REFLECT_101
+    expanded = cv2.copyMakeBorder(arr, *margins, borderType=border_mode)
+    if mode in {"content-aware", "generative", "texture"}:
+        outside = np.full(expanded.shape[:2], 255, dtype=np.uint8)
+        outside[top : top + arr.shape[0], left : left + arr.shape[1]] = 0
+        # Multi-scale local synthesis removes obvious mirrored repetitions while
+        # retaining edge colour and texture. The original image is restored below.
+        small = cv2.resize(expanded[:, :, :3], None, fx=0.25, fy=0.25, interpolation=cv2.INTER_AREA)
+        texture = cv2.resize(small, (expanded.shape[1], expanded.shape[0]), interpolation=cv2.INTER_CUBIC)
+        detail = expanded[:, :, :3].astype(np.float32) - cv2.GaussianBlur(expanded[:, :, :3], (0, 0), 3.0).astype(np.float32)
+        synthesized = np.clip(texture.astype(np.float32) + detail * 0.65, 0, 255).astype(np.uint8)
+        feather = cv2.GaussianBlur(outside, (0, 0), 6.0).astype(np.float32)[:, :, None] / 255.0
+        expanded[:, :, :3] = np.clip(
+            expanded[:, :, :3].astype(np.float32) * (1.0 - feather) + synthesized.astype(np.float32) * feather,
+            0,
+            255,
+        ).astype(np.uint8)
+        if np.any(arr[:, :, 3]):
+            expanded[:, :, 3] = np.where(outside > 0, np.maximum(expanded[:, :, 3], 255), expanded[:, :, 3])
+    expanded[top : top + arr.shape[0], left : left + arr.shape[1]] = arr
+    return np.ascontiguousarray(expanded)
 
 
 def frequency_separation(arr: np.ndarray, radius: float = 8.0, texture_strength: float = 1.0) -> tuple[np.ndarray, np.ndarray]:

@@ -3,6 +3,8 @@ from __future__ import annotations
 import tkinter as tk
 from tkinter import ttk
 
+from .theme import TOKENS
+
 
 BRUSH_TOOLS = {"brush", "eraser", "blur_tool", "sharpen_tool", "dodge", "burn", "clone", "healing", "spot_healing"}
 RETOUCH_TOOLS = {"blur_tool", "sharpen_tool", "dodge", "burn", "clone", "healing", "spot_healing"}
@@ -73,6 +75,9 @@ class ToolOptionsPanel(ttk.Frame):
         finish_text_edit,
         edit_active_text,
         tooltip_factory=None,
+        compact: bool = False,
+        auto_select: tk.BooleanVar | None = None,
+        color_provider=None,
     ) -> None:
         super().__init__(parent)
         self.tool_var = tool_var
@@ -133,18 +138,38 @@ class ToolOptionsPanel(ttk.Frame):
         self.finish_text_edit = finish_text_edit
         self.edit_active_text = edit_active_text
         self.tooltip_factory = tooltip_factory
+        self.compact = compact
+        self.auto_select = auto_select
+        self.color_provider = color_provider
+        self._advanced_visible = False
+        self._gradient_render_after_id: str | None = None
+        self.gradient_mode.trace_add("write", self._gradient_layout_changed)
+        self.gradient_object_fill.trace_add("write", self._gradient_layout_changed)
         self.title = ttk.Label(self, text="Параметры инструмента")
-        self.title.pack(anchor=tk.W, padx=8, pady=(8, 4))
+        self.title.pack(side=tk.LEFT if compact else tk.TOP, anchor=tk.W, padx=(10, 8), pady=7)
         self.body = ttk.Frame(self)
-        self.body.pack(fill=tk.BOTH, expand=True)
+        self.body.pack(side=tk.LEFT if compact else tk.TOP, fill=tk.BOTH, expand=True)
         self.render()
+
+    def _gradient_layout_changed(self, *_args) -> None:
+        if self.tool_var.get() != "gradient" or self._gradient_render_after_id is not None:
+            return
+        self._gradient_render_after_id = self.after_idle(self._render_gradient_layout)
+
+    def _render_gradient_layout(self) -> None:
+        self._gradient_render_after_id = None
+        if self.winfo_exists() and self.tool_var.get() == "gradient":
+            self.render()
 
     def render(self) -> None:
         for child in self.body.winfo_children():
             child.destroy()
         tool = self.tool_var.get()
         label = self.label_by_id.get(tool, tool)
-        self.title.configure(text=f"Параметры: {label}")
+        self.title.configure(text=label)
+        if self.compact:
+            self._render_compact(tool)
+            return
         description = self.description_by_id.get(tool)
         if description:
             note = ttk.Label(self.body, text=description, wraplength=220, justify=tk.LEFT)
@@ -243,6 +268,124 @@ class ToolOptionsPanel(ttk.Frame):
         if not shown:
             ttk.Label(self.body, text="Для этого инструмента нет дополнительных параметров.", wraplength=220, justify=tk.LEFT).pack(fill=tk.X, padx=8, pady=4)
 
+    def _render_compact(self, tool: str) -> None:
+        primary = ttk.Frame(self.body)
+        primary.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        if tool == "move" and self.auto_select is not None:
+            ttk.Checkbutton(primary, text="Автовыбор", variable=self.auto_select).pack(side=tk.LEFT, padx=4)
+        elif tool in BRUSH_TOOLS:
+            self._compact_spin(primary, "Размер", self.brush_size, 1, 220, 5)
+            variable = self.opacity if tool in {"brush", "eraser", "clone"} else self.exposure if tool in {"dodge", "burn"} else self.retouch_strength
+            self._compact_percent(primary, "Непрозрачность" if tool in {"brush", "eraser", "clone"} else "Сила", variable)
+            if tool in {"brush", "eraser"}:
+                self._compact_single_color(primary, self.pick_foreground, 0, "Основной цвет")
+        elif tool in SHAPE_TOOLS:
+            self._compact_color_pair(primary, "Заливка", "Обводка")
+            self._compact_spin(primary, "Толщина", self.shape_stroke_width, 0, 100, 4)
+            if tool == "polygon_shape":
+                self._compact_spin(primary, "Стороны", self.polygon_sides, 3, 64, 4)
+            elif tool == "star_shape":
+                self._compact_spin(primary, "Лучи", self.star_points, 3, 64, 4)
+        elif tool == "gradient":
+            self._compact_combo(primary, "Режим", self.gradient_mode, ["Заливка", "Объект"], 9)
+            if self.gradient_mode.get() == "Объект":
+                self._compact_combo(primary, "Фигура", self.gradient_shape, ["Прямоугольник", "Эллипс", "Многоугольник", "Звезда", "Произвольная"], 12)
+                self._compact_combo(primary, "Заливка", self.gradient_object_fill, ["Градиент", "Текстура"], 9)
+            if self.gradient_mode.get() == "Заливка" or self.gradient_object_fill.get() == "Градиент":
+                self._compact_combo(primary, "Тип", self.gradient_type, ["Линейный", "Радиальный", "Отраженный", "Ромб", "Угловой"], 12)
+            else:
+                self._compact_combo(primary, "Текстура", self.gradient_texture, ["Шахматная", "Полосы", "Точки"], 10)
+            self._compact_color_pair(primary, "Цвет 1", "Цвет 2")
+        elif tool == "text":
+            self._compact_combo(primary, "Шрифт", self.text_font_family, ["Arial", "Segoe UI", "Calibri", "Times New Roman", "Verdana", "Tahoma"], 15, readonly=False)
+            self._compact_spin(primary, "Размер", self.text_size, 4, 500, 5)
+            self._compact_single_color(primary, self.pick_foreground, 0, "Цвет текста")
+            ttk.Checkbutton(primary, text="B", variable=self.text_bold, style="Toolbutton").pack(side=tk.LEFT, padx=2)
+            ttk.Checkbutton(primary, text="I", variable=self.text_italic, style="Toolbutton").pack(side=tk.LEFT, padx=2)
+        elif tool == "crop":
+            self._compact_combo(primary, "Формат", self.crop_aspect, ["Свободно", "1:1", "4:3", "3:2", "16:9", "Исходное", "Свое"], 10)
+        elif tool in SELECTION_TOOLS:
+            self._compact_combo(primary, "Режим", self.selection_mode, ["replace", "add", "subtract", "intersect"], 10)
+            if tool in TOLERANCE_TOOLS:
+                self._compact_spin(primary, "Допуск", self.tolerance, 0, 128, 4)
+            if tool == "quick_selection":
+                self._compact_spin(primary, "Размер", self.brush_size, 1, 220, 5)
+        elif tool == "fill":
+            self._compact_single_color(primary, self.pick_foreground, 0, "Цвет заливки")
+            self._compact_spin(primary, "Допуск", self.tolerance, 0, 128, 4)
+
+        gradient_has_stops = tool == "gradient" and (self.gradient_mode.get() == "Заливка" or self.gradient_object_fill.get() == "Градиент")
+        if tool in {"blur_tool", "sharpen_tool", "dodge", "burn", "clone", "healing", "spot_healing", "text", "crop", "quick_selection", "star_shape", "custom_shape"} or gradient_has_stops:
+            ttk.Button(primary, text="Дополнительно", command=self._toggle_compact_advanced).pack(side=tk.LEFT, padx=(8, 3))
+        if self._advanced_visible:
+            self._render_compact_advanced(primary, tool)
+
+    def _toggle_compact_advanced(self) -> None:
+        self._advanced_visible = not self._advanced_visible
+        self.render()
+
+    def _render_compact_advanced(self, parent: ttk.Frame, tool: str) -> None:
+        ttk.Separator(parent, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=7, pady=4)
+        if tool in BRUSH_TOOLS:
+            self._compact_percent(parent, "Жёсткость", self.hardness)
+        if tool in {"clone", "healing"}:
+            ttk.Checkbutton(parent, text="Выровненный", variable=self.clone_aligned).pack(side=tk.LEFT, padx=3)
+        elif tool == "gradient" and (self.gradient_mode.get() == "Заливка" or self.gradient_object_fill.get() == "Градиент"):
+            ttk.Checkbutton(parent, text="Средняя точка", variable=self.gradient_mid_enabled, command=lambda: self.after_idle(self.render)).pack(side=tk.LEFT, padx=3)
+            if self.gradient_mid_enabled.get():
+                self._compact_percent(parent, "Позиция", self.gradient_mid_position)
+                ttk.Button(parent, text="Цвет", command=self.pick_gradient_mid).pack(side=tk.LEFT, padx=3)
+        elif tool == "text":
+            self._compact_combo(parent, "Выравнивание", self.text_align, ["left", "center", "right"], 9)
+            self._compact_spin(parent, "Интервал", self.text_tracking, -100, 500, 5)
+        elif tool == "crop" and self.crop_aspect.get() == "Свое":
+            self._compact_spin(parent, "Ширина", self.crop_custom_width, 1, 50000, 7)
+            self._compact_spin(parent, "Высота", self.crop_custom_height, 1, 50000, 7)
+        elif tool == "quick_selection":
+            self._compact_spin(parent, "Сглаживание", self.quick_smooth, 0, 12, 4)
+        elif tool == "star_shape":
+            self._compact_percent(parent, "Внутренний радиус", self.star_inner_ratio)
+
+    @staticmethod
+    def _compact_spin(parent: ttk.Frame, label: str, variable: tk.Variable, start: int, end: int, width: int) -> None:
+        ttk.Label(parent, text=label, style="Topbar.TLabel").pack(side=tk.LEFT, padx=(5, 2))
+        ttk.Spinbox(parent, textvariable=variable, from_=start, to=end, width=width).pack(side=tk.LEFT, padx=(0, 4), pady=4)
+
+    @staticmethod
+    def _compact_percent(parent: ttk.Frame, label: str, variable: tk.Variable) -> None:
+        ttk.Label(parent, text=label, style="Topbar.TLabel").pack(side=tk.LEFT, padx=(5, 2))
+        value = ttk.Label(parent, width=5, style="Topbar.TLabel")
+        value.pack(side=tk.LEFT)
+        ttk.Scale(parent, variable=variable, from_=0.0, to=1.0, length=90, command=lambda raw: value.configure(text=f"{round(float(raw) * 100)}%")).pack(side=tk.LEFT, padx=(0, 4))
+        value.configure(text=f"{round(float(variable.get()) * 100)}%")
+
+    @staticmethod
+    def _compact_combo(parent: ttk.Frame, label: str, variable: tk.Variable, values: list[str], width: int, readonly: bool = True) -> None:
+        ttk.Label(parent, text=label, style="Topbar.TLabel").pack(side=tk.LEFT, padx=(5, 2))
+        ttk.Combobox(parent, textvariable=variable, values=values, width=width, state="readonly" if readonly else "normal").pack(side=tk.LEFT, padx=(0, 4), pady=4)
+
+    def _compact_single_color(self, parent: ttk.Frame, command, index: int, tooltip: str) -> None:
+        colors = self.color_provider() if self.color_provider is not None else ((0, 0, 0, 255), (255, 255, 255, 255))
+        color = colors[index]
+        hex_color = "#%02x%02x%02x" % tuple(int(value) for value in color[:3])
+        swatch = tk.Button(parent, command=command, background=hex_color, activebackground=hex_color, width=3, height=1, relief=tk.FLAT, borderwidth=1, highlightthickness=1, highlightbackground=TOKENS.BORDER, cursor="hand2")
+        swatch.pack(side=tk.LEFT, padx=4, pady=4)
+        if self.tooltip_factory is not None:
+            self.tooltip_factory(swatch, tooltip)
+
+    def _compact_color_pair(self, parent: ttk.Frame, foreground_name: str, background_name: str) -> None:
+        colors = self.color_provider() if self.color_provider is not None else ((0, 0, 0, 255), (255, 255, 255, 255))
+        surface = tk.Canvas(parent, width=43, height=30, highlightthickness=0, borderwidth=0, background=TOKENS.SURFACE, cursor="hand2")
+        surface.pack(side=tk.LEFT, padx=5, pady=3)
+        background = "#%02x%02x%02x" % tuple(int(value) for value in colors[1][:3])
+        foreground = "#%02x%02x%02x" % tuple(int(value) for value in colors[0][:3])
+        surface.create_rectangle(17, 9, 40, 28, fill=background, outline=TOKENS.BORDER, tags="background")
+        surface.create_rectangle(2, 2, 25, 21, fill=foreground, outline=TOKENS.TEXT_SECONDARY, tags="foreground")
+        surface.tag_bind("foreground", "<Button-1>", lambda _event: self.pick_foreground())
+        surface.tag_bind("background", "<Button-1>", lambda _event: self.pick_background())
+        if self.tooltip_factory is not None:
+            self.tooltip_factory(surface, f"{foreground_name} / {background_name}\nНажмите на нужный образец")
+
     def _add_scale(
         self,
         label: str,
@@ -303,29 +446,33 @@ class ToolOptionsPanel(ttk.Frame):
     def _add_gradient_options(self) -> None:
         ttk.Label(self.body, text="Режим").pack(anchor=tk.W, padx=8, pady=(6, 0))
         ttk.Combobox(self.body, textvariable=self.gradient_mode, values=["Заливка", "Объект"], state="readonly").pack(fill=tk.X, padx=8)
-        ttk.Label(self.body, text="Тип").pack(anchor=tk.W, padx=8, pady=(6, 0))
-        ttk.Combobox(
-            self.body,
-            textvariable=self.gradient_type,
-            values=["Линейный", "Радиальный", "Отраженный", "Ромб", "Угловой"],
-            state="readonly",
-        ).pack(fill=tk.X, padx=8)
-        ttk.Label(self.body, text="Фигура объекта").pack(anchor=tk.W, padx=8, pady=(6, 0))
-        ttk.Combobox(
-            self.body,
-            textvariable=self.gradient_shape,
-            values=["Прямоугольник", "Эллипс", "Многоугольник", "Звезда", "Произвольная"],
-            state="readonly",
-        ).pack(fill=tk.X, padx=8)
-        ttk.Label(self.body, text="Заливка объекта").pack(anchor=tk.W, padx=8, pady=(6, 0))
-        ttk.Combobox(self.body, textvariable=self.gradient_object_fill, values=["Градиент", "Текстура"], state="readonly").pack(fill=tk.X, padx=8)
-        ttk.Label(self.body, text="Текстура").pack(anchor=tk.W, padx=8, pady=(6, 0))
-        ttk.Combobox(self.body, textvariable=self.gradient_texture, values=["Шахматная", "Полосы", "Точки"], state="readonly").pack(fill=tk.X, padx=8)
-        middle = ttk.Frame(self.body)
-        middle.pack(fill=tk.X, padx=8, pady=(8, 0))
-        ttk.Checkbutton(middle, text="Средняя точка", variable=self.gradient_mid_enabled).pack(side=tk.LEFT)
-        ttk.Button(middle, text="Цвет", command=self.pick_gradient_mid).pack(side=tk.RIGHT)
-        self._add_scale("Позиция средней точки", self.gradient_mid_position, 0.01, 0.99, "%", percent=True)
+        if self.gradient_mode.get() == "Объект":
+            ttk.Label(self.body, text="Фигура").pack(anchor=tk.W, padx=8, pady=(6, 0))
+            ttk.Combobox(
+                self.body,
+                textvariable=self.gradient_shape,
+                values=["Прямоугольник", "Эллипс", "Многоугольник", "Звезда", "Произвольная"],
+                state="readonly",
+            ).pack(fill=tk.X, padx=8)
+            ttk.Label(self.body, text="Заливка").pack(anchor=tk.W, padx=8, pady=(6, 0))
+            ttk.Combobox(self.body, textvariable=self.gradient_object_fill, values=["Градиент", "Текстура"], state="readonly").pack(fill=tk.X, padx=8)
+        uses_gradient = self.gradient_mode.get() == "Заливка" or self.gradient_object_fill.get() == "Градиент"
+        if uses_gradient:
+            ttk.Label(self.body, text="Тип").pack(anchor=tk.W, padx=8, pady=(6, 0))
+            ttk.Combobox(
+                self.body,
+                textvariable=self.gradient_type,
+                values=["Линейный", "Радиальный", "Отраженный", "Ромб", "Угловой"],
+                state="readonly",
+            ).pack(fill=tk.X, padx=8)
+            middle = ttk.Frame(self.body)
+            middle.pack(fill=tk.X, padx=8, pady=(8, 0))
+            ttk.Checkbutton(middle, text="Средняя точка", variable=self.gradient_mid_enabled).pack(side=tk.LEFT)
+            ttk.Button(middle, text="Цвет", command=self.pick_gradient_mid).pack(side=tk.RIGHT)
+            self._add_scale("Позиция средней точки", self.gradient_mid_position, 0.01, 0.99, "%", percent=True)
+        else:
+            ttk.Label(self.body, text="Текстура").pack(anchor=tk.W, padx=8, pady=(6, 0))
+            ttk.Combobox(self.body, textvariable=self.gradient_texture, values=["Шахматная", "Полосы", "Точки"], state="readonly").pack(fill=tk.X, padx=8)
         ttk.Label(self.body, text="Проведите от цвета A к цвету B. Escape отменяет предпросмотр.", wraplength=220).pack(fill=tk.X, padx=8, pady=(4, 8))
 
     def _add_crop_options(self) -> None:
@@ -393,13 +540,7 @@ class ToolOptionsPanel(ttk.Frame):
     def _add_color_buttons(self) -> None:
         row = ttk.Frame(self.body)
         row.pack(fill=tk.X, padx=8, pady=(0, 6))
-        fg = ttk.Button(row, text="Основной цвет", command=self.pick_foreground)
-        fg.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        bg = ttk.Button(row, text="Дополнительный цвет", command=self.pick_background)
-        bg.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(6, 0))
-        if self.tooltip_factory is not None:
-            self.tooltip_factory(fg, "Цвет кисти, заливки, текста и фигур.")
-            self.tooltip_factory(bg, "Второй цвет для градиента и обводки фигур.")
+        self._compact_color_pair(row, "Основной цвет", "Дополнительный цвет")
 
     def _add_selection_mode(self) -> None:
         ttk.Label(self.body, text="Режим выделения").pack(anchor=tk.W, padx=8, pady=(6, 2))

@@ -20,7 +20,8 @@
 - Layer import: place embedded images, place linked images, update/relink linked layers and load several image files as layers.
 - Shape layers: editable rectangle, ellipse, line, Bezier curve, polygon, star and boolean-combination layers.
 - View helpers: grid overlay, numeric guides and channel preview for RGB/Red/Green/Blue/Alpha.
-- UI: Russian main menu/tool labels, hover explanations, scrollable configurable tool palette, contextual tool options and centered canvas viewport navigation.
+- UI: centralized dark DesignTokens theme, compact icon toolbar with Russian tooltips and shortcuts, horizontal contextual options, tabbed Properties/Layers/History, visible color swatches, canvas-first responsive layout and compact status feedback.
+- Object UX: corner-based shape creation with Shift/Alt modifiers, reusable real-shape preview items, direct alpha-aware Shape/Text selection, topmost visible-layer mapping, synchronized canvas/layer selection, screen-stable handles, modifier-aware resize and keyboard nudging.
 - Analysis: eyedropper, metadata/EXIF viewer, histogram and image statistics.
 - Recovery and automation: autosave recovery file, manual recovery opening and action recording to JSON logs.
 - Adjustments: destructive and previewable non-destructive brightness, contrast, saturation, vibrance, temperature/tint, hue/saturation, exposure, color balance, levels, curves, threshold, posterize, grayscale and invert, with importable/exportable preset libraries.
@@ -31,13 +32,15 @@
 - Text: editable paragraph and path text, bold/italic/underline, baseline shift, tracking and transform handles that preserve editability.
 - Shapes: custom-shape presets and visual four-point Bezier editing with live handles.
 - Tool previews: real ellipse, line, polygon, star, custom shape and Bezier previews before creation.
-- Performance: dirty-region 256 px composition, tiled Tk canvas output, cached filters/masks/effects/thumbnails, sparse stroke history, incremental selection previews, revision-safe background filters and an opt-in profiler/benchmark.
+- Performance: dirty-region 256 px composition, tiled Tk canvas output, cached filters/masks/effects/thumbnails, sparse stroke history, incremental selection previews, revision-safe background filters, regional cached object movement/resize and an opt-in profiler/benchmark.
+- Dense shape documents: partial composition rejects non-intersecting Shape layers before filter/cache lookup and blending, keeping direct movement responsive as layer count grows.
 - Export: PNG, JPEG, WebP, BMP, TIFF, plus `.prdx` project files.
+- Smart Objects: embedded source payloads inside `.prdx`, transforms re-rendered from the original, replace/reset/embed operations and linked-file current/modified/missing status.
+- RAW and color management: RAW decoding, assigned/converted ICC profiles, 8/16/32-bit working channels, 16-bit TIFF output, RGB/Lab/CMYK conversions and editable project metadata.
+- Large documents: optional CUDA detection with CPU fallback, zoom mipmap pyramids and LRU scratch-disk eviction with a configurable memory budget.
+- Extensibility and automation: replayable action v2 commands, batch action execution, Python plugin discovery and validated in-process or external executable filters.
+- Generative tools: content-aware fill plus non-destructive local generative canvas expansion with content-aware, mirror and edge modes and live preview.
 
-## Next milestones toward the full list
+## Long-term research and optional integrations
 
-1. Smart objects: re-editable transforms, embedded payload management and richer linked-file status/conflict handling.
-2. RAW/color management: ICC profiles, 16/32-bit channels, Lab/CMYK workflows and richer metadata editing.
-3. Large-document rendering: optional GPU acceleration, mipmap pyramid and scratch-disk eviction for caches that exceed RAM limits.
-4. Plugin API and actions: replayable command actions, batch execution, external filters.
-5. Advanced AI/generative tools: content-aware fill and generative expand.
+The original roadmap milestones are implemented. Future work can add optional cloud model providers, GPU kernels for individual filters and more third-party plugin adapters without changing the local editor's core behavior.

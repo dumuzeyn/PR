@@ -45,6 +45,7 @@ from .core import (
     edge_aware_cleanup,
     flood_fill,
     frequency_separation,
+    generative_expand_pixels,
     image_statistics,
     effective_layer_mask,
     levels,
@@ -55,13 +56,18 @@ from .core import (
     rgba_array_to_pil,
     reduce_red_eye,
     regular_polygon_points,
+    render_shape_layer,
     render_text_layer,
     RetouchStroke,
+    RAW_EXTENSIONS,
     selection_edge_confidence,
     selection_contour_points,
     shape_drag_is_meaningful,
     shape_geometry_from_drag,
+    layer_contains_point,
+    resize_box_from_handle,
     star_points,
+    topmost_layer_at,
     union_rect,
     warp_pixels,
     sharpen,
@@ -91,8 +97,14 @@ from .history import (
     TilePatch,
 )
 from .rendering import RenderEngine
+from .automation import ActionRecorder, ActionRunner
+from .color_management import COLOR_MODELS, BIT_DEPTHS, color_settings
+from .plugins import PluginRegistry
 from .ui.tool_options import ToolOptionsPanel
 from .ui.tool_palette import ToolPalette, ToolPaletteDialog, normalize_tool_order, normalize_visible_tools
+from .ui.icons import SHORTCUTS, action_icon
+from .ui.scrollable_frame import ScrollableFrame
+from .ui.theme import TOKENS, configure_theme
 
 
 class ToolTip:
@@ -127,10 +139,11 @@ class ToolTip:
             self._tip,
             text=self.text,
             justify=tk.LEFT,
-            background="#fff7d6",
-            foreground="#1f2328",
+            background=TOKENS.SURFACE_HOVER,
+            foreground=TOKENS.TEXT_PRIMARY,
             relief=tk.SOLID,
             borderwidth=1,
+            highlightbackground=TOKENS.BORDER,
             padx=8,
             pady=5,
             wraplength=280,
@@ -320,6 +333,9 @@ ADJUSTMENT_PRESETS.update(
 class PhotoRedactorApp(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
+        self.theme = TOKENS
+        self.ui_style = configure_theme(self)
+        self.configure(background=TOKENS.BACKGROUND)
         self.withdraw()
         self.title("PhotoRedactor - редактор изображений")
         self.geometry("1440x920")
@@ -332,11 +348,16 @@ class PhotoRedactorApp(tk.Tk):
         self.recovery_path = self.app_data_dir / "recovery.prdx"
         self.settings_path = self.app_data_dir / "settings.json"
         self.recent_files: list[str] = []
-        self.action_recording = False
-        self.recorded_actions: list[str] = []
+        self.action_recorder = ActionRecorder()
+        self.action_runner = ActionRunner()
+        self.plugin_registry = PluginRegistry()
+        self.plugin_registry.discover()
+        for name, callback in self.plugin_registry.action_commands.items():
+            self.action_runner.register(name, callback)
         self._edit_generation = 0
         self.adjustment_presets = {name: dict(value) for name, value in ADJUSTMENT_PRESETS.items()}
         self.tool = tk.StringVar(value="brush")
+        self.auto_select = tk.BooleanVar(value=True)
         self.tool_order = [value for _label, value, _description in TOOL_DEFINITIONS]
         self.visible_tools = list(self.tool_order)
         self.tool_pane_position = 360
@@ -403,6 +424,13 @@ class PhotoRedactorApp(tk.Tk):
         self._move_layer_id: str | None = None
         self._move_start: tuple[int, int] | None = None
         self._move_start_mask: np.ndarray | None = None
+        self._move_last_bounds: tuple[int, int, int, int] | None = None
+        self._object_resize_handle: str | None = None
+        self._object_resize_before: dict | None = None
+        self._object_resize_layer_id: str | None = None
+        self._object_resize_rendered_bounds: tuple[int, int, int, int] | None = None
+        self._last_object_resize_render = 0.0
+        self._object_bounds_ids: list[int] = []
         self._stroke_layer_id: str | None = None
         self._stroke_kind = "pixels"
         self._stroke_rect: tuple[int, int, int, int] | None = None
@@ -535,6 +563,7 @@ class PhotoRedactorApp(tk.Tk):
         self.autosave_recovery()
         self.save_settings()
         self.executor.shutdown(wait=False, cancel_futures=True)
+        self.render_engine.scratch.close()
         super().destroy()
 
     def load_settings(self) -> None:
@@ -665,7 +694,7 @@ class PhotoRedactorApp(tk.Tk):
     def show_start_screen(self) -> None:
         self._editor_active = False
         self.editor_root.pack_forget()
-        self.status.pack_forget()
+        self.status_frame.pack_forget()
         self.config(menu="")
         self.minsize(820, 560)
         self.title("PhotoRedactor")
@@ -675,24 +704,24 @@ class PhotoRedactorApp(tk.Tk):
 
         clipboard_image = self.read_clipboard_image()
         self._startup_clipboard_image = clipboard_image
-        frame = tk.Frame(self, background="#202226")
+        frame = tk.Frame(self, background=TOKENS.SURFACE)
         frame.pack(fill=tk.BOTH, expand=True)
         self.startup_frame = frame
 
-        header = tk.Frame(frame, background="#181a1e", height=92)
+        header = tk.Frame(frame, background=TOKENS.BACKGROUND, height=82)
         header.pack(fill=tk.X)
         header.pack_propagate(False)
-        tk.Label(header, text="PhotoRedactor", font=("Segoe UI Semibold", 25), foreground="#f5f7fa", background="#181a1e").pack(anchor=tk.W, padx=42, pady=(17, 0))
-        tk.Label(header, text="Стартовый экран", font=("Segoe UI", 10), foreground="#aeb5bf", background="#181a1e").pack(anchor=tk.W, padx=44)
+        tk.Label(header, text="PhotoRedactor", font=("Segoe UI Semibold", 22), foreground=TOKENS.TEXT_PRIMARY, background=TOKENS.BACKGROUND).pack(anchor=tk.W, padx=36, pady=(14, 0))
+        tk.Label(header, text="Стартовый экран", font=("Segoe UI", 9), foreground=TOKENS.TEXT_SECONDARY, background=TOKENS.BACKGROUND).pack(anchor=tk.W, padx=38)
 
-        content = tk.Frame(frame, background="#202226")
-        content.pack(fill=tk.BOTH, expand=True, padx=42, pady=30)
+        content = tk.Frame(frame, background=TOKENS.SURFACE)
+        content.pack(fill=tk.BOTH, expand=True, padx=36, pady=26)
         content.columnconfigure(0, minsize=300)
         content.columnconfigure(1, weight=1)
         content.rowconfigure(1, weight=1)
 
-        tk.Label(content, text="Начать", font=("Segoe UI Semibold", 15), foreground="#f5f7fa", background="#202226").grid(row=0, column=0, sticky="w", pady=(0, 12))
-        actions = tk.Frame(content, background="#202226")
+        tk.Label(content, text="Начать", font=("Segoe UI Semibold", 14), foreground=TOKENS.TEXT_PRIMARY, background=TOKENS.SURFACE).grid(row=0, column=0, sticky="w", pady=(0, 10))
+        actions = tk.Frame(content, background=TOKENS.SURFACE)
         actions.grid(row=1, column=0, sticky="new", padx=(0, 34))
 
         new_button = tk.Button(
@@ -701,9 +730,9 @@ class PhotoRedactorApp(tk.Tk):
             command=self.new_document,
             anchor="w",
             font=("Segoe UI Semibold", 11),
-            background="#1976d2",
+            background=TOKENS.ACCENT,
             foreground="white",
-            activebackground="#2385e6",
+            activebackground=TOKENS.ACCENT_HOVER,
             activeforeground="white",
             relief=tk.FLAT,
             padx=18,
@@ -717,10 +746,10 @@ class PhotoRedactorApp(tk.Tk):
             command=self.open_file,
             anchor="w",
             font=("Segoe UI", 10),
-            background="#30343a",
-            foreground="#f5f7fa",
-            activebackground="#3a3f46",
-            activeforeground="white",
+            background=TOKENS.SURFACE_HOVER,
+            foreground=TOKENS.TEXT_PRIMARY,
+            activebackground=TOKENS.SURFACE_SELECTED,
+            activeforeground=TOKENS.TEXT_PRIMARY,
             relief=tk.FLAT,
             padx=18,
             pady=12,
@@ -750,24 +779,24 @@ class PhotoRedactorApp(tk.Tk):
         if self.recovery_path.exists():
             ttk.Button(actions, text="Восстановить последнюю сессию", command=self.open_recovery).pack(fill=tk.X, pady=(12, 0))
 
-        recent_header = tk.Frame(content, background="#202226")
+        recent_header = tk.Frame(content, background=TOKENS.SURFACE)
         recent_header.grid(row=0, column=1, sticky="ew", pady=(0, 12))
-        tk.Label(recent_header, text="Недавние файлы", font=("Segoe UI Semibold", 15), foreground="#f5f7fa", background="#202226").pack(side=tk.LEFT)
+        tk.Label(recent_header, text="Недавние файлы", font=("Segoe UI Semibold", 14), foreground=TOKENS.TEXT_PRIMARY, background=TOKENS.SURFACE).pack(side=tk.LEFT)
         ttk.Button(recent_header, text="Очистить", command=self.clear_recent_files).pack(side=tk.RIGHT)
 
-        recent_area = tk.Frame(content, background="#202226")
+        recent_area = tk.Frame(content, background=TOKENS.SURFACE)
         recent_area.grid(row=1, column=1, sticky="nsew")
         recent_area.columnconfigure(0, weight=1)
         recent_area.rowconfigure(1, weight=1)
-        tk.Label(recent_area, text="Имя файла  |  Тип  |  Изменен", anchor="w", padx=12, pady=8, foreground="#aeb5bf", background="#30343a").grid(row=0, column=0, sticky="ew")
+        tk.Label(recent_area, text="Имя файла  |  Тип  |  Изменен", anchor="w", padx=12, pady=8, foreground=TOKENS.TEXT_SECONDARY, background=TOKENS.SURFACE_HOVER).grid(row=0, column=0, sticky="ew")
         self.startup_recent_list = tk.Listbox(
             recent_area,
             exportselection=False,
             activestyle="none",
-            background="#292d32",
-            foreground="#f1f3f5",
-            selectbackground="#1976d2",
-            selectforeground="#ffffff",
+            background=TOKENS.SURFACE,
+            foreground=TOKENS.TEXT_PRIMARY,
+            selectbackground=TOKENS.SURFACE_SELECTED,
+            selectforeground=TOKENS.TEXT_PRIMARY,
             highlightthickness=0,
             borderwidth=0,
             font=("Segoe UI", 10),
@@ -848,7 +877,7 @@ class PhotoRedactorApp(tk.Tk):
         document_name = Path(self.doc.path).name if self.doc.path else "Новый документ"
         self.title(f"{document_name} - PhotoRedactor")
         self.editor_root.pack(fill=tk.BOTH, expand=True)
-        self.status.pack(side=tk.BOTTOM, fill=tk.X)
+        self.status_frame.pack(side=tk.BOTTOM, fill=tk.X)
         self._editor_active = True
         self.refresh_recent_menu()
         self.refresh()
@@ -885,13 +914,19 @@ class PhotoRedactorApp(tk.Tk):
 
     def _build_ui(self) -> None:
         self._build_menu()
-        root = ttk.PanedWindow(self, orient=tk.HORIZONTAL)
-        self.editor_root = root
+        self.editor_root = ttk.Frame(self, style="App.TFrame")
+        self.editor_root.pack(fill=tk.BOTH, expand=True)
+        options_bar = ttk.Frame(self.editor_root, style="Topbar.TFrame", height=42)
+        options_bar.pack(fill=tk.X)
+        options_bar.pack_propagate(False)
+        self._build_tool_options(options_bar)
+        ttk.Separator(self.editor_root).pack(fill=tk.X)
+        root = ttk.PanedWindow(self.editor_root, orient=tk.HORIZONTAL)
         root.pack(fill=tk.BOTH, expand=True)
 
-        left = ttk.Frame(root, width=250)
-        center = ttk.Frame(root)
-        right = ttk.Frame(root, width=280)
+        left = ttk.Frame(root, width=58, style="Panel.TFrame")
+        center = ttk.Frame(root, style="Workspace.TFrame")
+        right = ttk.Frame(root, width=292, style="Panel.TFrame")
         root.add(left, weight=0)
         root.add(center, weight=1)
         root.add(right, weight=0)
@@ -900,11 +935,22 @@ class PhotoRedactorApp(tk.Tk):
         self._build_canvas(center)
         self._build_panels(right)
 
-        self.status = ttk.Label(self, text="", anchor=tk.W)
-        self.status.pack(side=tk.BOTTOM, fill=tk.X)
+        self.status_frame = ttk.Frame(self, style="Status.TFrame")
+        self.status_frame.pack(side=tk.BOTTOM, fill=tk.X)
+        self.status = ttk.Label(self.status_frame, text="", anchor=tk.W, style="Status.TLabel")
+        self.status.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.status_coords = ttk.Label(self.status_frame, text="", style="Status.TLabel", width=13, anchor=tk.E)
+        self.status_coords.pack(side=tk.RIGHT)
+        self.status_zoom = ttk.Label(self.status_frame, text="100%", style="Status.TLabel", width=7, anchor=tk.E)
+        self.status_zoom.pack(side=tk.RIGHT)
+        self.zoom_label = self.status_zoom
+        self.status_size = ttk.Label(self.status_frame, text="", style="Status.TLabel", width=14, anchor=tk.E)
+        self.status_size.pack(side=tk.RIGHT)
         self._build_shortcuts()
         self.bind_all("<KeyPress-space>", self.space_down)
         self.bind_all("<KeyRelease-space>", self.space_up)
+        for sequence in ("<Left>", "<Right>", "<Up>", "<Down>", "<Shift-Left>", "<Shift-Right>", "<Shift-Up>", "<Shift-Down>"):
+            self.bind_all(sequence, self.nudge_selected_object)
 
     def _build_shortcuts(self) -> None:
         bindings = {
@@ -927,6 +973,19 @@ class PhotoRedactorApp(tk.Tk):
         }
         for sequence, callback in bindings.items():
             self.bind_all(sequence, callback)
+        tool_shortcuts = {
+            "v": "move", "h": "hand", "b": "brush", "e": "eraser", "j": "healing", "s": "clone",
+            "g": "gradient", "t": "text", "i": "eyedropper", "c": "crop", "m": "select", "l": "lasso",
+            "w": "quick_selection", "u": "rect_shape", "p": "bezier_shape",
+        }
+        for key, tool in tool_shortcuts.items():
+            self.bind_all(f"<Key-{key}>", lambda _event, value=tool: self.shortcut_tool(value))
+
+    def shortcut_tool(self, tool: str):
+        if self.shortcut_context() == "canvas" and self._editor_active:
+            self.select_tool(tool)
+            return "break"
+        return None
 
     @staticmethod
     def _widget_is_descendant(widget, parent) -> bool:
@@ -1043,6 +1102,23 @@ class PhotoRedactorApp(tk.Tk):
             return "break"
         return None
 
+    def nudge_selected_object(self, event):
+        if self.shortcut_context() != "canvas" or self.tool.get() != "move" or self.doc.layer.id not in self.selected_layer_ids:
+            return None
+        layer = self.doc.layer
+        if layer.kind not in {"shape", "text"} or layer.locked:
+            return None
+        step = 10 if event.state & 0x0001 else 1
+        dx = -step if event.keysym == "Left" else step if event.keysym == "Right" else 0
+        dy = -step if event.keysym == "Up" else step if event.keysym == "Down" else 0
+        before = (layer.x, layer.y)
+        layer.x += dx
+        layer.y += dy
+        self.doc.dirty = True
+        self.push_command(LayerMoveCommand("Сдвинуть объект", layer.id, before, (layer.x, layer.y)))
+        self.refresh()
+        return "break"
+
     def shortcut_swap_colors(self, _event=None):
         if self.shortcut_context() == "canvas":
             self.swap_colors()
@@ -1146,6 +1222,7 @@ class PhotoRedactorApp(tk.Tk):
         menu.add_cascade(label="Изображение", menu=image)
         image.add_command(label="Размер изображения", command=self.resize_image)
         image.add_command(label="Размер холста", command=self.resize_canvas)
+        image.add_command(label="Генеративное расширение холста", command=self.generative_expand_dialog)
         image.add_command(label="Обрезать по выделению", command=self.crop_to_selection)
         image.add_command(label="Обрезать прозрачные пиксели", command=self.trim_transparent)
         image.add_command(label="Показать все слои", command=self.reveal_all)
@@ -1154,6 +1231,20 @@ class PhotoRedactorApp(tk.Tk):
         image.add_command(label="Повернуть на 180", command=lambda: self.rotate(180))
         image.add_command(label="Отразить горизонтально", command=lambda: self.flip(horizontal=True))
         image.add_command(label="Отразить вертикально", command=lambda: self.flip(horizontal=False))
+
+        color_menu = tk.Menu(image, tearoff=False)
+        image.add_separator()
+        image.add_cascade(label="Управление цветом", menu=color_menu)
+        color_menu.add_command(label="Назначить ICC-профиль", command=self.assign_icc_profile)
+        color_menu.add_command(label="Преобразовать в ICC-профиль", command=self.convert_icc_profile)
+        model_menu = tk.Menu(color_menu, tearoff=False)
+        color_menu.add_cascade(label="Цветовая модель", menu=model_menu)
+        for model in COLOR_MODELS:
+            model_menu.add_command(label=model, command=lambda value=model: self.change_color_model(value))
+        depth_menu = tk.Menu(color_menu, tearoff=False)
+        color_menu.add_cascade(label="Глубина каналов", menu=depth_menu)
+        for depth in BIT_DEPTHS:
+            depth_menu.add_command(label=f"{depth} бит", command=lambda value=depth: self.change_bit_depth(value))
 
         layer = tk.Menu(menu, tearoff=False)
         menu.add_cascade(label="Слой", menu=layer)
@@ -1177,6 +1268,12 @@ class PhotoRedactorApp(tk.Tk):
         layer.add_command(label="Деформация слоя", command=self.warp_layer)
         layer.add_command(label="Обновить связанный слой", command=self.update_linked_layer)
         layer.add_command(label="Перелинковать слой", command=self.relink_layer)
+        smart_menu = tk.Menu(layer, tearoff=False)
+        layer.add_cascade(label="Smart Object", menu=smart_menu)
+        smart_menu.add_command(label="Показать статус связи", command=self.show_linked_layer_status)
+        smart_menu.add_command(label="Заменить содержимое", command=self.replace_smart_contents)
+        smart_menu.add_command(label="Преобразовать во встроенный", command=self.convert_smart_to_embedded)
+        smart_menu.add_command(label="Сбросить трансформацию", command=self.reset_smart_transform)
         layer.add_command(label="Переключить обтравочную маску", command=self.toggle_clipping_mask)
         layer.add_command(label="Стили слоя", command=self.edit_layer_styles)
         layer.add_command(label="Фильтры слоя", command=self.edit_layer_filters)
@@ -1224,6 +1321,9 @@ class PhotoRedactorApp(tk.Tk):
         filters.add_command(label="Очистка краев выделения", command=self.filter_edge_cleanup)
         filters.add_command(label="Удаление красных глаз", command=self.filter_red_eye)
         filters.add_command(label="Заплатка из источника", command=self.filter_patch_selection)
+        self.plugin_filters_menu = tk.Menu(filters, tearoff=False, postcommand=self.refresh_plugin_filter_menu)
+        filters.add_separator()
+        filters.add_cascade(label="Плагины", menu=self.plugin_filters_menu)
 
         retouch = tk.Menu(menu, tearoff=False)
         menu.add_cascade(label="Ретушь", menu=retouch)
@@ -1239,6 +1339,8 @@ class PhotoRedactorApp(tk.Tk):
         analysis.add_command(label="Статистика изображения", command=self.show_image_statistics)
         analysis.add_command(label="Гистограмма", command=self.show_histogram)
         analysis.add_command(label="Метаданные / EXIF", command=self.show_metadata)
+        analysis.add_command(label="Редактировать метаданные", command=self.edit_metadata)
+        analysis.add_command(label="Состояние кэша и GPU", command=self.show_cache_status)
 
         actions = tk.Menu(menu, tearoff=False)
         menu.add_cascade(label="Действия", menu=actions)
@@ -1246,6 +1348,12 @@ class PhotoRedactorApp(tk.Tk):
         actions.add_command(label="Остановить запись", command=self.stop_action_recording)
         actions.add_command(label="Сохранить запись", command=self.save_action_recording)
         actions.add_command(label="Очистить запись", command=self.clear_action_recording)
+        actions.add_separator()
+        actions.add_command(label="Выполнить действие...", command=self.run_action_file)
+        actions.add_command(label="Пакетно выполнить действие...", command=self.batch_action_file)
+        actions.add_separator()
+        actions.add_command(label="Перезагрузить плагины", command=self.reload_plugins)
+        actions.add_command(label="Ошибки плагинов", command=self.show_plugin_errors)
 
         view = tk.Menu(menu, tearoff=False)
         menu.add_cascade(label="Вид", menu=view)
@@ -1273,16 +1381,10 @@ class PhotoRedactorApp(tk.Tk):
         view.add_command(label="Настроить панель инструментов...", command=self.configure_tool_palette)
 
     def _build_tools(self, parent: ttk.Frame) -> None:
-        parent.configure(width=250)
-        self._build_color_control(parent)
-        self.tool_split = ttk.PanedWindow(parent, orient=tk.VERTICAL)
-        self.tool_split.pack(fill=tk.BOTH, expand=True)
-        tool_area = ttk.Frame(self.tool_split)
-        options_area = ttk.Frame(self.tool_split)
-        self.tool_split.add(tool_area, weight=1)
-        self.tool_split.add(options_area, weight=1)
+        parent.configure(width=58)
+        parent.pack_propagate(False)
         self.tool_palette = ToolPalette(
-            tool_area,
+            parent,
             definitions=TOOL_DEFINITIONS,
             tool_var=self.tool,
             order=self.tool_order,
@@ -1292,8 +1394,10 @@ class PhotoRedactorApp(tk.Tk):
             tooltip_factory=ToolTip,
         )
         self.tool_palette.pack(fill=tk.BOTH, expand=True)
+
+    def _build_tool_options(self, parent: ttk.Frame) -> None:
         self.tool_options_panel = ToolOptionsPanel(
-            options_area,
+            parent,
             tool_var=self.tool,
             definitions=TOOL_DEFINITIONS,
             brush_size=self.brush_size,
@@ -1350,47 +1454,36 @@ class PhotoRedactorApp(tk.Tk):
             finish_text_edit=self.finish_text_edit,
             edit_active_text=self.edit_active_text_on_canvas,
             tooltip_factory=ToolTip,
+            compact=True,
+            auto_select=self.auto_select,
+            color_provider=lambda: (self.foreground, self.background),
         )
         self.tool_options_panel.pack(fill=tk.BOTH, expand=True)
-        self.after_idle(self.apply_tool_pane_position)
 
     def _build_color_control(self, parent: ttk.Frame) -> None:
         frame = ttk.Frame(parent)
-        frame.pack(fill=tk.X, padx=8, pady=(6, 2))
-        self.color_control_canvas = tk.Canvas(frame, width=72, height=58, highlightthickness=0)
-        self.color_control_canvas.pack(side=tk.LEFT)
+        frame.pack(fill=tk.X, padx=5, pady=(3, 7))
+        self.color_control_canvas = tk.Canvas(frame, width=46, height=40, highlightthickness=0, background=TOKENS.SURFACE)
+        self.color_control_canvas.pack(anchor=tk.CENTER)
         self.color_control_canvas.bind("<Button-1>", self.color_control_click)
-        labels = ttk.Frame(frame)
-        labels.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(4, 0))
-        self.foreground_hex_label = ttk.Label(labels)
-        self.foreground_hex_label.pack(anchor=tk.W)
-        self.background_hex_label = ttk.Label(labels)
-        self.background_hex_label.pack(anchor=tk.W)
-        actions = ttk.Frame(labels)
-        actions.pack(anchor=tk.W, pady=(2, 0))
-        swap = ttk.Button(actions, text="X", width=3, command=self.swap_colors)
-        swap.pack(side=tk.LEFT)
-        reset = ttk.Button(actions, text="D", width=3, command=self.reset_colors)
-        reset.pack(side=tk.LEFT, padx=(3, 0))
-        ToolTip(swap, "Поменять основной и дополнительный цвета местами.")
-        ToolTip(reset, "Сбросить цвета на черный и белый.")
+        ToolTip(self.color_control_canvas, "Основной и дополнительный цвета\nX - поменять местами, D - сбросить")
         self.refresh_color_control()
 
     def refresh_color_control(self) -> None:
+        if hasattr(self, "tool_options_panel"):
+            self.tool_options_panel.render()
         if not hasattr(self, "color_control_canvas"):
             return
         canvas = self.color_control_canvas
         canvas.delete("all")
-        canvas.create_rectangle(26, 18, 66, 56, fill=self.color_hex(self.background), outline="#555555", width=2, tags="background")
-        canvas.create_rectangle(5, 3, 45, 41, fill=self.color_hex(self.foreground), outline="#222222", width=2, tags="foreground")
-        self.foreground_hex_label.configure(text=f"Основной {self.color_hex(self.foreground).upper()}")
-        self.background_hex_label.configure(text=f"Доп. {self.color_hex(self.background).upper()}")
+        canvas.create_rectangle(19, 14, 43, 37, fill=self.color_hex(self.background), outline=TOKENS.BORDER, width=1, tags="background")
+        canvas.create_rectangle(3, 2, 27, 25, fill=self.color_hex(self.foreground), outline=TOKENS.TEXT_SECONDARY, width=1, tags="foreground")
 
     def color_control_click(self, event) -> None:
-        if event.x <= 47 and event.y <= 43:
-            self.pick_foreground()
-        else:
+        if event.x >= 19 and event.y >= 14:
             self.pick_background()
+        else:
+            self.pick_foreground()
 
     def swap_colors(self) -> None:
         self.foreground, self.background = self.background, self.foreground
@@ -1460,9 +1553,18 @@ class PhotoRedactorApp(tk.Tk):
         if self.tool.get() != "quick_selection":
             self._quick_points.clear()
             self.clear_quick_selection_preview()
-        label = self.tool_label(new_tool)
-        if label:
-            self.status_text(f"Инструмент: {label}")
+        hint = {
+            "move": "Кликните объект для выбора и перетащите его",
+            "clone": "Alt+клик - выбрать источник",
+            "healing": "Alt+клик - выбрать источник",
+            "crop": "Потяните область кадрирования; Enter - применить",
+            "text": "Потяните для создания текстовой области",
+            "hand": "Перетаскивайте холст",
+        }.get(new_tool, self.tool_label(new_tool))
+        self.status_text(hint)
+        cursor = "crosshair" if new_tool.endswith("_shape") or new_tool in {"crop", "select", "ellipse_select"} else "xterm" if new_tool == "text" else "fleur" if new_tool in {"move", "hand"} else "crosshair" if new_tool in self.brush_preview_tools() else "arrow"
+        if hasattr(self, "canvas"):
+            self.canvas.configure(cursor=cursor)
         self.update_clone_source_marker()
 
     def tool_label(self, value: str) -> str:
@@ -1517,18 +1619,9 @@ class PhotoRedactorApp(tk.Tk):
             pass
 
     def _build_canvas(self, parent: ttk.Frame) -> None:
-        toolbar = ttk.Frame(parent)
-        toolbar.pack(fill=tk.X)
-        ttk.Button(toolbar, text="-", command=lambda: self.set_zoom(self.zoom.get() / 1.25), width=3).pack(side=tk.LEFT, padx=2)
-        ttk.Button(toolbar, text="+", command=lambda: self.set_zoom(self.zoom.get() * 1.25), width=3).pack(side=tk.LEFT, padx=2)
-        ttk.Button(toolbar, text="100%", command=lambda: self.set_zoom(1.0)).pack(side=tk.LEFT, padx=2)
-        ttk.Button(toolbar, text="Вписать", command=self.fit_to_screen).pack(side=tk.LEFT, padx=2)
-        self.zoom_label = ttk.Label(toolbar, text="100%")
-        self.zoom_label.pack(side=tk.LEFT, padx=10)
-
-        frame = ttk.Frame(parent)
+        frame = ttk.Frame(parent, style="Workspace.TFrame")
         frame.pack(fill=tk.BOTH, expand=True)
-        self.canvas = tk.Canvas(frame, bg="#24262b", highlightthickness=0)
+        self.canvas = tk.Canvas(frame, bg=TOKENS.WORKSPACE, highlightthickness=0, borderwidth=0)
         xbar = ttk.Scrollbar(frame, orient=tk.HORIZONTAL, command=self.canvas.xview)
         ybar = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=self.canvas.yview)
         self.canvas.configure(xscrollcommand=xbar.set, yscrollcommand=ybar.set)
@@ -1541,6 +1634,7 @@ class PhotoRedactorApp(tk.Tk):
         self.canvas.bind("<Alt-Button-1>", self.clone_source_click)
         self.canvas.bind("<B1-Motion>", self.pointer_drag)
         self.canvas.bind("<ButtonRelease-1>", self.pointer_up)
+        self.canvas.bind("<ButtonPress-3>", self.selection_right_click)
         self.canvas.bind("<Double-Button-1>", self.pointer_double_click)
         self.canvas.bind("<ButtonPress-2>", self.pan_down)
         self.canvas.bind("<B2-Motion>", self.pan_drag)
@@ -1549,6 +1643,20 @@ class PhotoRedactorApp(tk.Tk):
         self.canvas.bind("<Leave>", self.pointer_leave)
         self.canvas.bind("<FocusOut>", self.canvas_focus_lost)
         self.canvas.bind("<MouseWheel>", self.mouse_wheel)
+
+    def selection_right_click(self, event) -> str | None:
+        selection_tools = {
+            "select", "ellipse_select", "lasso", "magnetic_lasso", "polygon_lasso",
+            "quick_selection", "magic_wand", "color_range",
+        }
+        mask = self.doc.selection_mask
+        if self.tool.get() not in selection_tools or mask is None:
+            return None
+        x, y = self.canvas_to_doc(event)
+        inside = 0 <= x < self.doc.width and 0 <= y < self.doc.height and bool(mask[y, x] > 0)
+        if not inside:
+            self.run_selection_command("Снять выделение", self.doc.clear_selection)
+        return "break"
 
     def canvas_focus_lost(self, _event) -> None:
         if self.drag_start is not None and self.tool.get().endswith("_shape"):
@@ -1572,59 +1680,112 @@ class PhotoRedactorApp(tk.Tk):
         self.status_text(f"Пресет ретуши: {self.retouch_preset.get()}")
 
     def _build_panels(self, parent: ttk.Frame) -> None:
-        ttk.Label(parent, text="Слои").pack(anchor=tk.W, padx=8, pady=(8, 4))
-        self.layer_list = tk.Listbox(parent, height=16, exportselection=False, selectmode=tk.EXTENDED)
-        self.layer_list.pack(fill=tk.BOTH, expand=False, padx=8)
+        self.right_tabs = ttk.Notebook(parent)
+        self.right_tabs.pack(fill=tk.BOTH, expand=True)
+        layers_tab = ttk.Frame(self.right_tabs, style="Panel.TFrame")
+        properties_tab = ttk.Frame(self.right_tabs, style="Panel.TFrame")
+        history_tab = ttk.Frame(self.right_tabs, style="Panel.TFrame")
+        self.right_tabs.add(layers_tab, text="Слои")
+        self.right_tabs.add(properties_tab, text="Свойства")
+        self.right_tabs.add(history_tab, text="История")
+
+        self.layer_list = tk.Listbox(
+            layers_tab,
+            height=16,
+            exportselection=False,
+            selectmode=tk.EXTENDED,
+            activestyle="none",
+            background=TOKENS.SURFACE,
+            foreground=TOKENS.TEXT_PRIMARY,
+            selectbackground=TOKENS.SURFACE_SELECTED,
+            selectforeground=TOKENS.TEXT_PRIMARY,
+            highlightthickness=0,
+            borderwidth=0,
+            font=("Segoe UI", 10),
+        )
+        self.layer_list.pack(fill=tk.BOTH, expand=True, padx=6, pady=(6, 0))
         self.layer_list.bind("<Button-1>", self.layer_list_click)
         self.layer_list.bind("<<ListboxSelect>>", self.layer_selected)
-        buttons = ttk.Frame(parent)
-        buttons.pack(fill=tk.X, padx=8, pady=6)
-        ttk.Button(buttons, text="+", width=3, command=self.new_layer).pack(side=tk.LEFT)
-        ttk.Button(buttons, text="x", width=3, command=self.delete_layer).pack(side=tk.LEFT)
-        ttk.Button(buttons, text="Дубль", command=self.duplicate_layer).pack(side=tk.LEFT)
-        ttk.Button(buttons, text="Вверх", command=lambda: self.move_layer(1)).pack(side=tk.LEFT)
-        ttk.Button(buttons, text="Вниз", command=lambda: self.move_layer(-1)).pack(side=tk.LEFT)
-        ttk.Label(parent, text="Непрозрачность слоя").pack(anchor=tk.W, padx=8)
-        self.layer_opacity = tk.DoubleVar(value=1.0)
-        self.layer_opacity_scale = ttk.Scale(parent, from_=0.0, to=1.0, variable=self.layer_opacity, command=self.change_layer_opacity)
-        self.layer_opacity_scale.pack(fill=tk.X, padx=8)
-        self.layer_opacity_scale.bind("<ButtonPress-1>", self.begin_layer_opacity_change)
-        self.layer_opacity_scale.bind("<ButtonRelease-1>", self.end_layer_opacity_change)
-        ttk.Label(parent, text="Режим наложения").pack(anchor=tk.W, padx=8, pady=(6, 0))
-        self.blend_mode = tk.StringVar(value="Normal")
-        self.blend_mode_box = ttk.Combobox(parent, textvariable=self.blend_mode, values=BLEND_MODES, state="readonly")
-        self.blend_mode_box.pack(fill=tk.X, padx=8)
-        self.blend_mode_box.bind("<<ComboboxSelected>>", self.change_blend_mode)
-        ttk.Button(parent, text="Показать / скрыть", command=self.toggle_layer_visible).pack(fill=tk.X, padx=8, pady=(6, 2))
-        ttk.Button(parent, text="Блокировка", command=self.toggle_layer_lock).pack(fill=tk.X, padx=8, pady=(0, 6))
-        ttk.Separator(parent).pack(fill=tk.X, pady=8)
-        ttk.Label(parent, text="Миниатюры").pack(anchor=tk.W, padx=8, pady=(0, 4))
-        thumbs = ttk.Frame(parent)
+        buttons = ttk.Frame(layers_tab)
+        buttons.pack(fill=tk.X, padx=6, pady=6)
+        self._panel_icons = {
+            name: action_icon(self, name, color=TOKENS.DANGER if name == "delete" else TOKENS.TEXT_PRIMARY)
+            for name in ("add", "delete", "duplicate", "up", "down")
+        }
+        add = ttk.Button(buttons, image=self._panel_icons["add"], width=3, command=self.new_layer)
+        delete = ttk.Button(buttons, image=self._panel_icons["delete"], width=3, command=self.delete_layer, style="Danger.TButton")
+        duplicate = ttk.Button(buttons, image=self._panel_icons["duplicate"], width=3, command=self.duplicate_layer)
+        up = ttk.Button(buttons, image=self._panel_icons["up"], width=3, command=lambda: self.move_layer(1))
+        down = ttk.Button(buttons, image=self._panel_icons["down"], width=3, command=lambda: self.move_layer(-1))
+        for button in (add, delete, duplicate, up, down):
+            button.pack(side=tk.LEFT, padx=(0, 3))
+        ToolTip(add, "Новый слой")
+        ToolTip(delete, "Удалить выбранные слои")
+        ToolTip(duplicate, "Дублировать слой")
+        ToolTip(up, "Поднять слой")
+        ToolTip(down, "Опустить слой")
+
+        thumbs = ttk.Frame(layers_tab)
         thumbs.pack(fill=tk.X, padx=8, pady=(0, 8))
-        ttk.Label(thumbs, text="Слой").grid(row=0, column=0, sticky=tk.W)
-        ttk.Label(thumbs, text="Маска").grid(row=0, column=1, sticky=tk.W, padx=(10, 0))
         self.layer_thumb = ttk.Label(thumbs)
-        self.layer_thumb.grid(row=1, column=0, sticky=tk.W)
+        self.layer_thumb.pack(side=tk.LEFT)
         self.mask_thumb = ttk.Label(thumbs)
-        self.mask_thumb.grid(row=1, column=1, sticky=tk.W, padx=(10, 0))
+        self.mask_thumb.pack(side=tk.LEFT, padx=(8, 0))
         self.layer_thumb.bind("<Button-1>", self.edit_pixels_channel)
         self.mask_thumb.bind("<Button-1>", self.edit_mask_channel)
-        ToolTip(self.layer_thumb, "Миниатюра пикселей активного слоя. Клик переключает кисть обратно на пиксели.")
-        ToolTip(self.mask_thumb, "Миниатюра маски активного слоя. Клик включает рисование по маске и черно-белый просмотр канала.")
-        ttk.Label(parent, text="Просмотр маски").pack(anchor=tk.W, padx=8)
-        self.mask_preview_box = ttk.Combobox(parent, textvariable=self.mask_preview, values=MASK_PREVIEW_MODES, state="readonly")
-        self.mask_preview_box.pack(fill=tk.X, padx=8, pady=(0, 6))
+        ToolTip(self.layer_thumb, "Пиксели активного слоя")
+        ToolTip(self.mask_thumb, "Маска активного слоя")
+
+        properties = ScrollableFrame(properties_tab, height=500)
+        properties.pack(fill=tk.BOTH, expand=True)
+        property_root = properties.content
+        ttk.Label(property_root, text="Слой", style="PanelTitle.TLabel").pack(anchor=tk.W, padx=10, pady=(10, 4))
+        ttk.Label(property_root, text="Непрозрачность", style="Secondary.TLabel").pack(anchor=tk.W, padx=10)
+        self.layer_opacity = tk.DoubleVar(value=1.0)
+        self.layer_opacity_scale = ttk.Scale(property_root, from_=0.0, to=1.0, variable=self.layer_opacity, command=self.change_layer_opacity)
+        self.layer_opacity_scale.pack(fill=tk.X, padx=10)
+        self.layer_opacity_scale.bind("<ButtonPress-1>", self.begin_layer_opacity_change)
+        self.layer_opacity_scale.bind("<ButtonRelease-1>", self.end_layer_opacity_change)
+        ttk.Label(property_root, text="Режим наложения", style="Secondary.TLabel").pack(anchor=tk.W, padx=10, pady=(7, 0))
+        self.blend_mode = tk.StringVar(value="Normal")
+        self.blend_mode_box = ttk.Combobox(property_root, textvariable=self.blend_mode, values=BLEND_MODES, state="readonly")
+        self.blend_mode_box.pack(fill=tk.X, padx=10)
+        self.blend_mode_box.bind("<<ComboboxSelected>>", self.change_blend_mode)
+        common = ttk.Frame(property_root)
+        common.pack(fill=tk.X, padx=10, pady=7)
+        ttk.Button(common, text="Видимость", command=self.toggle_layer_visible).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        ttk.Button(common, text="Блокировка", command=self.toggle_layer_lock).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(5, 0))
+        ttk.Label(property_root, text="Просмотр маски", style="Secondary.TLabel").pack(anchor=tk.W, padx=10)
+        self.mask_preview_box = ttk.Combobox(property_root, textvariable=self.mask_preview, values=MASK_PREVIEW_MODES, state="readonly")
+        self.mask_preview_box.pack(fill=tk.X, padx=10, pady=(0, 7))
         self.mask_preview_box.bind("<<ComboboxSelected>>", lambda _event: self.set_mask_preview())
-        ToolTip(self.mask_preview_box, "Показывает активную маску поверх холста или как черно-белый канал без изменения документа.")
-        ttk.Separator(parent).pack(fill=tk.X, pady=8)
-        self.info = ttk.Label(parent, text="", justify=tk.LEFT)
-        self.info.pack(anchor=tk.W, padx=8)
+        ttk.Separator(property_root).pack(fill=tk.X, padx=10, pady=7)
+        self.object_properties = ttk.Frame(property_root)
+        self.object_properties.pack(fill=tk.X)
+
+        self.history_list = tk.Listbox(
+            history_tab,
+            activestyle="none",
+            background=TOKENS.SURFACE,
+            foreground=TOKENS.TEXT_PRIMARY,
+            selectbackground=TOKENS.SURFACE_SELECTED,
+            highlightthickness=0,
+            borderwidth=0,
+        )
+        self.history_list.pack(fill=tk.BOTH, expand=True, padx=6, pady=6)
+        history_actions = ttk.Frame(history_tab)
+        history_actions.pack(fill=tk.X, padx=6, pady=(0, 6))
+        ttk.Button(history_actions, text="Отменить", command=self.undo).pack(side=tk.LEFT)
+        ttk.Button(history_actions, text="Повторить", command=self.redo).pack(side=tk.LEFT, padx=4)
+        self.info = ttk.Label(property_root, text="", justify=tk.LEFT, style="Secondary.TLabel")
+        self.info.pack(anchor=tk.W, padx=10, pady=8)
 
     def push_command(self, command) -> None:
         self.history.push(command)
         self._edit_generation += 1
         self.record_action(command.label)
         self.status_text(command.label)
+        self.refresh_history_panel()
 
     def run_document_command(self, label: str, fn) -> None:
         before = self.doc.raw_state()
@@ -1636,6 +1797,7 @@ class PhotoRedactorApp(tk.Tk):
         self._edit_generation += 1
         self.record_action(label)
         self.status_text(label)
+        self.refresh_history_panel()
 
     @staticmethod
     def state_value_equal(left, right) -> bool:
@@ -1699,32 +1861,77 @@ class PhotoRedactorApp(tk.Tk):
         self.status_text(label)
 
     def record_action(self, label: str) -> None:
-        if self.action_recording:
-            self.recorded_actions.append(label)
+        if not self.action_recorder.recording:
+            return
+        normalized = label.lower()
+        command = ""
+        params: dict[str, object] = {}
+        if "resize image" in normalized or "размер изображения" in normalized:
+            command, params = "resize_image", {"width": self.doc.width, "height": self.doc.height}
+        elif "resize canvas" in normalized or "размер холста" in normalized:
+            command, params = "resize_canvas", {"width": self.doc.width, "height": self.doc.height, "anchor": "center"}
+        elif "flatten" in normalized or "свести" in normalized:
+            command = "flatten"
+        elif "rotate" in normalized or "повернуть" in normalized:
+            command, params = "rotate", {"angle": 180 if "180" in normalized else 90}
+        elif "flip" in normalized or "отразить" in normalized:
+            command, params = "flip", {"axis": "vertical" if "vertical" in normalized or "вертик" in normalized else "horizontal"}
+        elif "bit depth" in normalized or "глубина" in normalized:
+            command, params = "set_bit_depth", {"bit_depth": self.doc.bit_depth}
+        elif "color model" in normalized or "цветовая модель" in normalized:
+            command, params = "set_color_model", {"color_model": self.doc.color_model}
+        elif self.doc.layer.filters:
+            command, params = "filter_stack", {"filters": copy.deepcopy(self.doc.layer.filters)}
+        if command:
+            self.action_recorder.record(command, params, label)
 
     def start_action_recording(self) -> None:
-        self.action_recording = True
-        self.recorded_actions.clear()
-        self.status_text("Action recording started")
+        self.action_recorder.start()
+        self.status_text("Запись действия начата")
 
     def stop_action_recording(self) -> None:
-        self.action_recording = False
-        self.status_text(f"Action recording stopped: {len(self.recorded_actions)} steps")
+        self.action_recorder.stop()
+        self.status_text(f"Запись остановлена: {len(self.action_recorder.steps)} шагов")
 
     def clear_action_recording(self) -> None:
-        self.recorded_actions.clear()
-        self.status_text("Action recording cleared")
+        self.action_recorder.steps.clear()
+        self.status_text("Запись действия очищена")
 
     def save_action_recording(self) -> None:
-        if not self.recorded_actions:
-            messagebox.showinfo("Actions", "No recorded steps.")
+        if not self.action_recorder.steps:
+            messagebox.showinfo("Действия", "Нет записанных исполняемых шагов.")
             return
         path = filedialog.asksaveasfilename(defaultextension=".json", filetypes=[("Action JSON", "*.json")])
         if not path:
             return
-        data = {"name": Path(path).stem, "steps": list(self.recorded_actions), "format": "PhotoRedactor action log v1"}
-        Path(path).write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        self.status_text(f"Saved action: {path}")
+        self.action_recorder.save(path)
+        self.status_text(f"Действие сохранено: {path}")
+
+    def run_action_file(self) -> None:
+        path = filedialog.askopenfilename(filetypes=[("Действие PhotoRedactor", "*.json"), ("Все файлы", "*.*")])
+        if not path:
+            return
+        try:
+            self.run_document_command("Выполнить действие", lambda: self.action_runner.run(self.doc, path))
+            self.refresh()
+        except Exception as exc:
+            messagebox.showerror("Действия", str(exc))
+
+    def batch_action_file(self) -> None:
+        action = filedialog.askopenfilename(filetypes=[("Действие PhotoRedactor", "*.json")])
+        if not action:
+            return
+        sources = filedialog.askopenfilenames(filetypes=[("Изображения", "*.png *.jpg *.jpeg *.webp *.bmp *.tif *.tiff")])
+        if not sources:
+            return
+        destination = filedialog.askdirectory(title="Папка результата")
+        if not destination:
+            return
+        self.run_background(
+            "Пакетное действие",
+            lambda: self.action_runner.batch(action, list(sources), destination),
+            lambda results: messagebox.showinfo("Действия", f"Обработано файлов: {len(results)}"),
+        )
 
     def schedule_autosave(self) -> None:
         self.after(60000, self.autosave_tick)
@@ -1872,16 +2079,22 @@ class PhotoRedactorApp(tk.Tk):
             self.doc.layer.id if self.doc.layers else None,
         )
         full_view = self._canvas_view_signature != view_signature or not self._canvas_tile_ids
-        changed_tiles = self.render_engine.last_changed_tiles if composite_changed and not full_view else set(self.render_engine.all_tiles(self.doc))
-        self._update_canvas_tiles(display, changed_tiles, scale, pad_x, pad_y, full_view)
+        if scale < 0.5:
+            self._update_canvas_mipmap(display, scale, pad_x, pad_y)
+        else:
+            changed_tiles = self.render_engine.last_changed_tiles if composite_changed and not full_view else set(self.render_engine.all_tiles(self.doc))
+            self._update_canvas_tiles(display, changed_tiles, scale, pad_x, pad_y, full_view)
         scaled_width = max(1, round(self.doc.width * scale))
         scaled_height = max(1, round(self.doc.height * scale))
         self.canvas.configure(scrollregion=(0, 0, scaled_width + pad_x * 2, scaled_height + pad_y * 2))
         self._canvas_view_signature = view_signature
         self.zoom_label.configure(text=f"{round(scale * 100)}%")
+        if hasattr(self, "status_zoom"):
+            self.status_zoom.configure(text=f"{round(scale * 100)}%")
         self._last_render_time = time.perf_counter()
         self._view_dirty = False
         self.update_selection_overlay()
+        self.update_object_bounds()
         self.update_grid_and_guides()
         if self.tool.get() == "quick_selection" and self._quick_points:
             self.update_quick_selection_preview(force=True)
@@ -1890,6 +2103,30 @@ class PhotoRedactorApp(tk.Tk):
         self.update_clone_source_marker()
         if self._crop_box is not None and self.tool.get() == "crop":
             self.draw_crop_overlay(self._crop_box)
+
+    def _update_canvas_mipmap(self, display: np.ndarray, scale: float, pad_x: int, pad_y: int) -> None:
+        for item_id in self._canvas_tile_ids.values():
+            self.canvas.delete(item_id)
+        self._canvas_tile_ids.clear()
+        self._canvas_tile_images.clear()
+        key = (
+            id(self.doc),
+            self.render_engine.render_revision,
+            self.view_channel.get(),
+            self.mask_preview.get(),
+        )
+        reduced, level = self.render_engine.mipmaps.for_zoom(key, display, scale)
+        target = max(1, round(self.doc.width * scale)), max(1, round(self.doc.height * scale))
+        image = rgba_array_to_pil(reduced)
+        if image.size != target:
+            image = image.resize(target, Image.Resampling.BILINEAR)
+        self._preview_image = ImageTk.PhotoImage(image)
+        if self._canvas_image_id is None:
+            self._canvas_image_id = self.canvas.create_image(pad_x, pad_y, image=self._preview_image, anchor=tk.NW)
+        else:
+            self.canvas.itemconfigure(self._canvas_image_id, image=self._preview_image)
+            self.canvas.coords(self._canvas_image_id, pad_x, pad_y)
+        self.render_engine.profiler.count("canvas.mipmap_level", level)
 
     def _update_canvas_tiles(
         self,
@@ -2002,7 +2239,10 @@ class PhotoRedactorApp(tk.Tk):
             self._render_after_id = None
         self.refresh_canvas()
         self.refresh_layers()
+        self.refresh_properties()
+        self.refresh_history_panel()
         self.info.configure(text=f"{self.doc.width} x {self.doc.height}px\nСлоев: {len(self.doc.layers)}\nАктивный: {self.doc.layer.name}")
+        self.status_size.configure(text=f"{self.doc.width} x {self.doc.height}")
 
     def refresh_layers(self) -> None:
         known_ids = {layer.id for layer in self.doc.layers}
@@ -2010,16 +2250,32 @@ class PhotoRedactorApp(tk.Tk):
         if not selected_ids and self.doc.layers:
             selected_ids = {self.doc.layer.id}
         self.selected_layer_ids = selected_ids
-        self.layer_list.delete(0, tk.END)
+        rows: list[str] = []
         for i, layer in enumerate(reversed(self.doc.layers)):
-            marker = "👁" if layer.visible else "  "
-            mask_marker = "U" if layer.mask is not None and not layer.mask_linked else "M" if layer.mask is not None and layer.mask_enabled else "m" if layer.mask is not None else " "
-            lock_marker = "L" if layer.locked else " "
-            kind_marker = "T" if layer.kind == "text" else "A" if layer.kind == "adjustment" else "S" if layer.kind == "shape" else "L" if layer.kind == "linked" else "E" if layer.kind == "embedded" else " "
-            clip_marker = "C" if layer.clipping else " "
-            fx_marker = "F" if layer.effects else " "
-            filter_marker = "P" if layer.filters else " "
-            self.layer_list.insert(tk.END, f"{marker} {mask_marker}{lock_marker}{kind_marker}{clip_marker}{fx_marker}{filter_marker} {layer.name}  {round(layer.opacity * 100)}%")
+            marker = "V" if layer.visible else " "
+            indicators: list[str] = []
+            if layer.mask is not None:
+                indicators.append("M")
+            if layer.locked:
+                indicators.append("L")
+            if layer.kind == "linked":
+                linked_status = self.doc.linked_layer_status(layer)["status"]
+                if linked_status in {"missing", "modified"}:
+                    indicators.append("?" if linked_status == "missing" else "!")
+            if layer.effects or layer.filters:
+                indicators.append("fx")
+            suffix = f"  [{' '.join(indicators)}]" if indicators else ""
+            rows.append(f"{marker}   {layer.name}{suffix}")
+        existing = list(self.layer_list.get(0, tk.END))
+        if len(existing) != len(rows):
+            self.layer_list.delete(0, tk.END)
+            for row in rows:
+                self.layer_list.insert(tk.END, row)
+        else:
+            for index, row in enumerate(rows):
+                if existing[index] != row:
+                    self.layer_list.delete(index)
+                    self.layer_list.insert(index, row)
         self.layer_list.selection_clear(0, tk.END)
         for row, layer in enumerate(reversed(self.doc.layers)):
             if layer.id in self.selected_layer_ids:
@@ -2028,6 +2284,166 @@ class PhotoRedactorApp(tk.Tk):
         self.layer_opacity.set(self.doc.layer.opacity)
         self.blend_mode.set(self.doc.layer.blend_mode)
         self.refresh_layer_previews()
+
+    def refresh_history_panel(self) -> None:
+        if not hasattr(self, "history_list"):
+            return
+        labels = [command.label for command in self.history.undo_stack]
+        existing = list(self.history_list.get(0, tk.END))
+        if existing != labels:
+            self.history_list.delete(0, tk.END)
+            for label in labels:
+                self.history_list.insert(tk.END, label)
+            if labels:
+                self.history_list.selection_set(tk.END)
+                self.history_list.see(tk.END)
+
+    def refresh_properties(self) -> None:
+        if not hasattr(self, "object_properties") or not self.doc.layers:
+            return
+        panel = self.object_properties
+        for child in panel.winfo_children():
+            child.destroy()
+        layer = self.doc.layer
+        title = "Фигура" if layer.kind == "shape" else "Текст" if layer.kind == "text" else "Растровый слой"
+        ttk.Label(panel, text=title, style="PanelTitle.TLabel").pack(anchor=tk.W, padx=10, pady=(3, 6))
+
+        def numeric_row(label: str, initial: int | float, apply, start=-100000, end=100000, increment=1) -> None:
+            row = ttk.Frame(panel)
+            row.pack(fill=tk.X, padx=10, pady=2)
+            ttk.Label(row, text=label, style="Secondary.TLabel").pack(side=tk.LEFT)
+            variable = tk.DoubleVar(value=initial) if isinstance(initial, float) else tk.IntVar(value=initial)
+            spin = ttk.Spinbox(row, textvariable=variable, from_=start, to=end, increment=increment, width=8)
+            spin.pack(side=tk.RIGHT)
+            commit = lambda _event=None, v=variable: apply(v.get())
+            spin.bind("<Return>", commit)
+            spin.bind("<FocusOut>", commit)
+
+        def combo_row(label: str, initial: str, values: list[str], apply) -> None:
+            row = ttk.Frame(panel)
+            row.pack(fill=tk.X, padx=10, pady=2)
+            ttk.Label(row, text=label, style="Secondary.TLabel").pack(side=tk.LEFT)
+            variable = tk.StringVar(value=initial)
+            combo = ttk.Combobox(row, textvariable=variable, values=values, state="readonly", width=14)
+            combo.pack(side=tk.RIGHT)
+            combo.bind("<<ComboboxSelected>>", lambda _event: apply(variable.get()))
+
+        def color_row(label: str, color, command) -> None:
+            row = ttk.Frame(panel)
+            row.pack(fill=tk.X, padx=10, pady=2)
+            ttk.Label(row, text=label, style="Secondary.TLabel").pack(side=tk.LEFT)
+            swatch = tk.Button(
+                row,
+                command=command,
+                background=self.color_hex(tuple(color)),
+                activebackground=self.color_hex(tuple(color)),
+                width=4,
+                height=1,
+                relief=tk.FLAT,
+                borderwidth=1,
+                highlightthickness=1,
+                highlightbackground=TOKENS.BORDER,
+                cursor="hand2",
+            )
+            swatch.pack(side=tk.RIGHT)
+
+        bounds = self.object_document_bounds(layer)
+        display_x = bounds[0] if bounds is not None else layer.x
+        display_y = bounds[1] if bounds is not None else layer.y
+        numeric_row("X", display_x, lambda value, y=display_y: self.set_object_position(int(value), y))
+        numeric_row("Y", display_y, lambda value, x=display_x: self.set_object_position(x, int(value)))
+        if layer.kind == "shape" and layer.shape_data is not None:
+            box = tuple(int(value) for value in layer.shape_data.get("box", [0, 0, 1, 1]))
+            numeric_row("Ширина", box[2] - box[0], lambda value: self.set_shape_size(int(value), None), 2, 100000)
+            numeric_row("Высота", box[3] - box[1], lambda value: self.set_shape_size(None, int(value)), 2, 100000)
+            numeric_row("Обводка", int(layer.shape_data.get("stroke_width", 0)), lambda value: self.set_shape_property("stroke_width", int(value)), 0, 100)
+            kind = str(layer.shape_data.get("shape", "rectangle"))
+            if kind in {"polygon", "star"}:
+                numeric_row("Стороны" if kind == "polygon" else "Лучи", int(layer.shape_data.get("sides", 5)), lambda value: self.set_shape_property("sides", int(value)), 3, 64)
+            if kind == "star":
+                numeric_row("Внутренний радиус", float(layer.shape_data.get("inner_ratio", 0.5)), lambda value: self.set_shape_property("inner_ratio", float(value)), 0.05, 0.95, 0.05)
+            color_row("Заливка", layer.shape_data.get("fill") or [0, 0, 0, 0], lambda: self.pick_shape_property_color("fill"))
+            color_row("Обводка", layer.shape_data.get("stroke") or [0, 0, 0, 0], lambda: self.pick_shape_property_color("stroke"))
+        elif layer.kind == "text" and layer.text_data is not None:
+            combo_row("Шрифт", str(layer.text_data.get("font_family", "Arial")), ["Arial", "Segoe UI", "Calibri", "Times New Roman", "Verdana", "Tahoma"], lambda value: self.set_text_property("font_family", value))
+            numeric_row("Размер", int(layer.text_data.get("size", 48)), lambda value: self.set_text_property("size", int(value)), 4, 500)
+            numeric_row("Интервал", int(layer.text_data.get("tracking", 0)), lambda value: self.set_text_property("tracking", int(value)), -100, 500)
+            numeric_row("Межстрочный", int(layer.text_data.get("line_spacing", 10)), lambda value: self.set_text_property("line_spacing", int(value)), 0, 500)
+            combo_row("Выравнивание", str(layer.text_data.get("align", "left")), ["left", "center", "right"], lambda value: self.set_text_property("align", value))
+            color_row("Цвет", layer.text_data.get("color") or [255, 255, 255, 255], self.pick_text_property_color)
+            ttk.Button(panel, text="Редактировать текст", command=self.edit_active_text_on_canvas).pack(fill=tk.X, padx=10, pady=6)
+        else:
+            ttk.Button(panel, text="Фильтры слоя", command=self.edit_layer_filters).pack(fill=tk.X, padx=10, pady=5)
+
+    def set_object_position(self, x: int, y: int) -> None:
+        layer = self.doc.layer
+        before = (layer.x, layer.y)
+        bounds = self.object_document_bounds(layer)
+        if bounds is None:
+            after = (int(x), int(y))
+        else:
+            after = (layer.x + int(x) - bounds[0], layer.y + int(y) - bounds[1])
+        if before == after:
+            return
+        layer.x, layer.y = after
+        self.push_command(LayerMoveCommand("Переместить объект", layer.id, before, after))
+        self.doc.dirty = True
+        self.refresh()
+
+    def set_shape_size(self, width: int | None, height: int | None) -> None:
+        layer = self.doc.layer
+        if layer.kind != "shape" or layer.shape_data is None:
+            return
+        before = copy.deepcopy(layer.shape_data)
+        x1, y1, x2, y2 = [int(value) for value in before.get("box", [0, 0, 1, 1])]
+        layer.shape_data["box"] = [x1, y1, x1 + max(2, int(width if width is not None else x2 - x1)), y1 + max(2, int(height if height is not None else y2 - y1))]
+        render_shape_layer(layer)
+        layer.touch_pixels()
+        self.push_command(ShapeDataCommand("Изменить размер фигуры", layer.id, before, copy.deepcopy(layer.shape_data), layer.name, layer.name))
+        self.doc.dirty = True
+        self.refresh()
+
+    def set_shape_property(self, key: str, value) -> None:
+        layer = self.doc.layer
+        if layer.kind != "shape" or layer.shape_data is None or layer.shape_data.get(key) == value:
+            return
+        before = copy.deepcopy(layer.shape_data)
+        layer.shape_data[key] = value
+        render_shape_layer(layer)
+        layer.touch_pixels()
+        self.push_command(ShapeDataCommand("Изменить фигуру", layer.id, before, copy.deepcopy(layer.shape_data), layer.name, layer.name))
+        self.doc.dirty = True
+        self.refresh()
+
+    def pick_shape_property_color(self, key: str) -> None:
+        layer = self.doc.layer
+        if layer.shape_data is None:
+            return
+        initial = layer.shape_data.get(key) or [255, 255, 255, 255]
+        selected = colorchooser.askcolor(self.color_hex(tuple(initial)), parent=self)
+        if selected[0] is not None:
+            self.set_shape_property(key, (*[round(value) for value in selected[0]], 255))
+
+    def pick_text_property_color(self) -> None:
+        layer = self.doc.layer
+        if layer.kind != "text" or layer.text_data is None:
+            return
+        initial = layer.text_data.get("color") or [255, 255, 255, 255]
+        selected = colorchooser.askcolor(self.color_hex(tuple(initial)), parent=self)
+        if selected[0] is not None:
+            self.set_text_property("color", [*[round(value) for value in selected[0]], 255])
+
+    def set_text_property(self, key: str, value) -> None:
+        layer = self.doc.layer
+        if layer.kind != "text" or layer.text_data is None or layer.text_data.get(key) == value:
+            return
+        before = copy.deepcopy(layer.text_data)
+        layer.text_data[key] = value
+        render_text_layer(layer)
+        layer.touch_pixels()
+        self.push_command(TextDataCommand("Изменить текст", layer.id, before, copy.deepcopy(layer.text_data)))
+        self.doc.dirty = True
+        self.refresh()
 
     def refresh_layer_previews(self) -> None:
         layer = self.doc.layer
@@ -2137,6 +2553,23 @@ class PhotoRedactorApp(tk.Tk):
 
     def pointer_motion(self, event) -> None:
         self._last_pointer_event = event
+        point = self.canvas_to_doc(event)
+        if hasattr(self, "status_coords"):
+            self.status_coords.configure(text=f"{point[0]}, {point[1]}")
+        if self.tool.get() == "move" and not self._panning:
+            if self._move_layer_id is not None:
+                self.canvas.configure(cursor="fleur")
+            else:
+                handle = self.object_handle_at(point)
+                cursor_by_handle = {
+                    "nw": "size_nw_se", "se": "size_nw_se", "ne": "size_ne_sw", "sw": "size_ne_sw",
+                    "n": "sb_v_double_arrow", "s": "sb_v_double_arrow", "e": "sb_h_double_arrow", "w": "sb_h_double_arrow",
+                }
+                if handle:
+                    self.canvas.configure(cursor=cursor_by_handle[handle])
+                else:
+                    hit = topmost_layer_at(self.doc, point, tolerance=max(2, round(5 / max(self.zoom.get(), 0.01))))
+                    self.canvas.configure(cursor="fleur" if hit is not None else "arrow")
         if not self._panning:
             self.update_brush_preview(event)
         if self.tool.get() == "polygon_lasso" and self._polygon_points:
@@ -2144,7 +2577,142 @@ class PhotoRedactorApp(tk.Tk):
 
     def pointer_leave(self, _event) -> None:
         self._last_pointer_event = None
+        if hasattr(self, "status_coords"):
+            self.status_coords.configure(text="")
         self.clear_brush_preview()
+
+    def object_document_bounds(self, layer: Layer | None = None) -> tuple[int, int, int, int] | None:
+        layer = layer or self.doc.layer
+        if layer.kind == "shape" and layer.shape_data is not None:
+            x1, y1, x2, y2 = [int(value) for value in layer.shape_data.get("box", [0, 0, 1, 1])]
+            return x1 + layer.x, y1 + layer.y, x2 + layer.x, y2 + layer.y
+        if layer.kind == "text" and layer.pixels.size:
+            ys, xs = np.where(layer.pixels[:, :, 3] > 8)
+            if len(xs):
+                return int(xs.min()) + layer.x, int(ys.min()) + layer.y, int(xs.max() + 1) + layer.x, int(ys.max() + 1) + layer.y
+        return None
+
+    def layer_render_bounds(self, layer: Layer) -> tuple[int, int, int, int]:
+        object_bounds = self.object_document_bounds(layer)
+        if object_bounds is not None:
+            return object_bounds
+        height, width = layer.pixels.shape[:2]
+        return layer.x, layer.y, layer.x + width, layer.y + height
+
+    def object_handle_points(self, bounds: tuple[int, int, int, int]) -> dict[str, tuple[float, float]]:
+        x1, y1, x2, y2 = bounds
+        cx, cy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
+        return {"nw": (x1, y1), "n": (cx, y1), "ne": (x2, y1), "e": (x2, cy), "se": (x2, y2), "s": (cx, y2), "sw": (x1, y2), "w": (x1, cy)}
+
+    def object_handle_at(self, point: tuple[int, int]) -> str | None:
+        if self.tool.get() != "move" or self.doc.layer.kind != "shape" or self.doc.layer.id not in self.selected_layer_ids:
+            return None
+        bounds = self.object_document_bounds()
+        if bounds is None:
+            return None
+        tolerance = max(3.0, 7.0 / max(self.zoom.get(), 0.01))
+        for name, (x, y) in self.object_handle_points(bounds).items():
+            if abs(point[0] - x) <= tolerance and abs(point[1] - y) <= tolerance:
+                return name
+        return None
+
+    def update_object_bounds(self) -> None:
+        if not hasattr(self, "canvas"):
+            return
+        layer = self.doc.layer if self.doc.layers else None
+        bounds = None if layer is None or layer.id not in self.selected_layer_ids or layer.kind not in {"shape", "text"} else self.object_document_bounds(layer)
+        if bounds is None:
+            for item_id in self._object_bounds_ids:
+                self.canvas.delete(item_id)
+            self._object_bounds_ids.clear()
+            return
+        x1, y1 = self.doc_to_canvas(bounds[0], bounds[1])
+        x2, y2 = self.doc_to_canvas(bounds[2], bounds[3])
+        points = self.object_handle_points((x1, y1, x2, y2))
+        dpi_scale = max(1.0, float(self.tk.call("tk", "scaling")))
+        radius = max(3, round(3 * dpi_scale))
+        if len(self._object_bounds_ids) != 9:
+            for item_id in self._object_bounds_ids:
+                self.canvas.delete(item_id)
+            outline = self.canvas.create_rectangle(x1, y1, x2, y2, outline=TOKENS.ACCENT, width=1, dash=(4, 3))
+            handles = [self.canvas.create_rectangle(0, 0, 0, 0, fill=TOKENS.ACCENT, outline=TOKENS.TEXT_PRIMARY, width=1) for _ in points]
+            self._object_bounds_ids = [outline, *handles]
+        self.canvas.coords(self._object_bounds_ids[0], x1, y1, x2, y2)
+        for item_id, (_name, (x, y)) in zip(self._object_bounds_ids[1:], points.items()):
+            self.canvas.coords(item_id, x - radius, y - radius, x + radius, y + radius)
+            self.canvas.tag_raise(item_id)
+        self.canvas.tag_raise(self._object_bounds_ids[0])
+
+    def select_object_at(self, point: tuple[int, int], add: bool = False) -> Layer | None:
+        index = topmost_layer_at(self.doc, point, tolerance=max(2, round(5 / max(self.zoom.get(), 0.01))))
+        if index is None:
+            if not add:
+                self.selected_layer_ids.clear()
+                self.refresh_layers()
+                self.update_object_bounds()
+            return None
+        layer = self.doc.layers[index]
+        self.doc.active_layer = index
+        if add:
+            self.selected_layer_ids.add(layer.id)
+        else:
+            self.selected_layer_ids = {layer.id}
+        self.refresh_layers()
+        self.refresh_properties()
+        self.update_object_bounds()
+        return layer
+
+    def begin_object_resize(self, handle: str) -> None:
+        layer = self.doc.layer
+        if layer.kind != "shape" or layer.shape_data is None or layer.locked:
+            return
+        self._object_resize_handle = handle
+        self._object_resize_layer_id = layer.id
+        self._object_resize_before = copy.deepcopy(layer.shape_data)
+        self._object_resize_rendered_bounds = self.object_document_bounds(layer)
+        self._last_object_resize_render = 0.0
+
+    def resize_selected_object_live(self, point: tuple[int, int], state: int) -> None:
+        layer = self.doc.get_layer(self._object_resize_layer_id or "")
+        if layer is None or layer.shape_data is None or self._object_resize_before is None or self._object_resize_handle is None:
+            return
+        old_box = tuple(int(value) for value in self._object_resize_before.get("box", [0, 0, 1, 1]))
+        document_box = tuple(value + (layer.x if index % 2 == 0 else layer.y) for index, value in enumerate(old_box))
+        resized = resize_box_from_handle(
+            document_box,
+            self._object_resize_handle,
+            point,
+            keep_proportions=bool(state & 0x0001),
+            from_center=bool(state & 0x0008),
+        )
+        layer.shape_data = copy.deepcopy(self._object_resize_before)
+        layer.shape_data["box"] = [resized[0] - layer.x, resized[1] - layer.y, resized[2] - layer.x, resized[3] - layer.y]
+        self.doc.dirty = True
+        self.update_object_bounds()
+        now = time.perf_counter()
+        if now - self._last_object_resize_render >= 1 / 30:
+            old_bounds = self._object_resize_rendered_bounds or document_box
+            render_shape_layer(layer)
+            new_bounds = self.object_document_bounds(layer) or resized
+            self.request_canvas_refresh(union_rect(old_bounds, new_bounds), layer, "pixels")
+            self._object_resize_rendered_bounds = new_bounds
+            self._last_object_resize_render = now
+
+    def finish_object_resize(self) -> None:
+        layer = self.doc.get_layer(self._object_resize_layer_id or "")
+        if layer is not None and layer.shape_data is not None and self._object_resize_before is not None and layer.shape_data != self._object_resize_before:
+            old_bounds = self._object_resize_rendered_bounds or self.object_document_bounds(layer)
+            render_shape_layer(layer)
+            new_bounds = self.object_document_bounds(layer)
+            if old_bounds is not None and new_bounds is not None:
+                self.request_canvas_refresh(union_rect(old_bounds, new_bounds), layer, "pixels")
+            self.push_command(ShapeDataCommand("Изменить размер фигуры", layer.id, self._object_resize_before, copy.deepcopy(layer.shape_data), layer.name, layer.name))
+        self._object_resize_handle = None
+        self._object_resize_layer_id = None
+        self._object_resize_before = None
+        self._object_resize_rendered_bounds = None
+        self._last_object_resize_render = 0.0
+        self.refresh_properties()
 
     def brush_size_changed(self, *_args) -> None:
         if self._last_pointer_event is not None:
@@ -2392,12 +2960,27 @@ class PhotoRedactorApp(tk.Tk):
                 self.finish_text_edit()
             self.status_text("Клик создает строку текста, перетаскивание создает текстовый блок")
         elif tool == "move":
-            if self.doc.layer.locked:
-                self.status_text("Слой заблокирован")
+            handle = self.object_handle_at(point)
+            if handle is not None:
+                self.begin_object_resize(handle)
                 return
-            self._move_layer_id = self.doc.layer.id
-            self._move_start = (self.doc.layer.x, self.doc.layer.y)
-            self._move_start_mask = None if self.doc.layer.mask is None else self.doc.layer.mask.copy()
+            layer = self.select_object_at(point, add=bool(event.state & 0x0001)) if self.auto_select.get() else self.doc.layer
+            if layer is None and self.doc.layers and self.doc.layer.kind not in {"shape", "text", "adjustment"}:
+                candidate = self.doc.layer
+                if layer_contains_point(candidate, point, 0):
+                    layer = candidate
+            if layer is None or not layer_contains_point(layer, point, max(2, round(5 / max(self.zoom.get(), 0.01)))):
+                self.drag_start = None
+                self.status_text("На этом месте нет редактируемого объекта")
+                return
+            if layer.locked:
+                self.status_text("Объект выбран, но слой заблокирован")
+                self.drag_start = None
+                return
+            self._move_layer_id = layer.id
+            self._move_start = (layer.x, layer.y)
+            self._move_start_mask = None if layer.mask is None else layer.mask.copy()
+            self._move_last_bounds = self.layer_render_bounds(layer)
         elif tool == "polygon_lasso":
             self._polygon_points.append(point)
             self.draw_polygon_lasso()
@@ -2420,11 +3003,21 @@ class PhotoRedactorApp(tk.Tk):
         if tool in ["brush", "eraser", "blur_tool", "sharpen_tool", "dodge", "burn", "clone", "healing", "spot_healing"]:
             self.paint_line(self.last_point or point, point)
             self.last_point = point
+        elif tool == "move" and self._object_resize_handle is not None:
+            self.resize_selected_object_live(point, event.state)
         elif tool == "move" and self.drag_start:
             dx, dy = point[0] - self.drag_start[0], point[1] - self.drag_start[1]
-            self.doc.move_active_layer(dx, dy)
-            self.drag_start = point
-            self.request_canvas_refresh()
+            if dx or dy:
+                layer = self.doc.get_layer(self._move_layer_id or "")
+                if layer is not None:
+                    old_bounds = self._move_last_bounds or self.layer_render_bounds(layer)
+                    self.doc.move_active_layer(dx, dy)
+                    new_bounds = self.layer_render_bounds(layer)
+                    dirty = union_rect(old_bounds, new_bounds)
+                    self._move_last_bounds = new_bounds
+                    self.drag_start = point
+                    self.request_canvas_refresh(dirty, layer, "transform")
+                    self.update_object_bounds()
         elif tool in ["select", "ellipse_select", "crop", "gradient", "text", "rect_shape", "ellipse_shape", "line_shape", "bezier_shape", "polygon_shape", "star_shape", "custom_shape"]:
             self.draw_selection(self.drag_start, point, event.state)
             if tool == "gradient" and self.drag_start:
@@ -2460,7 +3053,10 @@ class PhotoRedactorApp(tk.Tk):
             self._clone_anchor_source = None
             self._clone_sample_pixels = None
         elif tool == "move":
-            self.end_move_layer()
+            if self._object_resize_handle is not None:
+                self.finish_object_resize()
+            else:
+                self.end_move_layer()
         elif tool == "gradient" and self.drag_start:
             if self.gradient_mode.get() == "Объект":
                 self.create_gradient_object(self.drag_start, point)
@@ -2560,6 +3156,12 @@ class PhotoRedactorApp(tk.Tk):
         self._crop_drag_origin_box = None
 
     def pointer_double_click(self, event) -> None:
+        if self.tool.get() == "move":
+            point = self.canvas_to_doc(event)
+            layer = self.select_object_at(point)
+            if layer is not None and layer.kind == "text":
+                self.edit_active_text_on_canvas()
+            return
         if self.tool.get() == "crop" and self._crop_box is not None:
             point = self.canvas_to_doc(event)
             x1, y1, x2, y2 = self._crop_box
@@ -2677,6 +3279,7 @@ class PhotoRedactorApp(tk.Tk):
         self._move_layer_id = None
         self._move_start = None
         self._move_start_mask = None
+        self._move_last_bounds = None
 
     def paint_at(self, point: tuple[int, int]) -> None:
         self.capture_stroke_before(self.brush_local_rect(point))
@@ -3066,6 +3669,13 @@ class PhotoRedactorApp(tk.Tk):
         if layer.kind != "text" or layer.text_data is None:
             self.status_text("Сначала выберите текстовый слой")
             return
+        if layer.x or layer.y:
+            layer.text_data["x"] = int(layer.text_data.get("x", 0)) + layer.x
+            layer.text_data["y"] = int(layer.text_data.get("y", 0)) + layer.y
+            layer.x = 0
+            layer.y = 0
+            render_text_layer(layer)
+            layer.touch_pixels()
         x = int(layer.text_data.get("x", 0))
         y = int(layer.text_data.get("y", 0))
         width = max(240, int(layer.text_data.get("box_width", 0)))
@@ -3602,6 +4212,7 @@ class PhotoRedactorApp(tk.Tk):
             float(options["inner_ratio"]),
             custom_points=options["custom_points"],
         )
+        self.selected_layer_ids = {layer.id}
         self.push_command(LayerInsertCommand("Shape layer", self.doc.active_layer, copy.deepcopy(layer)))
 
     def run_shape_data_command(self, label: str, edit) -> None:
@@ -4277,7 +4888,7 @@ class PhotoRedactorApp(tk.Tk):
         self.new_document()
 
     def open_file(self) -> None:
-        path = filedialog.askopenfilename(filetypes=[("Проекты и изображения", "*.prdx *.png *.jpg *.jpeg *.webp *.bmp *.tif *.tiff"), ("Все файлы", "*.*")])
+        path = filedialog.askopenfilename(filetypes=[("Проекты, изображения и RAW", "*.prdx *.png *.jpg *.jpeg *.webp *.bmp *.tif *.tiff *.dng *.arw *.cr2 *.cr3 *.nef *.nrw *.orf *.raf *.rw2 *.pef *.raw"), ("Все файлы", "*.*")])
         if not path:
             return
         self.open_path(path)
@@ -4326,6 +4937,38 @@ class PhotoRedactorApp(tk.Tk):
             messagebox.showerror("Linked layer", f"Linked source file not found:\n{source_path}")
             return
         self.run_document_command("Update linked layer", self.doc.update_linked_layer)
+        self.refresh()
+
+    def show_linked_layer_status(self) -> None:
+        status = self.doc.linked_layer_status()
+        labels = {
+            "embedded": "Объект встроен в проект",
+            "current": "Связанный файл актуален",
+            "modified": "Связанный файл изменён вне редактора",
+            "missing": "Связанный файл не найден",
+        }
+        messagebox.showinfo("Smart Object", f"{labels.get(status['status'], status['status'])}\n\n{status.get('path') or ''}")
+
+    def replace_smart_contents(self) -> None:
+        if self.doc.layer.kind not in {"linked", "embedded"}:
+            messagebox.showinfo("Smart Object", "Активный слой не является Smart Object.")
+            return
+        path = filedialog.askopenfilename(filetypes=[("Изображения", "*.png *.jpg *.jpeg *.webp *.bmp *.tif *.tiff"), ("Все файлы", "*.*")])
+        if not path:
+            return
+        linked = messagebox.askyesno("Smart Object", "Оставить содержимое связанным с внешним файлом?")
+        self.run_document_command("Заменить содержимое Smart Object", lambda: self.doc.replace_active_smart_contents(path, linked))
+        self.refresh()
+
+    def convert_smart_to_embedded(self) -> None:
+        if self.doc.layer.kind not in {"linked", "embedded"}:
+            messagebox.showinfo("Smart Object", "Активный слой не является Smart Object.")
+            return
+        self.run_document_command("Преобразовать Smart Object во встроенный", self.doc.convert_active_smart_to_embedded)
+        self.refresh()
+
+    def reset_smart_transform(self) -> None:
+        self.run_document_command("Сбросить трансформацию Smart Object", self.doc.reset_active_smart_transform)
         self.refresh()
 
     def relink_layer(self) -> None:
@@ -4443,6 +5086,76 @@ class PhotoRedactorApp(tk.Tk):
     def show_metadata(self) -> None:
         text = json.dumps(self.doc.metadata or {}, ensure_ascii=False, indent=2)
         self.show_text_window("Metadata / EXIF", text if text != "{}" else "No metadata.")
+
+    def edit_metadata(self) -> None:
+        window = tk.Toplevel(self)
+        window.title("Редактор метаданных")
+        window.geometry("720x500")
+        window.transient(self)
+        working = copy.deepcopy(self.doc.metadata or {})
+        tree = ttk.Treeview(window, columns=("value",), show="tree headings")
+        tree.heading("#0", text="Поле")
+        tree.heading("value", text="Значение")
+        tree.column("#0", width=230)
+        tree.column("value", width=450)
+        tree.pack(fill=tk.BOTH, expand=True, padx=10, pady=(10, 4))
+
+        def refill() -> None:
+            tree.delete(*tree.get_children())
+            for key, value in sorted(working.items(), key=lambda item: str(item[0]).lower()):
+                tree.insert("", tk.END, iid=str(key), text=str(key), values=(json.dumps(value, ensure_ascii=False),))
+
+        def set_value() -> None:
+            selected = tree.selection()
+            old_key = selected[0] if selected else ""
+            key = simpledialog.askstring("Метаданные", "Название поля:", initialvalue=old_key, parent=window)
+            if not key:
+                return
+            initial = json.dumps(working.get(old_key, ""), ensure_ascii=False)
+            raw = simpledialog.askstring("Метаданные", "Значение:", initialvalue=initial, parent=window)
+            if raw is None:
+                return
+            try:
+                value = json.loads(raw)
+            except json.JSONDecodeError:
+                value = raw
+            if old_key and old_key != key:
+                working.pop(old_key, None)
+            working[key] = value
+            refill()
+
+        def remove_value() -> None:
+            for key in tree.selection():
+                working.pop(key, None)
+            refill()
+
+        buttons = ttk.Frame(window)
+        buttons.pack(fill=tk.X, padx=10, pady=(4, 10))
+        ttk.Button(buttons, text="Добавить / изменить", command=set_value).pack(side=tk.LEFT)
+        ttk.Button(buttons, text="Удалить", command=remove_value).pack(side=tk.LEFT, padx=6)
+
+        def apply() -> None:
+            self.run_document_command("Редактировать метаданные", lambda: setattr(self.doc, "metadata", copy.deepcopy(working)))
+            self.doc.dirty = True
+            window.destroy()
+            self.refresh()
+
+        ttk.Button(buttons, text="Применить", command=apply).pack(side=tk.RIGHT)
+        ttk.Button(buttons, text="Отмена", command=window.destroy).pack(side=tk.RIGHT, padx=6)
+        refill()
+
+    def show_cache_status(self) -> None:
+        status = self.render_engine.cache_status()
+        gpu = status["gpu"]
+        text = (
+            f"Кэш в памяти: {status['memory_bytes'] / 1024 / 1024:.1f} МБ\n"
+            f"Объектов в памяти: {status['memory_items']}\n"
+            f"Объектов на scratch-диске: {status['disk_items']}\n"
+            f"GPU доступен: {'да' if gpu['available'] else 'нет'}\n"
+            f"GPU включен: {'да' if gpu['enabled'] else 'нет'}\n"
+            f"Устройств: {gpu['devices']}"
+        )
+        messagebox.showinfo("Большие документы", text)
 
     def show_text_window(self, title: str, text: str) -> None:
         window = tk.Toplevel(self)
@@ -5514,6 +6227,8 @@ class PhotoRedactorApp(tk.Tk):
             self.layer_opacity.set(self.doc.layer.opacity)
             self.blend_mode.set(self.doc.layer.blend_mode)
             self.refresh_layer_previews()
+            self.refresh_properties()
+            self.update_object_bounds()
             self.info.configure(text=f"{self.doc.width} x {self.doc.height}px\nСлоев: {len(self.doc.layers)}\nВыбрано: {len(self.selected_layer_ids)}")
 
     def layer_list_click(self, event) -> str | None:
@@ -5776,6 +6491,101 @@ class PhotoRedactorApp(tk.Tk):
             self.run_document_command("Resize canvas", lambda: self.doc.resize_canvas(width, height))
             self.refresh()
 
+    def generative_expand_dialog(self) -> None:
+        dialog = tk.Toplevel(self)
+        dialog.title("Генеративное расширение холста")
+        dialog.geometry("560x500")
+        dialog.transient(self)
+        dialog.grab_set()
+        values = {name: tk.IntVar(value=max(64, size // 8)) for name, size in (
+            ("Слева", self.doc.width), ("Сверху", self.doc.height), ("Справа", self.doc.width), ("Снизу", self.doc.height)
+        )}
+        method = tk.StringVar(value="content-aware")
+        controls = ttk.Frame(dialog, padding=12)
+        controls.pack(fill=tk.X)
+        for column, (name, variable) in enumerate(values.items()):
+            ttk.Label(controls, text=name).grid(row=0, column=column, padx=4, sticky="w")
+            ttk.Spinbox(controls, from_=0, to=100000, textvariable=variable, width=10).grid(row=1, column=column, padx=4)
+        ttk.Label(controls, text="Заполнение").grid(row=2, column=0, sticky="w", pady=(12, 2))
+        ttk.Combobox(
+            controls,
+            textvariable=method,
+            values=("content-aware", "mirror", "edge"),
+            state="readonly",
+        ).grid(row=3, column=0, columnspan=4, sticky="ew", padx=4)
+        preview = ttk.Label(dialog, anchor=tk.CENTER)
+        preview.pack(fill=tk.BOTH, expand=True, padx=12, pady=8)
+
+        def update_preview(*_args) -> None:
+            try:
+                source = self.render_engine.render(self.doc, False)
+                scale = min(1.0, 360 / max(source.shape[0], source.shape[1]))
+                small = cv2.resize(source, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+                document_scale = small.shape[1] / self.doc.width
+                margins = [max(0, round(values[name].get() * document_scale)) for name in ("Слева", "Сверху", "Справа", "Снизу")]
+                result = generative_expand_pixels(small, margins[0], margins[1], margins[2], margins[3], method.get())
+                image = rgba_array_to_pil(result)
+                image.thumbnail((500, 320), Image.Resampling.LANCZOS)
+                self._generative_preview_image = ImageTk.PhotoImage(image)
+                preview.configure(image=self._generative_preview_image)
+            except (tk.TclError, ValueError):
+                pass
+
+        for variable in values.values():
+            variable.trace_add("write", update_preview)
+        method.trace_add("write", update_preview)
+
+        buttons = ttk.Frame(dialog, padding=(12, 0, 12, 12))
+        buttons.pack(fill=tk.X)
+
+        def apply() -> None:
+            margins = [values[name].get() for name in ("Слева", "Сверху", "Справа", "Снизу")]
+            if not any(value > 0 for value in margins):
+                messagebox.showinfo("Расширение", "Укажите размер расширения хотя бы с одной стороны.", parent=dialog)
+                return
+            dialog.destroy()
+            self.run_document_command(
+                "Генеративное расширение",
+                lambda: self.doc.generative_expand(*margins, method.get()),
+            )
+            self.refresh()
+
+        ttk.Button(buttons, text="Расширить", command=apply).pack(side=tk.RIGHT)
+        ttk.Button(buttons, text="Отмена", command=dialog.destroy).pack(side=tk.RIGHT, padx=6)
+        update_preview()
+
+    def change_bit_depth(self, bit_depth: int) -> None:
+        self.run_document_command(f"Глубина каналов {bit_depth} бит", lambda: self.doc.set_bit_depth(bit_depth))
+        self.refresh()
+
+    def change_color_model(self, color_model: str) -> None:
+        self.run_document_command(f"Цветовая модель {color_model}", lambda: self.doc.set_color_model(color_model))
+        self.refresh()
+
+    def _choose_icc_profile(self, title: str) -> str | None:
+        use_srgb = messagebox.askyesnocancel(title, "Использовать стандартный профиль sRGB?\n\nДа: sRGB\nНет: выбрать ICC-файл")
+        if use_srgb is None:
+            return None
+        if use_srgb:
+            return "sRGB"
+        return filedialog.askopenfilename(title=title, filetypes=[("ICC-профили", "*.icc *.icm"), ("Все файлы", "*.*")]) or None
+
+    def assign_icc_profile(self) -> None:
+        profile = self._choose_icc_profile("Назначить ICC-профиль")
+        if profile:
+            self.run_document_command("Назначить ICC-профиль", lambda: self.doc.assign_color_profile(profile))
+            self.refresh()
+
+    def convert_icc_profile(self) -> None:
+        profile = self._choose_icc_profile("Преобразовать в ICC-профиль")
+        if not profile:
+            return
+        try:
+            self.run_document_command("Преобразовать ICC-профиль", lambda: self.doc.convert_color_profile(profile))
+            self.refresh()
+        except Exception as exc:
+            messagebox.showerror("Управление цветом", str(exc))
+
     def crop_to_selection(self) -> None:
         crop_box = self.doc.selection_bounds() or self.selection_box
         if not crop_box:
@@ -5802,6 +6612,10 @@ class PhotoRedactorApp(tk.Tk):
             old_w, old_h = self.doc.width, self.doc.height
             for layer in self.doc.layers:
                 lx, ly, lw, lh = layer.x, layer.y, layer.pixels.shape[1], layer.pixels.shape[0]
+                if layer.kind in {"linked", "embedded"} and layer.smart_data is not None:
+                    transform = dict(layer.smart_data.get("transform") or {})
+                    transform["angle"] = float(transform.get("angle", 0.0)) + angle
+                    layer.smart_data = {**layer.smart_data, "transform": transform}
                 if angle == 90:
                     layer.pixels = cv2.rotate(layer.pixels, cv2.ROTATE_90_CLOCKWISE)
                     if layer.mask is not None:
@@ -5814,6 +6628,7 @@ class PhotoRedactorApp(tk.Tk):
                         layer.mask = cv2.rotate(layer.mask, cv2.ROTATE_180)
                     layer.x = old_w - (lx + lw)
                     layer.y = old_h - (ly + lh)
+                layer.touch_pixels()
             if self.doc.selection_mask is not None:
                 if angle == 90:
                     self.doc.selection_mask = cv2.rotate(self.doc.selection_mask, cv2.ROTATE_90_CLOCKWISE)
@@ -5828,7 +6643,7 @@ class PhotoRedactorApp(tk.Tk):
                 self.doc.width, self.doc.height = self.doc.height, self.doc.width
             self.doc.dirty = True
 
-        self.run_document_command("Rotate", edit)
+        self.run_document_command(f"Rotate {angle}", edit)
         self.refresh()
 
     def flip(self, horizontal: bool) -> None:
@@ -5836,19 +6651,25 @@ class PhotoRedactorApp(tk.Tk):
             code = 1 if horizontal else 0
             for layer in self.doc.layers:
                 layer.pixels = cv2.flip(layer.pixels, code)
+                if layer.kind in {"linked", "embedded"} and layer.smart_data is not None:
+                    transform = dict(layer.smart_data.get("transform") or {})
+                    key = "flip_horizontal" if horizontal else "flip_vertical"
+                    transform[key] = not bool(transform.get(key, False))
+                    layer.smart_data = {**layer.smart_data, "transform": transform}
                 if layer.mask is not None:
                     layer.mask = cv2.flip(layer.mask, code)
                 if horizontal:
                     layer.x = self.doc.width - (layer.x + layer.pixels.shape[1])
                 else:
                     layer.y = self.doc.height - (layer.y + layer.pixels.shape[0])
+                layer.touch_pixels()
             if self.doc.selection_mask is not None:
                 self.doc.selection_mask = cv2.flip(self.doc.selection_mask, code)
             for name, mask in list(self.doc.saved_selections.items()):
                 self.doc.saved_selections[name] = cv2.flip(mask, code)
             self.doc.dirty = True
 
-        self.run_document_command("Flip", edit)
+        self.run_document_command("Flip horizontal" if horizontal else "Flip vertical", edit)
         self.refresh()
 
     def apply_to_layer(self, label: str, fn) -> None:
@@ -6482,6 +7303,41 @@ class PhotoRedactorApp(tk.Tk):
         self.run_document_command("Заплатка", lambda: self.doc.patch_active_selection(x, y, heal))
         self.refresh()
 
+    def refresh_plugin_filter_menu(self) -> None:
+        self.plugin_filters_menu.delete(0, tk.END)
+        if not self.plugin_registry.filters:
+            self.plugin_filters_menu.add_command(label="Нет доступных фильтров", state=tk.DISABLED)
+            return
+        for name, plugin in sorted(self.plugin_registry.filters.items()):
+            self.plugin_filters_menu.add_command(label=name, command=lambda value=name: self.apply_plugin_filter(value))
+
+    def apply_plugin_filter(self, name: str) -> None:
+        raw = simpledialog.askstring("Фильтр-плагин", "Параметры JSON:", initialvalue="{}")
+        if raw is None:
+            return
+        try:
+            params = json.loads(raw)
+            if not isinstance(params, dict):
+                raise ValueError("Параметры должны быть JSON-объектом")
+            self.apply_to_layer(name, lambda pixels: self.plugin_registry.apply_filter(name, pixels, params))
+        except Exception as exc:
+            messagebox.showerror("Фильтр-плагин", str(exc))
+
+    def reload_plugins(self) -> None:
+        count = self.plugin_registry.discover()
+        for name, callback in self.plugin_registry.action_commands.items():
+            if name not in self.action_runner.commands:
+                self.action_runner.register(name, callback)
+        self.status_text(f"Плагины перезагружены: {count}")
+        if self.plugin_registry.errors:
+            self.show_plugin_errors()
+
+    def show_plugin_errors(self) -> None:
+        if not self.plugin_registry.errors:
+            messagebox.showinfo("Плагины", "Ошибок загрузки нет.")
+            return
+        self.show_text_window("Ошибки плагинов", "\n".join(self.plugin_registry.errors))
+
     def set_view_channel(self) -> None:
         self.invalidate_view()
         self.refresh_canvas()
@@ -6607,7 +7463,7 @@ class PhotoRedactorApp(tk.Tk):
         width = simpledialog.askinteger("Batch", "Max width px, empty for original:", initialvalue=1920, minvalue=1, maxvalue=50000)
 
         def worker():
-            exts = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
+            exts = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"} | RAW_EXTENSIONS
             count = 0
             for path in Path(src).rglob("*"):
                 if path.suffix.lower() not in exts:
@@ -6623,6 +7479,18 @@ class PhotoRedactorApp(tk.Tk):
         self.run_background("Batch", worker, lambda count: messagebox.showinfo("Batch", f"Processed {count} files."))
 
 
+def enable_high_dpi() -> None:
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+
+        ctypes.windll.shcore.SetProcessDpiAwareness(1)
+    except (AttributeError, OSError):
+        pass
+
+
 def main() -> None:
+    enable_high_dpi()
     app = PhotoRedactorApp()
     app.mainloop()

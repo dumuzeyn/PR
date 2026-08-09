@@ -143,3 +143,40 @@ def test_repeated_view_access_does_not_recompose_document() -> None:
     assert second is first
     assert profiler.counter("render.full") == full_count
     assert profiler.counter("render.partial") == 0
+
+
+def test_transform_invalidation_preserves_pixels_and_updates_only_touched_tiles() -> None:
+    document = Document.new(900, 700, (0, 0, 0, 0))
+    document.layers.clear()
+    layer = document.add_shape_layer("ellipse", (60, 50, 180, 140), (40, 120, 220, 255))
+    engine = RenderEngine(tile_size=128)
+    engine.render(document, checker=True)
+    pixels_revision = layer.pixels_revision
+    layer.x, layer.y = 24, 18
+    engine.invalidate_region(document, (60, 50, 204, 158), layer, "transform")
+    engine.render(document, checker=True)
+    assert layer.pixels_revision == pixels_revision
+    assert 0 < len(engine.last_changed_tiles) < len(set(engine.all_tiles(document)))
+
+
+def test_partial_shape_render_skips_objects_outside_dirty_region() -> None:
+    document = Document.new(512, 512, (0, 0, 0, 0))
+    document.layers.clear()
+    positions = [(10, 10), (330, 10), (10, 330), (330, 330)]
+    for x, y in positions:
+        document.add_shape_layer("ellipse", (x, y, x + 50, y + 50), (40, 120, 220, 255))
+    engine = RenderEngine(tile_size=128)
+    engine.render(document, checker=True)
+    visited: list[str] = []
+    original = engine.filtered_pixels
+
+    def track(layer):
+        visited.append(layer.id)
+        return original(layer)
+
+    engine.filtered_pixels = track
+    target = document.layers[0]
+    target.x = 12
+    engine.invalidate_region(document, (10, 10, 72, 60), target, "transform")
+    engine.render(document, checker=True)
+    assert visited == [target.id]

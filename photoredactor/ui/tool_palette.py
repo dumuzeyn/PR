@@ -5,6 +5,8 @@ from types import SimpleNamespace
 from tkinter import messagebox, ttk
 
 from .scrollable_frame import ScrollableFrame
+from .icons import SHORTCUTS, TOOL_GROUPS, tool_icon
+from .theme import TOKENS
 
 ToolDefinition = tuple[str, str, str]
 
@@ -50,12 +52,17 @@ class ToolPalette(ttk.Frame):
         self.visible = list(visible)
         self.select_tool = select_tool
         self.tooltip_factory = tooltip_factory
+        self._images: dict[str, tk.PhotoImage] = {}
         header = ttk.Frame(self)
-        header.pack(fill=tk.X, padx=8, pady=(8, 4))
-        ttk.Label(header, text="Инструменты").pack(side=tk.LEFT)
-        ttk.Button(header, text="Настроить...", command=configure_tools).pack(side=tk.RIGHT)
+        header.pack(fill=tk.X, padx=5, pady=(6, 3))
+        settings_image = tool_icon(self, "custom_shape", 17, TOKENS.TEXT_SECONDARY)
+        self._images["settings"] = settings_image
+        settings = ttk.Button(header, image=settings_image, command=configure_tools, width=3)
+        settings.pack(anchor=tk.CENTER)
+        if self.tooltip_factory is not None:
+            self.tooltip_factory(settings, "Настроить панель инструментов")
         self.scroller = ScrollableFrame(self, height=280)
-        self.scroller.pack(fill=tk.BOTH, expand=True, padx=(8, 4), pady=(0, 8))
+        self.scroller.pack(fill=tk.BOTH, expand=True, padx=(4, 2), pady=(0, 5))
         self.buttons: dict[str, ttk.Radiobutton] = {}
         self.render()
 
@@ -68,21 +75,33 @@ class ToolPalette(ttk.Frame):
         for child in self.scroller.content.winfo_children():
             child.destroy()
         self.buttons.clear()
+        settings_image = self._images.get("settings")
+        self._images = {"settings": settings_image} if settings_image is not None else {}
         by_id = {value: (label, value, description) for label, value, description in self.definitions}
+        previous_group: str | None = None
         for value in self.order:
             if value not in self.visible or value not in by_id:
                 continue
             label, _value, description = by_id[value]
+            group = TOOL_GROUPS.get(value, value)
+            top_pad = 7 if previous_group is not None and group != previous_group else 1
+            previous_group = group
+            image = tool_icon(self, value, TOKENS.ICON_SIZE)
+            self._images[value] = image
             button = ttk.Radiobutton(
                 self.scroller.content,
-                text=label,
+                image=image,
                 value=value,
                 variable=self.tool_var,
                 command=lambda v=value: self.select_tool(v),
+                style="Tool.TRadiobutton",
+                takefocus=True,
             )
-            button.pack(fill=tk.X, padx=2, pady=2)
+            button.pack(anchor=tk.CENTER, padx=2, pady=(top_pad, 1))
             if self.tooltip_factory is not None:
-                self.tooltip_factory(button, description)
+                shortcut = SHORTCUTS.get(value)
+                title = f"{label} ({shortcut})" if shortcut else label
+                self.tooltip_factory(button, f"{title}\n{description}")
             self.buttons[value] = button
 
 

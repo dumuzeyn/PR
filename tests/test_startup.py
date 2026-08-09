@@ -9,6 +9,7 @@ import numpy as np
 from PIL import Image
 
 from photoredactor.app import PhotoRedactorApp
+from photoredactor.history import DocumentStateCommand, LayerInsertCommand, LayerMoveCommand, SelectionMaskCommand, ShapeDataCommand
 
 
 class StartupTests(unittest.TestCase):
@@ -130,6 +131,168 @@ class StartupTests(unittest.TestCase):
         after = viewport_center()
         self.assertAlmostEqual(after[0], before[0], delta=5.0)
         self.assertAlmostEqual(after[1], before[1], delta=5.0)
+
+    def test_canvas_object_selection_syncs_active_layer_and_layers_panel(self) -> None:
+        self.app.doc = self.app.doc.new(320, 220, (0, 0, 0, 0))
+        self.app.doc.layers.clear()
+        first = self.app.doc.add_shape_layer("rectangle", (20, 20, 130, 100), (220, 40, 40, 255))
+        second = self.app.doc.add_shape_layer("ellipse", (80, 50, 220, 160), (40, 120, 220, 255))
+        self.app.selected_layer_ids = {second.id}
+        self.app.tool.set("move")
+        self.app.refresh()
+        selected = self.app.select_object_at((40, 40))
+        self.assertIs(selected, first)
+        self.assertEqual(self.app.doc.layer.id, first.id)
+        selected_rows = self.app.layer_list.curselection()
+        self.assertEqual(len(selected_rows), 1)
+        self.assertEqual(len(self.app.doc.layers) - 1 - selected_rows[0], self.app.doc.active_layer)
+
+    def test_selected_shape_has_eight_stable_handles(self) -> None:
+        self.app.doc = self.app.doc.new(320, 220, (0, 0, 0, 0))
+        self.app.doc.layers.clear()
+        layer = self.app.doc.add_shape_layer("ellipse", (40, 30, 180, 120), (40, 120, 220, 255))
+        self.app.selected_layer_ids = {layer.id}
+        self.app.tool.set("move")
+        self.app.refresh()
+        self.app.update_object_bounds()
+        self.assertEqual(len(self.app._object_bounds_ids), 9)
+        item_ids = tuple(self.app._object_bounds_ids)
+        self.app.update_object_bounds()
+        self.assertEqual(tuple(self.app._object_bounds_ids), item_ids)
+
+    def test_gradient_options_follow_selected_mode(self) -> None:
+        def labels(widget) -> set[str]:
+            result: set[str] = set()
+            for child in widget.winfo_children():
+                try:
+                    value = str(child.cget("text"))
+                except tk.TclError:
+                    value = ""
+                if value:
+                    result.add(value)
+                result.update(labels(child))
+            return result
+
+        self.app.tool.set("gradient")
+        self.app.gradient_mode.set("Заливка")
+        self.app.update()
+        fill_labels = labels(self.app.tool_options_panel)
+        self.assertIn("Тип", fill_labels)
+        self.assertNotIn("Фигура", fill_labels)
+        self.assertNotIn("Текстура", fill_labels)
+
+        self.app.gradient_mode.set("Объект")
+        self.app.gradient_object_fill.set("Текстура")
+        self.app.update()
+        texture_labels = labels(self.app.tool_options_panel)
+        self.assertIn("Фигура", texture_labels)
+        self.assertIn("Заливка", texture_labels)
+        self.assertIn("Текстура", texture_labels)
+        self.assertNotIn("Тип", texture_labels)
+
+    def test_colors_live_only_in_contextual_toolbar(self) -> None:
+        self.app.tool.set("gradient")
+        self.app.update()
+        self.assertFalse(hasattr(self.app, "color_control_canvas"))
+        primary = self.app.tool_options_panel.body.winfo_children()[0]
+        canvases = [child for child in primary.winfo_children() if isinstance(child, tk.Canvas)]
+        self.assertEqual(len(canvases), 1)
+
+    def test_move_drag_uses_regional_transform_and_one_history_item(self) -> None:
+        self.app.doc = self.app.doc.new(900, 700, (0, 0, 0, 0))
+        self.app.doc.layers.clear()
+        layer = self.app.doc.add_shape_layer("ellipse", (60, 50, 180, 140), (40, 120, 220, 255))
+        self.app.history.clear()
+        self.app.tool.set("move")
+        self.app.refresh()
+        start_x, start_y = self.app.doc_to_canvas(100, 90)
+        captured: list[tuple[tuple[int, int, int, int] | None, str]] = []
+        original_refresh = self.app.request_canvas_refresh
+        self.app.request_canvas_refresh = lambda rect=None, _layer=None, kind="pixels", **_kwargs: captured.append((rect, kind))
+        try:
+            self.app.pointer_down(SimpleNamespace(x=start_x, y=start_y, state=0))
+            self.app.pointer_drag(SimpleNamespace(x=start_x + 24, y=start_y + 18, state=0))
+            self.app.pointer_up(SimpleNamespace(x=start_x + 24, y=start_y + 18, state=0))
+        finally:
+            self.app.request_canvas_refresh = original_refresh
+        self.assertEqual((layer.x, layer.y), (24, 18))
+        self.assertEqual(len(captured), 1)
+        self.assertEqual(captured[0][1], "transform")
+        dirty = captured[0][0]
+        self.assertIsNotNone(dirty)
+        self.assertLess((dirty[2] - dirty[0]) * (dirty[3] - dirty[1]), self.app.doc.width * self.app.doc.height)
+        self.assertEqual(len(self.app.history.undo_stack), 1)
+        self.assertIsInstance(self.app.history.undo_stack[-1], LayerMoveCommand)
+        self.assertFalse(any(isinstance(command, DocumentStateCommand) for command in self.app.history.undo_stack))
+
+    def test_right_click_outside_selection_clears_it_for_selection_tools(self) -> None:
+        self.app.doc = self.app.doc.new(180, 120, (0, 0, 0, 0))
+        mask = np.zeros((120, 180), dtype=np.uint8)
+        mask[20:70, 30:90] = 255
+        self.app.doc.selection_mask = mask
+        self.app.tool.set("ellipse_select")
+        self.app.history.clear()
+        self.app.refresh()
+
+        inside_x, inside_y = self.app.doc_to_canvas(50, 40)
+        self.assertEqual(self.app.selection_right_click(SimpleNamespace(x=inside_x, y=inside_y)), "break")
+        self.assertIsNotNone(self.app.doc.selection_mask)
+        self.assertEqual(len(self.app.history.undo_stack), 0)
+
+        outside_x, outside_y = self.app.doc_to_canvas(130, 95)
+        self.assertEqual(self.app.selection_right_click(SimpleNamespace(x=outside_x, y=outside_y)), "break")
+        self.assertIsNone(self.app.doc.selection_mask)
+        self.assertEqual(len(self.app.history.undo_stack), 1)
+        self.assertIsInstance(self.app.history.undo_stack[-1], SelectionMaskCommand)
+
+    def test_shape_resize_uses_regional_updates_and_compact_history(self) -> None:
+        self.app.doc = self.app.doc.new(900, 700, (0, 0, 0, 0))
+        self.app.doc.layers.clear()
+        layer = self.app.doc.add_shape_layer("rectangle", (40, 30, 180, 120), (220, 40, 40, 255))
+        self.app.selected_layer_ids = {layer.id}
+        self.app.history.clear()
+        self.app.tool.set("move")
+        self.app.refresh()
+        captured: list[tuple[tuple[int, int, int, int] | None, str]] = []
+        original_refresh = self.app.request_canvas_refresh
+        self.app.request_canvas_refresh = lambda rect=None, _layer=None, kind="pixels", **_kwargs: captured.append((rect, kind))
+        try:
+            self.app.begin_object_resize("se")
+            self.app.resize_selected_object_live((250, 170), 0)
+            self.app.finish_object_resize()
+        finally:
+            self.app.request_canvas_refresh = original_refresh
+        self.assertEqual(tuple(layer.shape_data["box"]), (40, 30, 250, 170))
+        self.assertTrue(captured)
+        self.assertTrue(all(rect is not None and kind == "pixels" for rect, kind in captured))
+        self.assertEqual(len(self.app.history.undo_stack), 1)
+        self.assertIsInstance(self.app.history.undo_stack[-1], ShapeDataCommand)
+        self.assertFalse(any(isinstance(command, DocumentStateCommand) for command in self.app.history.undo_stack))
+
+    def test_fifty_shape_insertions_use_layer_commands(self) -> None:
+        self.app.doc = self.app.doc.new(320, 240, (0, 0, 0, 0))
+        self.app.doc.layers.clear()
+        self.app.history.clear()
+        for index in range(50):
+            x = 4 + (index % 10) * 28
+            y = 4 + (index // 10) * 40
+            geometry = self.app.shape_geometry_for_drag("ellipse_shape", (x, y), (x + 20, y + 24), 0)
+            self.app.create_shape_from_drag("ellipse_shape", geometry)
+        self.assertEqual(len(self.app.doc.layers), 50)
+        self.assertEqual(len(self.app.history.undo_stack), 50)
+        self.assertTrue(all(isinstance(command, LayerInsertCommand) for command in self.app.history.undo_stack))
+        self.assertFalse(any(isinstance(command, DocumentStateCommand) for command in self.app.history.undo_stack))
+
+    def test_editor_layout_remains_useful_at_1280_by_720(self) -> None:
+        self.app.create_document_from_settings(
+            {"width": 900, "height": 600, "dpi": 72, "background": (255, 255, 255, 255), "include_clipboard": False}
+        )
+        self.app.state("normal")
+        self.app.geometry("1280x720+0+0")
+        self.app.update()
+        self.assertGreaterEqual(self.app.canvas.winfo_width(), 700)
+        self.assertGreaterEqual(self.app.canvas.winfo_height(), 520)
+        self.assertLessEqual(self.app.right_tabs.winfo_width(), 360)
 
     def test_new_document_recenters_after_previous_view(self) -> None:
         settings = {

@@ -26,8 +26,15 @@ This repository starts with a real working editor and an architecture intended t
 - text layer font, size, block width, wrapping, alignment, line-spacing, tracking, bold/italic/underline, baseline shift, text-on-arc/wave and editable transform handles
 - grid and guide overlays plus RGB/Red/Green/Blue/Alpha channel preview
 - Russian main interface labels and hover tooltips for the tool palette
+- modern dark desktop layout with an icon toolbar, contextual options across the top, a canvas-first workspace, tabbed Properties/Layers/History and a compact status bar
+- direct Shape/Text selection on the canvas with auto-select, synchronized layers, eight resize handles, modifier-aware resize and arrow-key nudging
 - recovery autosave and manual recovery opening
-- simple action recording to JSON logs
+- replayable action recording in JSON v2, action playback and batch execution
+- Smart Objects with embedded originals, re-editable transforms and linked-file conflict status
+- RAW decoding, ICC profile assignment/conversion, RGB/Lab/CMYK workflows and 8/16/32-bit working channels
+- mipmap rendering for distant zoom, scratch-disk cache eviction and optional CUDA detection with CPU fallback
+- Python plugin API plus validated external executable filters
+- non-destructive generative canvas expansion with a live preview
 - metadata/EXIF view, histogram, image statistics and eyedropper
 - non-destructive adjustment layers with importable/exportable preset libraries for brightness/contrast, saturation, vibrance, temperature/tint, hue/saturation, exposure, color balance, levels, curves, threshold, posterize, invert and grayscale
 - undo/redo
@@ -74,12 +81,31 @@ Every push to `master` starts the `Build PhotoRedactor for Windows` workflow. Op
 
 ## Tool panel
 
-- The left side is split into a scrollable tool palette and a contextual tool-options panel.
+- The left side is a narrow, scrollable icon toolbar grouped by purpose. Names, shortcuts and explanations appear in tooltips.
+- The contextual options bar is horizontal at the top and only shows controls for the active tool. Rare controls stay under `Дополнительно`.
+- Gradient controls change with the mode: raster fill, gradient object and texture object do not show each other's irrelevant settings.
+- Foreground/background, fill/stroke and gradient colors are shown as clickable color swatches instead of duplicate text buttons.
 - `Инструменты -> Настроить панель инструментов...` changes visible tools and their order.
-- Click a checkbox icon to show or hide a tool; drag a row to place it anywhere in the palette order.
+- Click a tool name to show or hide it; drag the row or its visible grip to place it anywhere in the palette order.
 - Hidden tools stay available from the main `Инструменты` menu.
-- Tool-panel order, visibility and splitter position are saved in `settings.json`.
-- The options panel only shows controls that belong to the active tool, such as brush size, opacity, tolerance, paint target, colors or retouch presets.
+- Tool order and visibility are saved in `settings.json`.
+
+## Object interaction
+
+- Shapes are created corner-to-corner. `Shift` keeps proportions, `Alt` creates from the center, and both modifiers can be combined.
+- With Move selected, clicking visible Shape/Text content activates the topmost matching layer; hidden layers are ignored and locked layers can be selected but not moved.
+- Dragging moves the selected object live. Arrow keys move it by 1 px and `Shift` + arrow by 10 px.
+- Shape handles resize on one or two axes. `Shift` keeps proportions and `Alt` resizes around the center.
+- One drag creates one compact history command. Move and resize redraw only affected render tiles and do not store full-document snapshots.
+- With a selection tool active, right-clicking outside the selected mask clears the selection; right-clicking inside keeps it.
+
+## Plugins and actions
+
+- Put Python plugins in `%APPDATA%\PhotoRedactor\plugins` and reload them from `Действия -> Перезагрузить плагины`.
+- The plugin contract and external filter protocol are documented in [`PLUGINS.md`](PLUGINS.md).
+- Action v2 files can be replayed on the current document or a group of images. A ready example is in `actions\web_thumbnail.json`.
+- `PHOTO_REDACTOR_CACHE_MB` controls the RAM budget for render caches; older arrays automatically move to the scratch folder.
+- `PHOTO_REDACTOR_GPU=0` disables optional GPU selection. CPU rendering always remains available.
 
 ## Navigation
 
@@ -95,4 +121,4 @@ Every push to `master` starts the `Build PhotoRedactor for Windows` workflow. Op
 
 ## Scope
 
-The long requirements file describes a Photoshop-scale application. This codebase treats that as the product target, not a small demo. Features that are not implemented yet are tracked in `ROADMAP.md` instead of being faked in the UI.
+The long requirements file describes a Photoshop-scale application. The roadmap milestones are implemented as local, testable workflows; optional research integrations remain clearly separated from the editor core in `ROADMAP.md`.
