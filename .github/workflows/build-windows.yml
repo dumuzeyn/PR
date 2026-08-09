@@ -34,6 +34,8 @@ jobs:
           $coreExit = $LASTEXITCODE
           $coreOutput | Write-Output
           if ($coreExit -ne 0) {
+            $coreDetail = ($coreOutput -join "`n").Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+            Write-Output "::error title=Ошибка основных тестов::$coreDetail"
             "## Ошибка основных тестов" | Add-Content $env:GITHUB_STEP_SUMMARY
             $coreOutput | Add-Content $env:GITHUB_STEP_SUMMARY
             exit $coreExit
@@ -47,6 +49,8 @@ jobs:
             $uiExit = $LASTEXITCODE
             $uiOutput | Write-Output
             if ($uiExit -ne 0) {
+              $uiDetail = ($uiOutput -join "`n").Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+              Write-Output "::error title=Ошибка UI-теста ${test}::$uiDetail"
               "## Ошибка UI-теста: $test" | Add-Content $env:GITHUB_STEP_SUMMARY
               $uiOutput | Add-Content $env:GITHUB_STEP_SUMMARY
               exit $uiExit
