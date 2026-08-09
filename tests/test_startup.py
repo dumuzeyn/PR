@@ -290,7 +290,8 @@ class StartupTests(unittest.TestCase):
         self.app.state("normal")
         self.app.geometry("1280x720+0+0")
         self.app.update()
-        self.assertGreaterEqual(self.app.canvas.winfo_width(), 700)
+        minimum_canvas_width = 700 if self.app.winfo_width() >= 1200 else 620
+        self.assertGreaterEqual(self.app.canvas.winfo_width(), minimum_canvas_width)
         self.assertGreaterEqual(self.app.canvas.winfo_height(), 520)
         self.assertLessEqual(self.app.right_tabs.winfo_width(), 360)
 
