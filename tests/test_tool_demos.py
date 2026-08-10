@@ -10,4 +10,4 @@ def test_every_tool_has_an_animated_demo() -> None:
         with Image.open(path) as animation:
             assert animation.format == "GIF"
             assert animation.size == (288, 162)
-            assert animation.n_frames >= 8
+            assert animation.n_frames >= 12

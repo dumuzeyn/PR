@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import os
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont, ImageOps
@@ -10,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 ASSET_DIR = ROOT / "photoredactor" / "assets" / "tool_demos"
 SOURCE_DIR = ROOT / "design_assets" / "tool_demo_sources"
 SIZE = (288, 162)
-FRAME_COUNT = 12
+FRAME_COUNT = 18
 
 TOOLS = (
     "hand", "move", "brush", "eraser", "blur_tool", "sharpen_tool", "dodge", "burn",
@@ -19,6 +20,22 @@ TOOLS = (
     "custom_shape", "select", "ellipse_select", "lasso", "magnetic_lasso", "polygon_lasso",
     "quick_selection", "magic_wand", "color_range", "crop",
 )
+
+ACTION_LABELS = {
+    "hand": "ПЕРЕМЕЩЕНИЕ ХОЛСТА", "move": "ПЕРЕМЕЩЕНИЕ СЛОЯ", "brush": "РИСОВАНИЕ",
+    "eraser": "СТИРАНИЕ", "blur_tool": "РАЗМЫТИЕ", "sharpen_tool": "УСИЛЕНИЕ ДЕТАЛЕЙ",
+    "dodge": "ОСВЕТЛЕНИЕ", "burn": "ЗАТЕМНЕНИЕ", "clone": "КОПИРОВАНИЕ ИЗ ИСТОЧНИКА",
+    "healing": "ЛЕЧЕНИЕ С УЧЕТОМ ФОНА", "spot_healing": "УДАЛЕНИЕ ДЕФЕКТА",
+    "patch": "ПЕРЕНОС ЧИСТОГО УЧАСТКА", "fill": "ЗАЛИВКА ОБЛАСТИ", "gradient": "РАСТЯГИВАНИЕ ПЕРЕХОДА",
+    "text": "ВВОД ТЕКСТА", "eyedropper": "ВЫБОР ЦВЕТА", "rect_shape": "СОЗДАНИЕ ПРЯМОУГОЛЬНИКА",
+    "ellipse_shape": "СОЗДАНИЕ ЭЛЛИПСА", "line_shape": "СОЗДАНИЕ ЛИНИИ", "bezier_shape": "ИЗГИБ КРИВОЙ",
+    "polygon_shape": "СОЗДАНИЕ МНОГОУГОЛЬНИКА", "star_shape": "СОЗДАНИЕ ЗВЕЗДЫ",
+    "custom_shape": "СОЗДАНИЕ СВОЕЙ ФИГУРЫ", "select": "ПРЯМОУГОЛЬНОЕ ВЫДЕЛЕНИЕ",
+    "ellipse_select": "ОВАЛЬНОЕ ВЫДЕЛЕНИЕ", "lasso": "СВОБОДНЫЙ КОНТУР",
+    "magnetic_lasso": "ПРИВЯЗКА К КРАЮ", "polygon_lasso": "КОНТУР ПО ВЕРШИНАМ",
+    "quick_selection": "РАСШИРЕНИЕ ВЫДЕЛЕНИЯ", "magic_wand": "ПОХОЖАЯ СВЯЗАННАЯ ОБЛАСТЬ",
+    "color_range": "ОДИН ЦВЕТ ПО ВСЕМУ КАДРУ", "crop": "ОБРЕЗКА КАДРА",
+}
 
 
 def font(size: int, bold: bool = False) -> ImageFont.ImageFont:
@@ -91,7 +108,29 @@ def ellipse_mask(box: tuple[int, int, int, int], amount: float = 1.0) -> Image.I
 
 
 def progress(index: int) -> float:
-    return min(1.0, index / (FRAME_COUNT - 3))
+    if index < 3:
+        return 0.0
+    if index >= FRAME_COUNT - 4:
+        return 1.0
+    return (index - 3) / (FRAME_COUNT - 8)
+
+
+def stage_banner(image: Image.Image, tool: str, index: int) -> None:
+    if index < 3:
+        text = "ДО"
+        color = "#505761"
+    elif index >= FRAME_COUNT - 4:
+        text = "РЕЗУЛЬТАТ"
+        color = "#167447"
+    else:
+        text = ACTION_LABELS[tool]
+        color = "#1769aa"
+    draw = ImageDraw.Draw(image, "RGBA")
+    label_font = font(10, True)
+    bounds = draw.textbbox((0, 0), text, font=label_font)
+    width = bounds[2] - bounds[0] + 14
+    draw.rounded_rectangle((6, 6, 6 + width, 25), radius=3, fill=color + "E8")
+    draw.text((13, 8), text, font=label_font, fill="#ffffff")
 
 
 def draw_shape(image: Image.Image, tool: str, t: float, phase: int) -> tuple[float, float]:
@@ -173,19 +212,18 @@ def selection_demo(base: Image.Image, tool: str, t: float, phase: int) -> tuple[
             closed_dashes(draw, contour, phase)
         point = used[-1]
     elif tool == "quick_selection":
-        radius = 18 + int(28*t)
-        mask_box = (18, 73, 18 + radius*2, 73 + radius*2)
-        draw.ellipse(mask_box, fill=(38, 132, 220, 55), outline="#ffffff", width=2)
-        point = (34 + radius*t, 108)
+        box = (17, 76, int(42 + 34*t), int(105 + 36*t))
+        draw.ellipse(box, fill=(38, 132, 220, 70), outline="#ffffff", width=2)
+        point = (36 + 25*t, 108)
     elif tool == "magic_wand":
-        alpha = int(75*t)
+        alpha = int(120*t)
         draw.rectangle((0, 0, 288, 88), fill=(38, 132, 220, alpha))
         dashed_line(draw, [(0, 88), (288, 88)], phase)
         point = (205, 42)
     else:
         alpha = int(90*t)
-        draw.ellipse((18, 76, 75, 140), fill=(226, 52, 52, alpha), outline="#ffffff", width=2)
-        draw.ellipse((204, 71, 269, 143), fill=(226, 52, 52, alpha), outline="#ffffff", width=2)
+        draw.ellipse((16, 76, 75, 141), fill=(226, 52, 52, alpha), outline="#ffffff", width=2)
+        draw.ellipse((221, 119, 239, 139), fill=(226, 52, 52, alpha), outline="#ffffff", width=2)
         point = (46, 103)
     cursor(image, point, ring=10 if tool == "quick_selection" else 0)
     return image, point
@@ -196,12 +234,18 @@ def make_frames(tool: str, still: Image.Image, landscape: Image.Image) -> list[I
     for index in range(FRAME_COUNT):
         t = progress(index)
         phase = index % 8
-        base = still.copy() if tool not in {"hand", "crop", "select", "ellipse_select", "lasso", "magnetic_lasso", "polygon_lasso", "quick_selection", "magic_wand", "color_range"} else landscape.copy()
+        landscape_tools = {"hand", "crop", "select", "ellipse_select", "polygon_lasso", "magic_wand"}
+        base = landscape.copy() if tool in landscape_tools else still.copy()
+        if tool == "color_range":
+            base_draw = ImageDraw.Draw(base)
+            base_draw.ellipse((221, 120, 231, 133), fill="#d72e25")
+            base_draw.ellipse((229, 116, 240, 131), fill="#c92524")
 
         if tool == "hand":
             large = ImageOps.fit(landscape, (332, 186), Image.Resampling.LANCZOS)
             offset = int(20 * t)
             image = large.crop((22 - offset, 12, 310 - offset, 174))
+            ImageDraw.Draw(image).line((205, 84, 132, 84), fill="#ffffff", width=3)
             cursor(image, lerp((205, 84), (130, 84), t), ring=9)
         elif tool == "move":
             image = base.copy()
@@ -228,13 +272,20 @@ def make_frames(tool: str, still: Image.Image, landscape: Image.Image) -> list[I
             if tool == "blur_tool":
                 effect = base.filter(ImageFilter.GaussianBlur(7))
             elif tool == "sharpen_tool":
-                effect = ImageEnhance.Sharpness(base).enhance(4.2)
+                base = still.filter(ImageFilter.GaussianBlur(1.8))
+                effect = ImageEnhance.Sharpness(still).enhance(3.2)
             elif tool == "dodge":
                 effect = ImageEnhance.Brightness(base).enhance(1.65)
             else:
                 effect = ImageEnhance.Brightness(base).enhance(0.48)
             box = (78, 78, 140, 141)
             image = composite_effect(base, effect, ellipse_mask(box, t))
+            if tool in {"blur_tool", "sharpen_tool"}:
+                detail = image.crop((82, 82, 136, 136)).resize((70, 70), Image.Resampling.NEAREST)
+                image.paste(detail, (210, 48))
+                detail_draw = ImageDraw.Draw(image)
+                detail_draw.rectangle((208, 46, 281, 120), outline="#ffffff", width=3)
+                detail_draw.line((139, 84, 208, 52), fill="#ffffff", width=2)
             cursor(image, lerp((94, 111), (126, 111), t), ring=18)
         elif tool == "clone":
             image = base.copy()
@@ -244,13 +295,15 @@ def make_frames(tool: str, still: Image.Image, landscape: Image.Image) -> list[I
             draw = ImageDraw.Draw(image)
             draw.line((104, 93, 104, 113), fill="#ffffff", width=2)
             draw.line((94, 103, 114, 103), fill="#ffffff", width=2)
+            draw.line((113, 103, 154, 103), fill="#ffffff", width=2)
             if t > .25:
                 image.paste(source, (145, 88), mask)
+                draw.ellipse((144, 87, 201, 141), outline="#ffffff", width=2)
             cursor(image, lerp((104, 103), (168, 109), t), ring=13)
         elif tool in {"healing", "spot_healing", "patch"}:
             damaged = base.copy()
             d = ImageDraw.Draw(damaged)
-            spots = [(41, 106, 5), (52, 116, 4), (98, 107, 4)]
+            spots = [(39, 103, 7), (53, 118, 6), (99, 108, 6)]
             for x, y, r in spots:
                 d.ellipse((x-r, y-r, x+r, y+r), fill="#3b251d")
             if tool == "patch":
@@ -329,6 +382,7 @@ def make_frames(tool: str, still: Image.Image, landscape: Image.Image) -> list[I
                 for y in (margin_y, 162-margin_y):
                     draw.rectangle((x-4, y-4, x+4, y+4), fill="#ffffff")
             cursor(image, (margin_x, margin_y))
+        stage_banner(image, tool, index)
         frames.append(image.convert("P", palette=Image.Palette.ADAPTIVE, colors=128))
     return frames
 
@@ -339,8 +393,11 @@ def main() -> None:
     landscape = cover(SOURCE_DIR / "landscape.png")
     for tool in TOOLS:
         frames = make_frames(tool, still, landscape)
+        output = ASSET_DIR / f"{tool}.gif"
+        temporary = ASSET_DIR / f".{tool}.tmp.gif"
+        previous = ASSET_DIR / f".{tool}.previous.gif"
         frames[0].save(
-            ASSET_DIR / f"{tool}.gif",
+            temporary,
             save_all=True,
             append_images=frames[1:],
             duration=110,
@@ -348,6 +405,11 @@ def main() -> None:
             optimize=True,
             disposal=2,
         )
+        previous.unlink(missing_ok=True)
+        if output.exists():
+            output.replace(previous)
+        os.replace(temporary, output)
+        previous.unlink(missing_ok=True)
         print(f"created {tool}.gif")
 
 
