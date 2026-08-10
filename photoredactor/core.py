@@ -243,6 +243,9 @@ class Layer:
     adjustment: dict[str, Any] | None = None
     smart_data: dict[str, Any] | None = None
     smart_source: np.ndarray | None = field(default=None, repr=False, compare=False)
+    transform_data: dict[str, Any] | None = None
+    transform_source: np.ndarray | None = field(default=None, repr=False, compare=False)
+    transform_mask_source: np.ndarray | None = field(default=None, repr=False, compare=False)
     working_pixels: np.ndarray | None = field(default=None, repr=False, compare=False)
     working_model: str = "RGBA"
     id: str = field(default_factory=lambda: uuid.uuid4().hex)
@@ -289,6 +292,9 @@ class Layer:
             adjustment=None if self.adjustment is None else dict(self.adjustment),
             smart_data=None if self.smart_data is None else json.loads(json.dumps(self.smart_data, ensure_ascii=False)),
             smart_source=None if self.smart_source is None else self.smart_source.copy(),
+            transform_data=None if self.transform_data is None else json.loads(json.dumps(self.transform_data)),
+            transform_source=None if self.transform_source is None else self.transform_source.copy(),
+            transform_mask_source=None if self.transform_mask_source is None else self.transform_mask_source.copy(),
             working_pixels=None if self.working_pixels is None else self.working_pixels.copy(),
             working_model=self.working_model,
         )
@@ -410,6 +416,9 @@ class Document:
                     "adjustment": None if layer.adjustment is None else dict(layer.adjustment),
                     "smart_data": None if layer.smart_data is None else json.loads(json.dumps(layer.smart_data, ensure_ascii=False)),
                     "smart_source": None if layer.smart_source is None else layer.smart_source.copy(),
+                    "transform_data": None if layer.transform_data is None else json.loads(json.dumps(layer.transform_data)),
+                    "transform_source": None if layer.transform_source is None else layer.transform_source.copy(),
+                    "transform_mask_source": None if layer.transform_mask_source is None else layer.transform_mask_source.copy(),
                     "working_pixels": None if layer.working_pixels is None else layer.working_pixels.copy(),
                     "working_model": layer.working_model,
                     "pixels": layer.pixels.copy(),
@@ -457,6 +466,9 @@ class Document:
                     adjustment=raw.get("adjustment"),
                     smart_data=raw.get("smart_data"),
                     smart_source=None if raw.get("smart_source") is None else raw["smart_source"].copy(),
+                    transform_data=raw.get("transform_data"),
+                    transform_source=None if raw.get("transform_source") is None else raw["transform_source"].copy(),
+                    transform_mask_source=None if raw.get("transform_mask_source") is None else raw["transform_mask_source"].copy(),
                     working_pixels=None if raw.get("working_pixels") is None else raw["working_pixels"].copy(),
                     working_model=raw.get("working_model", "RGBA"),
                     id=raw.get("id", uuid.uuid4().hex),
@@ -499,6 +511,9 @@ class Document:
                     "adjustment": layer.adjustment,
                     "smart_data": layer.smart_data,
                     "smart_source": None if layer.smart_source is None else encode_png(layer.smart_source),
+                    "transform_data": layer.transform_data,
+                    "transform_source": None if layer.transform_source is None else encode_png(layer.transform_source),
+                    "transform_mask_source": None if layer.transform_mask_source is None else encode_png(np.dstack([layer.transform_mask_source] * 4)),
                     "pixels": encode_png(layer.pixels),
                 }
                 for layer in self.layers
@@ -541,6 +556,9 @@ class Document:
                     adjustment=raw.get("adjustment"),
                     smart_data=raw.get("smart_data"),
                     smart_source=None if raw.get("smart_source") is None else decode_png(raw["smart_source"]),
+                    transform_data=raw.get("transform_data"),
+                    transform_source=None if raw.get("transform_source") is None else decode_png(raw["transform_source"]),
+                    transform_mask_source=None if raw.get("transform_mask_source") is None else decode_png(raw["transform_mask_source"])[:, :, 0],
                     id=raw.get("id", uuid.uuid4().hex),
                 )
             )
@@ -602,6 +620,9 @@ class Document:
                         "adjustment": layer.adjustment,
                         "smart_data": layer.smart_data,
                         "smart_source": f"smart/{i:04d}.png" if layer.smart_source is not None else None,
+                        "transform_data": layer.transform_data,
+                        "transform_source": f"transforms/{i:04d}.png" if layer.transform_source is not None else None,
+                        "transform_mask_source": f"transform_masks/{i:04d}.png" if layer.transform_mask_source is not None else None,
                         "working_pixels": f"working/{i:04d}.npy" if layer.working_pixels is not None else None,
                         "working_model": layer.working_model,
                         "pixels": layer_path,
@@ -614,6 +635,14 @@ class Document:
                     smart_buf = io.BytesIO()
                     rgba_array_to_pil(layer.smart_source).save(smart_buf, "PNG")
                     zf.writestr(f"smart/{i:04d}.png", smart_buf.getvalue())
+                if layer.transform_source is not None:
+                    transform_buf = io.BytesIO()
+                    rgba_array_to_pil(layer.transform_source).save(transform_buf, "PNG")
+                    zf.writestr(f"transforms/{i:04d}.png", transform_buf.getvalue())
+                if layer.transform_mask_source is not None:
+                    transform_mask_buf = io.BytesIO()
+                    rgba_array_to_pil(np.dstack([layer.transform_mask_source] * 4)).save(transform_mask_buf, "PNG")
+                    zf.writestr(f"transform_masks/{i:04d}.png", transform_mask_buf.getvalue())
                 if layer.working_pixels is not None:
                     working_buf = io.BytesIO()
                     np.save(working_buf, layer.working_pixels, allow_pickle=False)
@@ -672,6 +701,9 @@ class Document:
                         adjustment=raw.get("adjustment"),
                         smart_data=raw.get("smart_data"),
                         smart_source=None if not raw.get("smart_source") else pil_to_rgba_array(Image.open(io.BytesIO(zf.read(raw["smart_source"])))),
+                        transform_data=raw.get("transform_data"),
+                        transform_source=None if not raw.get("transform_source") else pil_to_rgba_array(Image.open(io.BytesIO(zf.read(raw["transform_source"])))),
+                        transform_mask_source=None if not raw.get("transform_mask_source") else pil_to_rgba_array(Image.open(io.BytesIO(zf.read(raw["transform_mask_source"]))))[:, :, 0],
                         working_pixels=None if not raw.get("working_pixels") else np.load(io.BytesIO(zf.read(raw["working_pixels"])), allow_pickle=False),
                         working_model=raw.get("working_model", "RGBA"),
                         id=raw.get("id", uuid.uuid4().hex),
@@ -2134,6 +2166,53 @@ class Document:
         self.dirty = True
         return True
 
+    def transform_selected_pixels_advanced(
+        self,
+        mode: str,
+        points: list[tuple[float, float]] | list[list[float]],
+        rows: int = 4,
+        columns: int = 4,
+    ) -> bool:
+        layer = self.layer
+        if layer.locked:
+            return False
+        selection = self.layer_selection_mask(layer)
+        if selection is None or not np.any(selection):
+            return False
+        ys, xs = np.where(selection > 0)
+        x1, y1, x2, y2 = int(xs.min()), int(ys.min()), int(xs.max() + 1), int(ys.max() + 1)
+        patch = layer.pixels[y1:y2, x1:x2].copy()
+        patch_mask = selection[y1:y2, x1:x2].astype(np.float32) / 255.0
+        patch[:, :, 3] = np.clip(patch[:, :, 3].astype(np.float32) * patch_mask, 0, 255).astype(np.uint8)
+        original_region = layer.pixels[y1:y2, x1:x2]
+        original_region[:, :, 3] = np.clip(original_region[:, :, 3].astype(np.float32) * (1.0 - patch_mask), 0, 255).astype(np.uint8)
+        if str(mode).lower() == "mesh":
+            transformed, offset = mesh_warp_pixels(patch, points, rows, columns, cv2.INTER_CUBIC)
+        else:
+            transformed, offset = perspective_warp_pixels(patch, points, cv2.INTER_CUBIC)
+        destination_x, destination_y = offset
+        old_x, old_y = layer.x, layer.y
+        old_height, old_width = layer.pixels.shape[:2]
+        new_x = min(old_x, destination_x)
+        new_y = min(old_y, destination_y)
+        new_right = max(old_x + old_width, destination_x + transformed.shape[1])
+        new_bottom = max(old_y + old_height, destination_y + transformed.shape[0])
+        new_pixels = blank_rgba(new_right - new_x, new_bottom - new_y, (0, 0, 0, 0))
+        new_pixels[old_y - new_y:old_y - new_y + old_height, old_x - new_x:old_x - new_x + old_width] = layer.pixels
+        alpha_blend_inplace(new_pixels, transformed, destination_x - new_x, destination_y - new_y, 1.0)
+        if layer.mask is not None:
+            new_mask = np.zeros(new_pixels.shape[:2], dtype=np.uint8)
+            paste_mask(new_mask, layer.mask, old_x - new_x, old_y - new_y)
+            layer.mask = new_mask
+        layer.pixels = new_pixels
+        layer.x, layer.y = new_x, new_y
+        new_selection = np.zeros((self.height, self.width), dtype=np.uint8)
+        paste_mask(new_selection, transformed[:, :, 3], destination_x, destination_y)
+        self.selection_mask = new_selection if np.any(new_selection) else None
+        layer.touch_pixels()
+        self.dirty = True
+        return True
+
     def perspective_transform_active_layer(self, corners: list[tuple[float, float]] | tuple[tuple[float, float], ...]) -> None:
         layer = self.layer
         if layer.locked:
@@ -2180,6 +2259,99 @@ class Document:
         if layer.mask is not None:
             layer.mask = warp_pixels(layer.mask, mode, amount, wavelength, cv2.INTER_LINEAR)
         self.dirty = True
+
+    def set_active_layer_advanced_transform(
+        self,
+        mode: str,
+        points: list[tuple[float, float]] | list[list[float]],
+        rows: int = 4,
+        columns: int = 4,
+    ) -> None:
+        layer = self.layer
+        if layer.locked:
+            return
+        mode = str(mode).lower().strip()
+        if mode not in {"perspective", "mesh"}:
+            raise ValueError("Advanced transform mode must be perspective or mesh")
+        expected = 4 if mode == "perspective" else max(2, int(rows)) * max(2, int(columns))
+        if len(points) != expected:
+            raise ValueError(f"Advanced transform needs {expected} points")
+        existing = layer.transform_data or {}
+        if layer.transform_source is None or not existing:
+            render_height, render_width = layer.pixels.shape[:2]
+            visible = layer.pixels[:, :, 3] > 0
+            if np.any(visible):
+                ys, xs = np.where(visible)
+                crop = (int(xs.min()), int(ys.min()), int(xs.max() + 1), int(ys.max() + 1))
+            else:
+                crop = (0, 0, render_width, render_height)
+            x1, y1, x2, y2 = crop
+            layer.transform_source = layer.pixels[y1:y2, x1:x2].copy()
+            if layer.mask is None and layer.kind == "adjustment":
+                layer.transform_mask_source = np.full((y2 - y1, x2 - x1), 255, dtype=np.uint8)
+            else:
+                layer.transform_mask_source = None if layer.mask is None else layer.mask[y1:y2, x1:x2].copy()
+            base_x, base_y = int(layer.x + x1), int(layer.y + y1)
+            render_base_x, render_base_y = int(layer.x), int(layer.y)
+        else:
+            base_x = int(existing.get("base_x", layer.x))
+            base_y = int(existing.get("base_y", layer.y))
+            render_width = int(existing.get("render_width", layer.transform_source.shape[1]))
+            render_height = int(existing.get("render_height", layer.transform_source.shape[0]))
+            crop = tuple(int(value) for value in existing.get("source_crop", [0, 0, render_width, render_height]))
+            render_base_x = int(existing.get("render_base_x", base_x - crop[0]))
+            render_base_y = int(existing.get("render_base_y", base_y - crop[1]))
+        local_points = [[float(point[0]) - base_x, float(point[1]) - base_y] for point in points]
+        layer.transform_data = {
+            "mode": mode,
+            "points": local_points,
+            "rows": max(2, int(rows)),
+            "columns": max(2, int(columns)),
+            "base_x": base_x,
+            "base_y": base_y,
+            "source_width": int(layer.transform_source.shape[1]),
+            "source_height": int(layer.transform_source.shape[0]),
+            "render_width": render_width,
+            "render_height": render_height,
+            "source_crop": list(crop),
+            "render_base_x": render_base_x,
+            "render_base_y": render_base_y,
+            "mask_was_none": bool(existing.get("mask_was_none", layer.mask is None)),
+        }
+        apply_saved_layer_transform(layer)
+        layer.touch_pixels()
+        self.dirty = True
+
+    def reset_active_layer_advanced_transform(self) -> bool:
+        layer = self.layer
+        if layer.locked or layer.transform_data is None:
+            return False
+        data = layer.transform_data
+        base_x = int(data.get("base_x", layer.x))
+        base_y = int(data.get("base_y", layer.y))
+        source = None if layer.transform_source is None else layer.transform_source.copy()
+        mask_source = None if layer.transform_mask_source is None else layer.transform_mask_source.copy()
+        layer.transform_data = None
+        layer.transform_source = None
+        layer.transform_mask_source = None
+        render_base_x = int(data.get("render_base_x", base_x))
+        render_base_y = int(data.get("render_base_y", base_y))
+        layer.x, layer.y = render_base_x, render_base_y
+        if layer.kind == "text" and layer.text_data is not None:
+            layer.pixels = blank_rgba(int(data.get("render_width", self.width)), int(data.get("render_height", self.height)), (0, 0, 0, 0))
+            render_text_layer(layer)
+        elif layer.kind == "shape" and layer.shape_data is not None:
+            layer.pixels = blank_rgba(int(data.get("render_width", self.width)), int(data.get("render_height", self.height)), (0, 0, 0, 0))
+            render_shape_layer(layer)
+        elif layer.kind in {"linked", "embedded"} and layer.smart_source is not None:
+            render_smart_object(layer)
+        elif source is not None:
+            layer.pixels = source
+            layer.mask = None if bool(data.get("mask_was_none", False)) else mask_source
+            layer.x, layer.y = base_x, base_y
+        layer.touch_pixels()
+        self.dirty = True
+        return True
 
 
 def normalized_box(box: tuple[int, int, int, int]) -> tuple[int, int, int, int]:
@@ -2882,7 +3054,14 @@ def render_smart_object(layer: Layer) -> np.ndarray:
     angle = float(transform.get("angle", 0.0)) % 360.0
     if abs(angle) > 0.001:
         rendered = rotate_bound(rendered, angle, cv2.INTER_CUBIC)
-    layer.pixels = np.ascontiguousarray(rendered)
+    rendered = np.ascontiguousarray(rendered)
+    if layer.transform_data is not None:
+        crop = [int(value) for value in layer.transform_data.get("source_crop", [0, 0, rendered.shape[1], rendered.shape[0]])]
+        source = rendered[crop[1]:crop[3], crop[0]:crop[2]].copy()
+        layer.transform_source = source.copy()
+        apply_saved_layer_transform(layer, source, layer.transform_mask_source)
+    else:
+        layer.pixels = rendered
     return layer.pixels
 
 
@@ -2929,6 +3108,130 @@ def warp_pixels(arr: np.ndarray, mode: str, amount: float = 0.35, wavelength: fl
         borderMode=cv2.BORDER_CONSTANT,
         borderValue=border,
     )
+
+
+def perspective_warp_pixels(
+    arr: np.ndarray,
+    corners: list[tuple[float, float]] | list[list[float]],
+    interpolation: int = cv2.INTER_CUBIC,
+) -> tuple[np.ndarray, tuple[int, int]]:
+    if len(corners) != 4:
+        raise ValueError("Perspective transform needs four corners")
+    height, width = arr.shape[:2]
+    destination = np.asarray(corners, dtype=np.float32)
+    min_x = math.floor(float(destination[:, 0].min()))
+    min_y = math.floor(float(destination[:, 1].min()))
+    max_x = math.ceil(float(destination[:, 0].max()))
+    max_y = math.ceil(float(destination[:, 1].max()))
+    output_width = max(1, max_x - min_x + 1)
+    output_height = max(1, max_y - min_y + 1)
+    source = np.array(
+        [[0, 0], [max(0, width - 1), 0], [max(0, width - 1), max(0, height - 1)], [0, max(0, height - 1)]],
+        dtype=np.float32,
+    )
+    matrix = cv2.getPerspectiveTransform(source, destination - np.array([min_x, min_y], dtype=np.float32))
+    border = 0 if arr.ndim == 2 else tuple(0 for _ in range(arr.shape[2]))
+    output = cv2.warpPerspective(
+        arr,
+        matrix,
+        (output_width, output_height),
+        flags=interpolation,
+        borderMode=cv2.BORDER_CONSTANT,
+        borderValue=border,
+    )
+    return np.ascontiguousarray(output), (min_x, min_y)
+
+
+def mesh_warp_pixels(
+    arr: np.ndarray,
+    points: list[tuple[float, float]] | list[list[float]],
+    rows: int = 4,
+    columns: int = 4,
+    interpolation: int = cv2.INTER_CUBIC,
+) -> tuple[np.ndarray, tuple[int, int]]:
+    rows, columns = max(2, int(rows)), max(2, int(columns))
+    if len(points) != rows * columns:
+        raise ValueError(f"Mesh transform needs {rows * columns} points")
+    destination = np.asarray(points, dtype=np.float32).reshape(rows, columns, 2)
+    min_x = math.floor(float(destination[:, :, 0].min()))
+    min_y = math.floor(float(destination[:, :, 1].min()))
+    max_x = math.ceil(float(destination[:, :, 0].max()))
+    max_y = math.ceil(float(destination[:, :, 1].max()))
+    output_width = max(1, max_x - min_x + 1)
+    output_height = max(1, max_y - min_y + 1)
+    destination = destination - np.array([min_x, min_y], dtype=np.float32)
+    height, width = arr.shape[:2]
+    source_x = np.linspace(0.0, max(0, width - 1), columns, dtype=np.float32)
+    source_y = np.linspace(0.0, max(0, height - 1), rows, dtype=np.float32)
+    output_shape = (output_height, output_width) if arr.ndim == 2 else (output_height, output_width, arr.shape[2])
+    output = np.zeros(output_shape, dtype=arr.dtype)
+    coverage = np.zeros((output_height, output_width), dtype=np.uint8)
+    triangle_indices = ((0, 1, 3), (0, 3, 2))
+    for row in range(rows - 1):
+        for column in range(columns - 1):
+            source_quad = np.array(
+                [
+                    [source_x[column], source_y[row]],
+                    [source_x[column + 1], source_y[row]],
+                    [source_x[column], source_y[row + 1]],
+                    [source_x[column + 1], source_y[row + 1]],
+                ],
+                dtype=np.float32,
+            )
+            destination_quad = np.array(
+                [
+                    destination[row, column],
+                    destination[row, column + 1],
+                    destination[row + 1, column],
+                    destination[row + 1, column + 1],
+                ],
+                dtype=np.float32,
+            )
+            for indices in triangle_indices:
+                src_triangle = source_quad[list(indices)]
+                dst_triangle = destination_quad[list(indices)]
+                matrix = cv2.getAffineTransform(src_triangle, dst_triangle)
+                border = 0 if arr.ndim == 2 else tuple(0 for _ in range(arr.shape[2]))
+                warped = cv2.warpAffine(
+                    arr,
+                    matrix,
+                    (output_width, output_height),
+                    flags=interpolation,
+                    borderMode=cv2.BORDER_CONSTANT,
+                    borderValue=border,
+                )
+                triangle_mask = np.zeros_like(coverage)
+                cv2.fillConvexPoly(triangle_mask, np.round(dst_triangle).astype(np.int32), 255, lineType=cv2.LINE_AA)
+                active = triangle_mask > 0
+                output[active] = warped[active]
+                coverage[active] = 255
+    return np.ascontiguousarray(output), (min_x, min_y)
+
+
+def apply_saved_layer_transform(layer: Layer, source_pixels: np.ndarray | None = None, source_mask: np.ndarray | None = None) -> None:
+    data = layer.transform_data
+    if not data:
+        return
+    pixels = source_pixels if source_pixels is not None else layer.transform_source
+    if pixels is None:
+        return
+    mode = str(data.get("mode", "perspective"))
+    points = data.get("points") or []
+    if mode == "mesh":
+        transformed, offset = mesh_warp_pixels(pixels, points, int(data.get("rows", 4)), int(data.get("columns", 4)), cv2.INTER_CUBIC)
+    else:
+        transformed, offset = perspective_warp_pixels(pixels, points, cv2.INTER_CUBIC)
+    layer.pixels = transformed
+    base_x = int(data.get("base_x", 0))
+    base_y = int(data.get("base_y", 0))
+    layer.x = base_x + offset[0]
+    layer.y = base_y + offset[1]
+    mask = source_mask if source_mask is not None else layer.transform_mask_source
+    if mask is not None:
+        if mode == "mesh":
+            layer.mask, _ = mesh_warp_pixels(mask, points, int(data.get("rows", 4)), int(data.get("columns", 4)), cv2.INTER_LINEAR)
+        else:
+            layer.mask, _ = perspective_warp_pixels(mask, points, cv2.INTER_LINEAR)
 
 
 def alpha_blend(dst: np.ndarray, src: np.ndarray, x: int, y: int, opacity: float) -> np.ndarray:
@@ -3457,6 +3760,19 @@ def add_text(layer: Layer, x: int, y: int, text: str, color: tuple[int, int, int
 def render_text_layer(layer: Layer) -> None:
     if layer.text_data is None:
         return
+    if layer.transform_data is not None:
+        data = layer.transform_data
+        layer.transform_data = None
+        layer.x = int(data.get("render_base_x", data.get("base_x", layer.x)))
+        layer.y = int(data.get("render_base_y", data.get("base_y", layer.y)))
+        layer.pixels = blank_rgba(int(data.get("render_width", layer.pixels.shape[1])), int(data.get("render_height", layer.pixels.shape[0])), (0, 0, 0, 0))
+        render_text_layer(layer)
+        crop = [int(value) for value in data.get("source_crop", [0, 0, layer.pixels.shape[1], layer.pixels.shape[0]])]
+        source = layer.pixels[crop[1]:crop[3], crop[0]:crop[2]].copy()
+        layer.transform_data = data
+        layer.transform_source = source.copy()
+        apply_saved_layer_transform(layer, source, layer.transform_mask_source)
+        return
     layer.pixels[:] = 0
     pil = rgba_array_to_pil(layer.pixels)
     draw = ImageDraw.Draw(pil)
@@ -3803,6 +4119,19 @@ def load_text_font(font_family: str, size: int, bold: bool = False, italic: bool
 
 def render_shape_layer(layer: Layer) -> None:
     if layer.shape_data is None:
+        return
+    if layer.transform_data is not None:
+        data = layer.transform_data
+        layer.transform_data = None
+        layer.x = int(data.get("render_base_x", data.get("base_x", layer.x)))
+        layer.y = int(data.get("render_base_y", data.get("base_y", layer.y)))
+        layer.pixels = blank_rgba(int(data.get("render_width", layer.pixels.shape[1])), int(data.get("render_height", layer.pixels.shape[0])), (0, 0, 0, 0))
+        render_shape_layer(layer)
+        crop = [int(value) for value in data.get("source_crop", [0, 0, layer.pixels.shape[1], layer.pixels.shape[0]])]
+        source = layer.pixels[crop[1]:crop[3], crop[0]:crop[2]].copy()
+        layer.transform_data = data
+        layer.transform_source = source.copy()
+        apply_saved_layer_transform(layer, source, layer.transform_mask_source)
         return
     layer.pixels[:] = 0
     data = layer.shape_data

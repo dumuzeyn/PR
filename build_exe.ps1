@@ -7,3 +7,9 @@ if (Test-Path $runtimePython) {
 }
 & $py -m PyInstaller --noconfirm --clean --onefile --windowed --name PhotoRedactor `
   --add-data "photoredactor/assets/tool_demos;photoredactor/assets/tool_demos" launcher.py
+if ($LASTEXITCODE -ne 0) {
+  throw "PyInstaller завершился с кодом $LASTEXITCODE"
+}
+if (-not (Test-Path ".\dist\PhotoRedactor.exe")) {
+  throw "PhotoRedactor.exe не был создан"
+}

@@ -345,6 +345,59 @@ class StartupTests(unittest.TestCase):
         self.app.redo()
         self.assertFalse(np.array_equal(layer.pixels, original))
 
+    def test_transform_workspace_switches_controls_and_edits_mesh_node(self) -> None:
+        self.app.doc = self.app.doc.new(360, 240, (0, 0, 0, 0))
+        self.app.doc.layers.clear()
+        self.app.doc.add_shape_layer("ellipse", (70, 55, 280, 190), (215, 65, 45, 255))
+        original_wait = tk.Toplevel.wait_window
+        centered: list[bool] = []
+
+        def edit_and_accept(window, target=None) -> None:
+            window.update()
+            self.assertGreaterEqual(self.app._transform_workspace_canvas.winfo_width(), 600)
+            self.app._transform_workspace_mode.set("Сетка")
+            window.update()
+            self.assertEqual(len(self.app._transform_workspace_points()), 16)
+            self.app._transform_workspace_selected_node.set(5)
+            old_point = self.app._transform_workspace_points()[5]
+            self.app._transform_workspace_node_x.set(old_point[0] + 24)
+            self.app._transform_workspace_node_y.set(old_point[1] - 18)
+            self.assertNotEqual(self.app._transform_workspace_points()[5], old_point)
+            expected_x = (window.winfo_screenwidth() - window.winfo_width()) // 2
+            expected_y = (window.winfo_screenheight() - window.winfo_height()) // 2
+            centered.append(abs(window.winfo_x() - expected_x) <= 3 and abs(window.winfo_y() - expected_y) <= 3)
+            self.app._transform_workspace_accept()
+
+        tk.Toplevel.wait_window = edit_and_accept
+        try:
+            data = self.app.transform_workspace_dialog(self.app.doc.layer, "Свободная")
+        finally:
+            tk.Toplevel.wait_window = original_wait
+        self.assertEqual(data["mode"], "Сетка")
+        self.assertEqual(len(data["points"]), 16)
+        self.assertTrue(centered[0])
+
+    def test_transform_workspace_applies_once_and_preserves_shape_editability(self) -> None:
+        self.app.doc = self.app.doc.new(320, 220, (0, 0, 0, 0))
+        self.app.doc.layers.clear()
+        layer = self.app.doc.add_shape_layer("rectangle", (65, 50, 245, 170), (220, 55, 40, 255))
+        self.app.history.clear()
+        before = copy.deepcopy(layer.shape_data)
+        data = {"mode": "Перспектива", "points": [[55, 62], [255, 42], [232, 182], [74, 166]], "rows": 4, "columns": 4}
+        self.app.run_document_command("Трансформация слоя", lambda: self.app.apply_transform_workspace_data(data))
+        self.assertEqual(layer.kind, "shape")
+        self.assertEqual(layer.shape_data, before)
+        self.assertEqual(layer.transform_data["mode"], "perspective")
+        self.assertEqual(len(self.app.history.undo_stack), 1)
+        self.assertIsInstance(self.app.history.undo_stack[-1], LayerFieldsCommand)
+        transformed = layer.pixels.copy()
+        self.app.undo()
+        restored = self.app.doc.layer
+        self.assertIsNone(restored.transform_data)
+        self.assertEqual(restored.shape_data, before)
+        self.app.redo()
+        self.assertTrue(np.array_equal(self.app.doc.layer.pixels, transformed))
+
     def test_editor_shows_tool_names_and_explicit_options_title(self) -> None:
         move_button = self.app.tool_palette.buttons["move"]
         self.assertEqual(str(move_button.cget("text")), "Перемещение")
