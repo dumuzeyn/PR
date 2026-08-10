@@ -85,7 +85,7 @@ Every push to `master` starts the `Build PhotoRedactor for Windows` workflow. Op
 
 ## Tool panel
 
-- The left side is a scrollable icon-and-name toolbar, so tools remain understandable without memorizing symbols. Shortcuts and explanations also appear in tooltips.
+- The left side is a scrollable icon-and-name toolbar, so tools remain understandable without memorizing symbols. Hovering any tool shows its shortcut, explanation and a looping visual demonstration below the text.
 - The contextual options bar is horizontal at the top, starts with `Параметры: <инструмент>` and only shows controls for the active tool. Rare controls stay under `Дополнительно`.
 - Gradient controls change with the mode: raster fill, gradient object and texture object do not show each other's irrelevant settings.
 - Foreground/background, fill/stroke and gradient colors are shown as clickable color swatches instead of duplicate text buttons.

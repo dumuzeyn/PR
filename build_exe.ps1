@@ -5,4 +5,5 @@ if (Test-Path $runtimePython) {
 } else {
   $py = "python"
 }
-& $py -m PyInstaller --noconfirm --clean --onefile --windowed --name PhotoRedactor launcher.py
+& $py -m PyInstaller --noconfirm --clean --onefile --windowed --name PhotoRedactor `
+  --add-data "photoredactor/assets/tool_demos;photoredactor/assets/tool_demos" launcher.py

@@ -5,7 +5,7 @@ a = Analysis(
     ['launcher.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=[('photoredactor/assets/tool_demos', 'photoredactor/assets/tool_demos')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

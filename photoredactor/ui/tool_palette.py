@@ -111,7 +111,7 @@ class ToolPalette(ttk.Frame):
             if self.tooltip_factory is not None:
                 shortcut = SHORTCUTS.get(value)
                 title = f"{label} ({shortcut})" if shortcut else label
-                self.tooltip_factory(button, f"{title}\n{description}")
+                self.tooltip_factory(button, f"{title}\n{description}", demo=value)
             self.buttons[value] = button
 
 
