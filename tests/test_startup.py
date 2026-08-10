@@ -11,7 +11,7 @@ import numpy as np
 from PIL import Image
 
 from photoredactor.app import PhotoRedactorApp
-from photoredactor.history import DocumentStateCommand, LayerFieldsCommand, LayerInsertCommand, LayerMoveCommand, SelectionMaskCommand, ShapeDataCommand, TextDataCommand
+from photoredactor.history import DocumentStateCommand, LayerFieldsCommand, LayerInsertCommand, LayerMoveCommand, PixelPatchCommand, SelectionMaskCommand, ShapeDataCommand, TextDataCommand
 from photoredactor.ui.shortcuts import COMMAND_SHORTCUTS
 
 
@@ -271,6 +271,79 @@ class StartupTests(unittest.TestCase):
         self.assertIsInstance(self.app.history.undo_stack[-1], SelectionMaskCommand)
         self.assertEqual(refine_calls, [True])
         self.assertTrue(centered[0])
+
+    def test_content_aware_workspace_edits_source_and_returns_real_variant(self) -> None:
+        self.app.doc = self.app.doc.new(260, 180, (48, 102, 190, 255))
+        layer = self.app.doc.layer
+        layer.pixels[:, :90, :3] = (205, 75, 42)
+        cv2.rectangle(layer.pixels, (105, 58), (155, 122), (12, 12, 12, 255), -1)
+        selection = np.zeros((180, 260), dtype=np.uint8)
+        selection[58:123, 105:156] = 255
+        self.app.doc.selection_mask = selection
+        original_wait = tk.Toplevel.wait_window
+        centered: list[bool] = []
+
+        def paint_and_accept(window, target=None) -> None:
+            window.update()
+            self.assertGreaterEqual(self.app._content_aware_source_canvas.winfo_width(), 300)
+            before = self.app._content_aware_source_mask()
+            self.app._content_aware_brush_mode.set("Исключить")
+            self.app._content_aware_brush_size.set(36)
+            self.app._content_aware_paint((35, 90), (70, 90))
+            after = self.app._content_aware_source_mask()
+            self.assertLess(np.count_nonzero(after), np.count_nonzero(before))
+            self.app._content_aware_variant.set(2)
+            expected_x = (window.winfo_screenwidth() - window.winfo_width()) // 2
+            expected_y = (window.winfo_screenheight() - window.winfo_height()) // 2
+            centered.append(abs(window.winfo_x() - expected_x) <= 3 and abs(window.winfo_y() - expected_y) <= 3)
+            self.app._content_aware_accept()
+
+        tk.Toplevel.wait_window = paint_and_accept
+        try:
+            settings = self.app.content_aware_fill_dialog(selection)
+        finally:
+            tk.Toplevel.wait_window = original_wait
+        self.assertIsNotNone(settings)
+        self.assertEqual(settings["variant"], 2)
+        self.assertEqual(settings["source_mask"].shape, selection.shape)
+        self.assertTrue(settings["rotation_adaptation"])
+        self.assertTrue(settings["scale_adaptation"])
+        self.assertTrue(centered[0])
+
+    def test_content_aware_apply_uses_compact_pixel_history(self) -> None:
+        self.app.doc = self.app.doc.new(180, 120, (70, 135, 95, 255))
+        layer = self.app.doc.layer
+        cv2.rectangle(layer.pixels, (70, 38), (110, 82), (230, 35, 35, 255), -1)
+        selection = np.zeros((120, 180), dtype=np.uint8)
+        selection[38:83, 70:111] = 255
+        self.app.doc.selection_mask = selection
+        source = np.zeros_like(selection)
+        source[:, :60] = 255
+        original = layer.pixels.copy()
+        original_dialog = self.app.content_aware_fill_dialog
+        original_background = self.app.run_background
+        self.app.content_aware_fill_dialog = lambda _mask: {
+            "source_mask": source,
+            "radius": 5,
+            "color_adaptation": 0.25,
+            "rotation_adaptation": True,
+            "scale_adaptation": True,
+            "variant": 1,
+        }
+        self.app.run_background = lambda _label, worker, done, _valid: done(worker())
+        try:
+            self.app.filter_content_aware_fill()
+        finally:
+            self.app.content_aware_fill_dialog = original_dialog
+            self.app.run_background = original_background
+        self.assertFalse(np.array_equal(layer.pixels[45:75, 78:102], original[45:75, 78:102]))
+        self.assertTrue(np.array_equal(layer.pixels[:25], original[:25]))
+        self.assertEqual(len(self.app.history.undo_stack), 1)
+        self.assertIsInstance(self.app.history.undo_stack[-1], PixelPatchCommand)
+        self.app.undo()
+        self.assertTrue(np.array_equal(layer.pixels, original))
+        self.app.redo()
+        self.assertFalse(np.array_equal(layer.pixels, original))
 
     def test_editor_shows_tool_names_and_explicit_options_title(self) -> None:
         move_button = self.app.tool_palette.buttons["move"]

@@ -4353,17 +4353,161 @@ def emboss_filter(arr: np.ndarray, strength: float = 1.0) -> np.ndarray:
     return np.clip(out, 0, 255).astype(np.uint8)
 
 
-def content_aware_fill(arr: np.ndarray, selection_mask: np.ndarray | None, radius: int = 3) -> np.ndarray:
+def _nearest_source_texture(pixels: np.ndarray, source_mask: np.ndarray) -> np.ndarray:
+    """Expand allowed source pixels over the image using exact nearest-source labels."""
+    allowed = np.asarray(source_mask, dtype=np.uint8) > 0
+    if not np.any(allowed):
+        return pixels.copy()
+    distance_input = np.where(allowed, 0, 255).astype(np.uint8)
+    _, labels = cv2.distanceTransformWithLabels(
+        distance_input,
+        cv2.DIST_L2,
+        3,
+        labelType=cv2.DIST_LABEL_PIXEL,
+    )
+    source_y, source_x = np.where(allowed)
+    source_labels = labels[source_y, source_x]
+    table_size = int(labels.max()) + 1
+    map_y = np.zeros(table_size, dtype=np.int32)
+    map_x = np.zeros(table_size, dtype=np.int32)
+    map_y[source_labels] = source_y
+    map_x[source_labels] = source_x
+    return pixels[map_y[labels], map_x[labels]]
+
+
+def _adapt_fill_colour(sampled: np.ndarray, reference: np.ndarray, mask: np.ndarray, strength: float) -> np.ndarray:
+    strength = float(np.clip(strength, 0.0, 1.0))
+    if strength <= 0.0:
+        return sampled
+    binary = (mask > 0).astype(np.uint8)
+    ring = cv2.dilate(binary, np.ones((7, 7), np.uint8), iterations=1).astype(bool) & ~binary.astype(bool)
+    inside = binary.astype(bool)
+    if np.count_nonzero(ring) < 4 or np.count_nonzero(inside) < 4:
+        return sampled
+    sample_lab = cv2.cvtColor(sampled[:, :, :3], cv2.COLOR_RGB2LAB).astype(np.float32)
+    reference_lab = cv2.cvtColor(reference[:, :, :3], cv2.COLOR_RGB2LAB).astype(np.float32)
+    source_values = sample_lab[inside]
+    target_values = reference_lab[ring]
+    source_mean = source_values.mean(axis=0)
+    target_mean = target_values.mean(axis=0)
+    source_std = np.maximum(source_values.std(axis=0), 5.0)
+    target_std = np.maximum(target_values.std(axis=0), 5.0)
+    matched = (sample_lab - source_mean) * (target_std / source_std) + target_mean
+    mixed = sample_lab * (1.0 - strength) + matched * strength
+    result = sampled.copy()
+    result[:, :, :3] = cv2.cvtColor(np.clip(mixed, 0, 255).astype(np.uint8), cv2.COLOR_LAB2RGB)
+    return result
+
+
+def content_aware_fill_variants(
+    arr: np.ndarray,
+    selection_mask: np.ndarray | None,
+    source_mask: np.ndarray | None = None,
+    radius: int = 5,
+    color_adaptation: float = 0.65,
+    rotation_adaptation: bool = True,
+    scale_adaptation: bool = True,
+    count: int = 3,
+    seed: int = 0,
+) -> list[np.ndarray]:
+    """Create deterministic source-guided fill candidates without changing pixels outside the selection."""
+    source = np.ascontiguousarray(arr, dtype=np.uint8)
     if selection_mask is None or not np.any(selection_mask):
-        return arr.copy()
-    mask = (selection_mask > 0).astype(np.uint8) * 255
-    out = arr.copy()
-    radius = max(1, int(radius))
-    rgb = cv2.inpaint(out[:, :, :3], mask, radius, cv2.INPAINT_TELEA)
-    alpha = cv2.inpaint(out[:, :, 3], mask, radius, cv2.INPAINT_TELEA)
-    out[:, :, :3] = rgb
-    out[:, :, 3] = np.where(mask > 0, np.maximum(alpha, out[:, :, 3]), out[:, :, 3]).astype(np.uint8)
-    return out
+        return [source.copy()]
+    if source.shape[2] != 4:
+        raise ValueError("Content-Aware Fill expects RGBA pixels")
+    target_alpha = np.asarray(selection_mask, dtype=np.uint8)
+    if target_alpha.shape != source.shape[:2]:
+        target_alpha = cv2.resize(target_alpha, (source.shape[1], source.shape[0]), interpolation=cv2.INTER_LINEAR)
+    target_binary = target_alpha > 0
+    radius = max(1, min(64, int(radius)))
+    exclusion = cv2.dilate(target_binary.astype(np.uint8), np.ones((radius * 2 + 1, radius * 2 + 1), np.uint8), iterations=1) > 0
+    if source_mask is None:
+        allowed = (source[:, :, 3] > 0) & ~exclusion
+    else:
+        candidate = np.asarray(source_mask, dtype=np.uint8)
+        if candidate.shape != source.shape[:2]:
+            candidate = cv2.resize(candidate, (source.shape[1], source.shape[0]), interpolation=cv2.INTER_NEAREST)
+        allowed = (candidate > 0) & (source[:, :, 3] > 0) & ~target_binary
+    if not np.any(allowed):
+        allowed = (source[:, :, 3] > 0) & ~target_binary
+    if not np.any(allowed):
+        return [source.copy()]
+
+    height, width = source.shape[:2]
+    center = (width / 2.0, height / 2.0)
+    rng = np.random.default_rng(int(seed))
+    variants: list[np.ndarray] = []
+    count = max(1, min(6, int(count)))
+    for index in range(count):
+        if index == 0:
+            angle = 0.0
+            scale = 1.0
+        else:
+            direction = -1.0 if index % 2 == 0 else 1.0
+            angle = direction * (3.5 + 2.0 * index) if rotation_adaptation else 0.0
+            scale = 1.0 + direction * (0.025 + 0.012 * index) if scale_adaptation else 1.0
+        matrix = cv2.getRotationMatrix2D(center, angle, scale)
+        matrix[:, 2] += rng.uniform(-radius * 0.35, radius * 0.35, size=2)
+        transformed = cv2.warpAffine(
+            source,
+            matrix,
+            (width, height),
+            flags=cv2.INTER_LINEAR,
+            borderMode=cv2.BORDER_REFLECT_101,
+        )
+        transformed_allowed = cv2.warpAffine(
+            allowed.astype(np.uint8) * 255,
+            matrix,
+            (width, height),
+            flags=cv2.INTER_NEAREST,
+            borderMode=cv2.BORDER_CONSTANT,
+        )
+        sampled = _nearest_source_texture(transformed, transformed_allowed)
+        sampled = _adapt_fill_colour(sampled, source, target_binary.astype(np.uint8) * 255, color_adaptation)
+
+        hard_mask = target_binary.astype(np.uint8) * 255
+        method = cv2.INPAINT_TELEA if index % 2 == 0 else cv2.INPAINT_NS
+        base = source.copy()
+        base[:, :, :3] = cv2.inpaint(source[:, :, :3], hard_mask, float(radius), method)
+        base[:, :, 3] = cv2.inpaint(source[:, :, 3], hard_mask, float(radius), method)
+        distance = cv2.distanceTransform(target_binary.astype(np.uint8), cv2.DIST_L2, 3)
+        texture_weight = np.clip(distance / max(1.0, radius * 1.5), 0.0, 1.0) * (0.42 + min(index, 3) * 0.08)
+        texture_weight = texture_weight[:, :, None].astype(np.float32)
+        candidate = base.astype(np.float32)
+        candidate[:, :, :3] = (
+            base[:, :, :3].astype(np.float32) * (1.0 - texture_weight)
+            + sampled[:, :, :3].astype(np.float32) * texture_weight
+        )
+        candidate[:, :, 3] = np.maximum(base[:, :, 3], sampled[:, :, 3]).astype(np.float32)
+        alpha = (target_alpha.astype(np.float32) / 255.0)[:, :, None]
+        output = np.clip(source.astype(np.float32) * (1.0 - alpha) + candidate * alpha, 0, 255).astype(np.uint8)
+        output[~target_binary] = source[~target_binary]
+        variants.append(np.ascontiguousarray(output))
+    return variants
+
+
+def content_aware_fill(
+    arr: np.ndarray,
+    selection_mask: np.ndarray | None,
+    radius: int = 3,
+    source_mask: np.ndarray | None = None,
+    color_adaptation: float = 0.65,
+    rotation_adaptation: bool = True,
+    scale_adaptation: bool = True,
+    variant: int = 0,
+) -> np.ndarray:
+    variants = content_aware_fill_variants(
+        arr,
+        selection_mask,
+        source_mask,
+        radius,
+        color_adaptation,
+        rotation_adaptation,
+        scale_adaptation,
+        max(1, int(variant) + 1),
+    )
+    return variants[min(max(0, int(variant)), len(variants) - 1)]
 
 
 def _expanded_mask(mask: np.ndarray, left: int, top: int, width: int, height: int) -> np.ndarray:
