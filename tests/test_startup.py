@@ -398,6 +398,69 @@ class StartupTests(unittest.TestCase):
         self.app.redo()
         self.assertTrue(np.array_equal(self.app.doc.layer.pixels, transformed))
 
+    def test_convert_and_edit_nested_smart_object_in_full_editor(self) -> None:
+        self.app.doc = self.app.doc.new(180, 120, (0, 0, 0, 0))
+        self.app.doc.layer.pixels[25:85, 35:115] = (215, 55, 42, 255)
+        self.app.doc.add_shape_layer("ellipse", (75, 30, 155, 105), (45, 150, 225, 230))
+        self.app.selected_layer_ids = {layer.id for layer in self.app.doc.layers}
+        self.app.history.clear()
+        self.app.convert_to_smart_object()
+        self.assertEqual(len(self.app.doc.layers), 1)
+        self.assertEqual(self.app.doc.layer.kind, "embedded")
+        self.assertEqual(len(self.app.history.undo_stack), 1)
+        before = self.app.doc.layer.pixels.copy()
+        original_launcher = self.app.launch_smart_document_editor
+        original_background = self.app.run_background
+
+        class FakeProcess:
+            def __init__(self, path):
+                self.path = path
+
+            def wait(self):
+                edited = self.app.doc.open_project(self.path)
+                self.assertEqual(len(edited.layers), 2)
+                edited.layers[0].pixels[25:85, 35:115] = (35, 215, 90, 255)
+                edited.layers[0].touch_pixels()
+                edited.save_project(self.path)
+                return 0
+
+        self.app.launch_smart_document_editor = lambda path: FakeProcess(path)
+        FakeProcess.app = self.app
+        FakeProcess.assertEqual = self.assertEqual
+        self.app.run_background = lambda _label, worker, done, *_args: done(worker())
+        try:
+            self.app.edit_smart_object_contents()
+        finally:
+            self.app.launch_smart_document_editor = original_launcher
+            self.app.run_background = original_background
+        self.assertFalse(np.array_equal(self.app.doc.layer.pixels, before))
+        self.assertIsNotNone(self.app.doc.active_smart_document())
+
+    def test_link_conflict_dialog_keeps_cached_version_as_embedded(self) -> None:
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "linked.png"
+            Image.new("RGBA", (36, 28), (210, 55, 40, 255)).save(source)
+            self.app.doc = self.app.doc.new(80, 60, (0, 0, 0, 0))
+            layer = self.app.doc.place_image(source, linked=True)
+            cached = layer.smart_source.copy()
+            Image.new("RGBA", (36, 28), (40, 90, 220, 255)).save(source)
+            original_wait = tk.Toplevel.wait_window
+
+            def choose_embed(window, target=None) -> None:
+                window.update()
+                self.app._linked_conflict_choice("embed")
+
+            tk.Toplevel.wait_window = choose_embed
+            try:
+                self.app.resolve_linked_conflict_dialog()
+            finally:
+                tk.Toplevel.wait_window = original_wait
+            self.assertEqual(layer.kind, "embedded")
+            self.assertTrue(np.array_equal(layer.smart_source, cached))
+
     def test_editor_shows_tool_names_and_explicit_options_title(self) -> None:
         move_button = self.app.tool_palette.buttons["move"]
         self.assertEqual(str(move_button.cget("text")), "Перемещение")

@@ -6,10 +6,14 @@ import json
 import math
 import os
 from pathlib import Path
+import subprocess
+import sys
+import tempfile
 import time
 import tkinter as tk
 import tkinter.font as tkfont
 from tkinter import colorchooser, filedialog, messagebox, simpledialog, ttk
+import uuid
 
 import cv2
 import numpy as np
@@ -1451,8 +1455,13 @@ class PhotoRedactorApp(tk.Tk):
         layer.add_command(label="Перелинковать слой", command=self.relink_layer)
         smart_menu = tk.Menu(layer, tearoff=False)
         layer.add_cascade(label="Smart Object", menu=smart_menu)
+        smart_menu.add_command(label="Преобразовать выбранные слои", command=self.convert_to_smart_object)
+        smart_menu.add_command(label="Редактировать содержимое", command=self.edit_smart_object_contents)
+        smart_menu.add_separator()
         smart_menu.add_command(label="Показать статус связи", command=self.show_linked_layer_status)
+        smart_menu.add_command(label="Разрешить конфликт связи", command=self.resolve_linked_conflict_dialog)
         smart_menu.add_command(label="Заменить содержимое", command=self.replace_smart_contents)
+        smart_menu.add_command(label="Редактировать фильтры", command=self.edit_layer_filters)
         smart_menu.add_command(label="Преобразовать во встроенный", command=self.convert_smart_to_embedded)
         smart_menu.add_command(label="Сбросить трансформацию", command=self.reset_smart_transform)
         layer.add_command(label="Переключить обтравочную маску", command=self.toggle_clipping_mask)
@@ -5474,7 +5483,7 @@ class PhotoRedactorApp(tk.Tk):
         self.show_editor()
 
     def place_embedded(self) -> None:
-        path = filedialog.askopenfilename(filetypes=[("Images", "*.png *.jpg *.jpeg *.webp *.bmp *.tif *.tiff"), ("All", "*.*")])
+        path = filedialog.askopenfilename(filetypes=[("Изображения и проекты", "*.png *.jpg *.jpeg *.webp *.bmp *.tif *.tiff *.prdx"), ("Все файлы", "*.*")])
         if not path:
             return
         self.run_document_command("Place embedded", lambda: self.doc.place_image(path))
@@ -5482,7 +5491,7 @@ class PhotoRedactorApp(tk.Tk):
         self.refresh()
 
     def place_linked(self) -> None:
-        path = filedialog.askopenfilename(filetypes=[("Images", "*.png *.jpg *.jpeg *.webp *.bmp *.tif *.tiff"), ("All", "*.*")])
+        path = filedialog.askopenfilename(filetypes=[("Изображения и проекты", "*.png *.jpg *.jpeg *.webp *.bmp *.tif *.tiff *.prdx"), ("Все файлы", "*.*")])
         if not path:
             return
         self.run_document_command("Place linked", lambda: self.doc.place_image(path, linked=True))
@@ -5511,11 +5520,97 @@ class PhotoRedactorApp(tk.Tk):
         }
         messagebox.showinfo("Smart Object", f"{labels.get(status['status'], status['status'])}\n\n{status.get('path') or ''}")
 
+    def convert_to_smart_object(self) -> None:
+        selected = self.selected_layer_ids or {self.doc.layer.id}
+        self.run_document_command("Преобразовать в Smart Object", lambda: self.doc.convert_layers_to_smart_object(selected))
+        self.selected_layer_ids = {self.doc.layer.id}
+        self.refresh()
+
+    def edit_smart_object_contents(self) -> None:
+        nested = self.doc.active_smart_document()
+        if nested is None:
+            messagebox.showinfo("Smart Object", "У выбранного Smart Object нет вложенного редактируемого документа.")
+            return
+        layer_id = self.doc.layer.id
+        temporary = Path(tempfile.gettempdir()) / f"PhotoRedactor-smart-{uuid.uuid4().hex}.prdx"
+        nested.save_project(temporary)
+        process = self.launch_smart_document_editor(temporary)
+
+        def worker() -> Document:
+            process.wait()
+            return Document.open_project(temporary)
+
+        def apply_and_close(edited: Document) -> None:
+            target = self.doc.get_layer(layer_id)
+            if target is not None:
+                self.doc.active_layer = self.doc.layers.index(target)
+                self.run_document_command("Обновить содержимое Smart Object", lambda: self.doc.update_active_smart_document(edited))
+                self.refresh()
+            try:
+                temporary.unlink()
+            except OSError:
+                pass
+
+        self._smart_object_editor_process = process
+        self._smart_object_editor_path = temporary
+        self.run_background("Редактирование Smart Object", worker, apply_and_close)
+
+    @staticmethod
+    def launch_smart_document_editor(path: Path):
+        if getattr(sys, "frozen", False):
+            command = [sys.executable, "--smart-edit", str(path)]
+        else:
+            command = [sys.executable, str(Path(__file__).resolve().parents[1] / "launcher.py"), "--smart-edit", str(path)]
+        return subprocess.Popen(command)
+
+    def resolve_linked_conflict_dialog(self) -> None:
+        layer = self.doc.layer
+        status = self.doc.linked_layer_status(layer)
+        if layer.kind != "linked":
+            messagebox.showinfo("Связанный Smart Object", "Выбранный Smart Object является встроенным.")
+            return
+        if status["status"] == "current":
+            messagebox.showinfo("Связанный Smart Object", "Связанный файл не изменён.")
+            return
+        dialog = tk.Toplevel(self)
+        dialog.title("Конфликт связанного Smart Object")
+        dialog.transient(self)
+        dialog.grab_set()
+        result: list[str | None] = [None]
+        title = "Связанный файл не найден" if status["status"] == "missing" else "Связанный файл изменён"
+        ttk.Label(dialog, text=title, style="PanelTitle.TLabel").pack(anchor=tk.W, padx=16, pady=(16, 5))
+        ttk.Label(dialog, text=str(status.get("path") or ""), wraplength=500, style="Secondary.TLabel").pack(anchor=tk.W, padx=16, pady=(0, 14))
+        buttons = ttk.Frame(dialog, padding=16)
+        buttons.pack(fill=tk.X)
+
+        def choose(action: str) -> None:
+            result[0] = action
+            dialog.destroy()
+
+        if status["status"] == "modified":
+            ttk.Button(buttons, text="Обновить из файла", command=lambda: choose("update"), style="Primary.TButton").pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Button(buttons, text="Сохранить текущую версию внутри проекта", command=lambda: choose("embed")).pack(side=tk.LEFT, padx=6)
+        ttk.Button(buttons, text="Выбрать другой файл", command=lambda: choose("relink")).pack(side=tk.LEFT, padx=6)
+        ttk.Button(buttons, text="Отмена", command=dialog.destroy).pack(side=tk.RIGHT)
+        self._linked_conflict_choice = choose
+        self.center_toplevel(dialog, 720, 220)
+        dialog.wait_window()
+        action = result[0]
+        if action is None:
+            return
+        path = None
+        if action == "relink":
+            path = filedialog.askopenfilename(filetypes=[("Изображения и проекты", "*.png *.jpg *.jpeg *.webp *.bmp *.tif *.tiff *.prdx"), ("Все файлы", "*.*")])
+            if not path:
+                return
+        self.run_document_command("Разрешить конфликт Smart Object", lambda: self.doc.resolve_linked_conflict(action, path))
+        self.refresh()
+
     def replace_smart_contents(self) -> None:
         if self.doc.layer.kind not in {"linked", "embedded"}:
             messagebox.showinfo("Smart Object", "Активный слой не является Smart Object.")
             return
-        path = filedialog.askopenfilename(filetypes=[("Изображения", "*.png *.jpg *.jpeg *.webp *.bmp *.tif *.tiff"), ("Все файлы", "*.*")])
+        path = filedialog.askopenfilename(filetypes=[("Изображения и проекты", "*.png *.jpg *.jpeg *.webp *.bmp *.tif *.tiff *.prdx"), ("Все файлы", "*.*")])
         if not path:
             return
         linked = messagebox.askyesno("Smart Object", "Оставить содержимое связанным с внешним файлом?")
@@ -5534,7 +5629,7 @@ class PhotoRedactorApp(tk.Tk):
         self.refresh()
 
     def relink_layer(self) -> None:
-        path = filedialog.askopenfilename(filetypes=[("Images", "*.png *.jpg *.jpeg *.webp *.bmp *.tif *.tiff"), ("All", "*.*")])
+        path = filedialog.askopenfilename(filetypes=[("Изображения и проекты", "*.png *.jpg *.jpeg *.webp *.bmp *.tif *.tiff *.prdx"), ("Все файлы", "*.*")])
         if not path:
             return
         self.run_document_command("Relink layer", lambda: self.doc.relink_active_layer(path))
@@ -9309,4 +9404,21 @@ def enable_high_dpi() -> None:
 def main() -> None:
     enable_high_dpi()
     app = PhotoRedactorApp()
+    if len(sys.argv) >= 3 and sys.argv[1] == "--smart-edit":
+        project_path = Path(sys.argv[2]).resolve()
+        try:
+            app.doc = Document.open_project(project_path)
+            app._edit_generation += 1
+            app.history.clear()
+            app.selection_box = app.doc.selection_bounds()
+            app.show_editor()
+            app.title(f"Содержимое Smart Object - {project_path.stem}")
+
+            def save_nested_and_close() -> None:
+                app.doc.save_project(project_path)
+                app.destroy()
+
+            app.protocol("WM_DELETE_WINDOW", save_nested_and_close)
+        except Exception as exc:
+            messagebox.showerror("Smart Object", f"Не удалось открыть вложенный документ:\n{exc}")
     app.mainloop()
