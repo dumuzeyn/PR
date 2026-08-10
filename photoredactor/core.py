@@ -16,7 +16,7 @@ import numpy as np
 from PIL import ExifTags, Image, ImageDraw, ImageFont
 
 from .performance import profiled, profiler
-from .color_management import BIT_DEPTHS, COLOR_MODELS, color_settings, convert_icc, display_rgba, profile_bytes, profile_name, quantize_rgba, rgb_to_cmyk, rgb_to_lab
+from .color_management import BIT_DEPTHS, COLOR_MODELS, color_settings, convert_icc, display_rgba, normalize_rgba, profile_bytes, profile_name, quantize_rgba, rgb_to_cmyk, rgb_to_lab
 
 
 _checker_cache: dict[tuple[int, int, int], np.ndarray] = {}
@@ -3157,7 +3157,8 @@ def document_alpha_to_layer_mask(alpha_canvas: np.ndarray, layer: Layer) -> np.n
 def render_layer_pixels(layer: Layer) -> np.ndarray:
     if not layer.filters:
         return layer.pixels
-    return apply_filter_stack(layer.pixels, layer.filters)
+    source = layer.working_pixels if layer.working_pixels is not None and layer.working_model == "RGBA" else layer.pixels
+    return display_rgba(apply_filter_stack(source, layer.filters))
 
 
 def render_layer_effects(layer: Layer, pixels: np.ndarray | None = None) -> list[tuple[np.ndarray, int, int, float, str]]:
@@ -3430,23 +3431,25 @@ def alpha_blend(dst: np.ndarray, src: np.ndarray, x: int, y: int, opacity: float
     return out
 
 
-def blend_rgb(src: np.ndarray, dst: np.ndarray, mode: str) -> np.ndarray:
+def blend_rgb(src: np.ndarray, dst: np.ndarray, mode: str, value_max: float = 255.0) -> np.ndarray:
     mode = mode if mode in BLEND_MODES else "Normal"
     s = src.astype(np.float32)
     d = dst.astype(np.float32)
+    value_max = max(1e-7, float(value_max))
     if mode == "Multiply":
-        return s * d / 255.0
+        return s * d / value_max
     if mode == "Screen":
-        return 255.0 - (255.0 - s) * (255.0 - d) / 255.0
+        return value_max - (value_max - s) * (value_max - d) / value_max
     if mode == "Overlay":
-        return np.where(d <= 127.5, 2.0 * s * d / 255.0, 255.0 - 2.0 * (255.0 - s) * (255.0 - d) / 255.0)
+        midpoint = value_max * 0.5
+        return np.where(d <= midpoint, 2.0 * s * d / value_max, value_max - 2.0 * (value_max - s) * (value_max - d) / value_max)
     if mode == "Soft Light":
-        sn = s / 255.0
-        dn = d / 255.0
+        sn = s / value_max
+        dn = d / value_max
         out = (1.0 - 2.0 * sn) * dn * dn + 2.0 * sn * dn
-        return out * 255.0
+        return out * value_max
     if mode == "Linear Light":
-        return np.clip(d + 2.0 * s - 255.0, 0.0, 255.0)
+        return np.clip(d + 2.0 * s - value_max, 0.0, value_max)
     if mode == "Darken":
         return np.minimum(s, d)
     if mode == "Lighten":
@@ -3454,15 +3457,15 @@ def blend_rgb(src: np.ndarray, dst: np.ndarray, mode: str) -> np.ndarray:
     if mode == "Difference":
         return np.abs(d - s)
     if mode in {"Color", "Luminosity"}:
-        src_hls = cv2.cvtColor(np.clip(src, 0, 255).astype(np.uint8), cv2.COLOR_RGB2HLS)
-        dst_hls = cv2.cvtColor(np.clip(dst, 0, 255).astype(np.uint8), cv2.COLOR_RGB2HLS)
+        src_hls = cv2.cvtColor(np.clip(s / value_max, 0, 1).astype(np.float32), cv2.COLOR_RGB2HLS)
+        dst_hls = cv2.cvtColor(np.clip(d / value_max, 0, 1).astype(np.float32), cv2.COLOR_RGB2HLS)
         out_hls = dst_hls.copy()
         if mode == "Color":
             out_hls[:, :, 0] = src_hls[:, :, 0]
             out_hls[:, :, 2] = src_hls[:, :, 2]
         else:
             out_hls[:, :, 1] = src_hls[:, :, 1]
-        return cv2.cvtColor(out_hls, cv2.COLOR_HLS2RGB).astype(np.float32)
+        return cv2.cvtColor(out_hls, cv2.COLOR_HLS2RGB).astype(np.float32) * value_max
     return s
 
 
@@ -4649,173 +4652,193 @@ def star_points(box: tuple[int, int, int, int], points: int, inner_ratio: float)
 
 
 def adjust_brightness_contrast(arr: np.ndarray, brightness: int, contrast: float) -> np.ndarray:
-    out = arr.copy().astype(np.float32)
-    out[:, :, :3] = np.clip((out[:, :, :3] - 127.5) * contrast + 127.5 + brightness, 0, 255)
-    return out.astype(np.uint8)
+    out = normalize_rgba(arr)
+    out[:, :, :3] = np.clip((out[:, :, :3] - 0.5) * float(contrast) + 0.5 + float(brightness) / 255.0, 0, 1)
+    return _restore_pixel_dtype(out, arr.dtype)
 
 
 def adjust_saturation(arr: np.ndarray, saturation: float) -> np.ndarray:
-    rgb = arr[:, :, :3]
-    hsv = cv2.cvtColor(rgb, cv2.COLOR_RGB2HSV).astype(np.float32)
-    hsv[:, :, 1] = np.clip(hsv[:, :, 1] * saturation, 0, 255)
-    out = arr.copy()
-    out[:, :, :3] = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2RGB)
-    return out
+    out = normalize_rgba(arr)
+    hsv = cv2.cvtColor(out[:, :, :3], cv2.COLOR_RGB2HSV)
+    hsv[:, :, 1] = np.clip(hsv[:, :, 1] * float(saturation), 0, 1)
+    out[:, :, :3] = cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB)
+    return _restore_pixel_dtype(out, arr.dtype)
 
 
 def adjust_vibrance(arr: np.ndarray, vibrance: float = 0.0, saturation: float = 1.0) -> np.ndarray:
-    out = arr.copy()
-    hsv = cv2.cvtColor(out[:, :, :3], cv2.COLOR_RGB2HSV).astype(np.float32)
-    sat = hsv[:, :, 1] / 255.0
+    out = normalize_rgba(arr)
+    hsv = cv2.cvtColor(out[:, :, :3], cv2.COLOR_RGB2HSV)
+    sat = hsv[:, :, 1]
     amount = float(np.clip(vibrance, -1.0, 1.0))
     if amount >= 0.0:
         sat = sat + (1.0 - sat) * (1.0 - sat) * amount
     else:
         sat = sat * (1.0 + amount)
-    hsv[:, :, 1] = np.clip(sat * max(0.0, float(saturation)), 0.0, 1.0) * 255.0
-    out[:, :, :3] = cv2.cvtColor(np.clip(hsv, 0, 255).astype(np.uint8), cv2.COLOR_HSV2RGB)
-    return out
+    hsv[:, :, 1] = np.clip(sat * max(0.0, float(saturation)), 0.0, 1.0)
+    out[:, :, :3] = cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB)
+    return _restore_pixel_dtype(out, arr.dtype)
 
 
 def adjust_temperature_tint(arr: np.ndarray, temperature: float = 0.0, tint: float = 0.0) -> np.ndarray:
-    out = arr.copy()
-    rgb = out[:, :, :3].astype(np.float32)
+    out = normalize_rgba(arr)
+    rgb = out[:, :, :3]
     temperature = float(np.clip(temperature, -100.0, 100.0))
     tint = float(np.clip(tint, -100.0, 100.0))
-    rgb[:, :, 0] += temperature * 0.72 + tint * 0.18
-    rgb[:, :, 1] += tint * 0.52 - abs(temperature) * 0.06
-    rgb[:, :, 2] -= temperature * 0.72 + tint * 0.18
-    out[:, :, :3] = np.clip(rgb, 0, 255).astype(np.uint8)
-    return out
+    rgb[:, :, 0] += (temperature * 0.72 + tint * 0.18) / 255.0
+    rgb[:, :, 1] += (tint * 0.52 - abs(temperature) * 0.06) / 255.0
+    rgb[:, :, 2] -= (temperature * 0.72 + tint * 0.18) / 255.0
+    out[:, :, :3] = np.clip(rgb, 0, 1)
+    return _restore_pixel_dtype(out, arr.dtype)
 
 
 def adjust_hue_saturation(arr: np.ndarray, hue: int, saturation: float, lightness: int) -> np.ndarray:
-    rgb = arr[:, :, :3]
-    hsv = cv2.cvtColor(rgb, cv2.COLOR_RGB2HSV).astype(np.float32)
-    hsv[:, :, 0] = (hsv[:, :, 0] + float(hue) / 2.0) % 180.0
-    hsv[:, :, 1] = np.clip(hsv[:, :, 1] * float(saturation), 0, 255)
-    hsv[:, :, 2] = np.clip(hsv[:, :, 2] + float(lightness), 0, 255)
-    out = arr.copy()
-    out[:, :, :3] = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2RGB)
-    return out
+    out = normalize_rgba(arr)
+    hsv = cv2.cvtColor(out[:, :, :3], cv2.COLOR_RGB2HSV)
+    hsv[:, :, 0] = (hsv[:, :, 0] + float(hue)) % 360.0
+    hsv[:, :, 1] = np.clip(hsv[:, :, 1] * float(saturation), 0, 1)
+    hsv[:, :, 2] = np.clip(hsv[:, :, 2] + float(lightness) / 255.0, 0, 1)
+    out[:, :, :3] = cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB)
+    return _restore_pixel_dtype(out, arr.dtype)
 
 
 def adjust_exposure(arr: np.ndarray, exposure: float, offset: float, gamma: float) -> np.ndarray:
-    out = arr.copy().astype(np.float32)
-    rgb = out[:, :, :3] / 255.0
+    out = normalize_rgba(arr)
+    rgb = out[:, :, :3]
     rgb = np.clip(rgb * (2.0 ** float(exposure)) + float(offset), 0, 1)
     rgb = np.power(rgb, 1.0 / max(0.01, float(gamma)))
-    out[:, :, :3] = rgb * 255.0
-    return np.clip(out, 0, 255).astype(np.uint8)
+    out[:, :, :3] = rgb
+    return _restore_pixel_dtype(out, arr.dtype)
 
 
 def adjust_color_balance(arr: np.ndarray, red: int, green: int, blue: int) -> np.ndarray:
-    out = arr.copy().astype(np.float32)
-    shifts = np.array([red, green, blue], dtype=np.float32)
-    out[:, :, :3] = np.clip(out[:, :, :3] + shifts, 0, 255)
-    return out.astype(np.uint8)
+    out = normalize_rgba(arr)
+    shifts = np.array([red, green, blue], dtype=np.float32) / 255.0
+    out[:, :, :3] = np.clip(out[:, :, :3] + shifts, 0, 1)
+    return _restore_pixel_dtype(out, arr.dtype)
 
 
 def adjust_threshold(arr: np.ndarray, threshold: int) -> np.ndarray:
-    out = arr.copy()
+    out = normalize_rgba(arr)
     gray = cv2.cvtColor(out[:, :, :3], cv2.COLOR_RGB2GRAY)
-    bw = np.where(gray >= int(np.clip(threshold, 0, 255)), 255, 0).astype(np.uint8)
+    bw = np.where(gray >= float(np.clip(threshold, 0, 255)) / 255.0, 1.0, 0.0).astype(np.float32)
     out[:, :, :3] = cv2.cvtColor(bw, cv2.COLOR_GRAY2RGB)
-    return out
+    return _restore_pixel_dtype(out, arr.dtype)
 
 
 def adjust_posterize(arr: np.ndarray, levels_count: int) -> np.ndarray:
     levels_count = int(np.clip(levels_count, 2, 64))
-    out = arr.copy().astype(np.float32)
-    rgb = out[:, :, :3] / 255.0
-    out[:, :, :3] = np.round(rgb * (levels_count - 1)) * (255.0 / (levels_count - 1))
-    return np.clip(out, 0, 255).astype(np.uint8)
+    out = normalize_rgba(arr)
+    out[:, :, :3] = np.round(out[:, :, :3] * (levels_count - 1)) / (levels_count - 1)
+    return _restore_pixel_dtype(out, arr.dtype)
 
 
 def levels(arr: np.ndarray, black: int, white: int, gamma: float) -> np.ndarray:
-    out = arr.copy().astype(np.float32)
-    rgb = np.clip((out[:, :, :3] - black) / max(1, white - black), 0, 1)
-    rgb = np.power(rgb, 1.0 / max(0.01, gamma)) * 255
+    out = normalize_rgba(arr)
+    black_value = float(black) / 255.0
+    white_value = float(white) / 255.0
+    rgb = np.clip((out[:, :, :3] - black_value) / max(1e-7, white_value - black_value), 0, 1)
+    rgb = np.power(rgb, 1.0 / max(0.01, gamma))
     out[:, :, :3] = rgb
-    return np.clip(out, 0, 255).astype(np.uint8)
+    return _restore_pixel_dtype(out, arr.dtype)
 
 
 def curves(arr: np.ndarray, shadows: int, midtones: int, highlights: int) -> np.ndarray:
-    xs = np.array([0, 64, 128, 192, 255], dtype=np.float32)
-    ys = np.array([0, shadows, midtones, highlights, 255], dtype=np.float32)
-    lut = np.interp(np.arange(256), xs, ys).clip(0, 255).astype(np.uint8)
-    out = arr.copy()
-    out[:, :, :3] = lut[out[:, :, :3]]
-    return out
+    xs = np.array([0, 64, 128, 192, 255], dtype=np.float32) / 255.0
+    ys = np.array([0, shadows, midtones, highlights, 255], dtype=np.float32) / 255.0
+    out = normalize_rgba(arr)
+    out[:, :, :3] = np.interp(out[:, :, :3], xs, ys).clip(0, 1)
+    return _restore_pixel_dtype(out, arr.dtype)
+
+
+def _restore_pixel_dtype(normalized: np.ndarray, dtype: np.dtype) -> np.ndarray:
+    value = np.clip(normalized, 0.0, 1.0)
+    if dtype == np.uint8:
+        return np.rint(value * 255.0).astype(np.uint8)
+    if dtype == np.uint16:
+        return np.rint(value * 65535.0).astype(np.uint16)
+    if np.issubdtype(dtype, np.floating):
+        return value.astype(dtype)
+    raise TypeError(f"Unsupported pixel dtype: {dtype}")
 
 
 def blur(arr: np.ndarray, radius: int) -> np.ndarray:
     k = max(1, radius * 2 + 1)
-    out = arr.copy()
+    out = normalize_rgba(arr)
     out[:, :, :3] = cv2.GaussianBlur(out[:, :, :3], (k, k), radius)
-    return out
+    return _restore_pixel_dtype(out, arr.dtype)
 
 
 def sharpen(arr: np.ndarray, amount: float) -> np.ndarray:
-    blurred = cv2.GaussianBlur(arr[:, :, :3], (0, 0), 1.2)
-    out = arr.copy()
-    out[:, :, :3] = np.clip(arr[:, :, :3].astype(np.float32) * (1 + amount) - blurred.astype(np.float32) * amount, 0, 255)
-    return out.astype(np.uint8)
+    out = normalize_rgba(arr)
+    blurred = cv2.GaussianBlur(out[:, :, :3], (0, 0), 1.2)
+    out[:, :, :3] = np.clip(out[:, :, :3] * (1 + amount) - blurred * amount, 0, 1)
+    return _restore_pixel_dtype(out, arr.dtype)
 
 
 def add_noise(arr: np.ndarray, amount: float) -> np.ndarray:
-    out = arr.copy().astype(np.float32)
-    noise = np.random.normal(0, amount * 255, out[:, :, :3].shape)
-    out[:, :, :3] = np.clip(out[:, :, :3] + noise, 0, 255)
-    return out.astype(np.uint8)
+    out = normalize_rgba(arr)
+    noise = np.random.normal(0, amount, out[:, :, :3].shape)
+    out[:, :, :3] = np.clip(out[:, :, :3] + noise, 0, 1)
+    return _restore_pixel_dtype(out, arr.dtype)
 
 
 def apply_filter_stack(arr: np.ndarray, filters: list[dict[str, Any]]) -> np.ndarray:
-    out = arr.copy()
+    original_dtype = arr.dtype
+    out = normalize_rgba(arr)
     for item in filters:
         if not bool(item.get("enabled", True)):
             continue
-        before = out
+        before = out.copy()
         kind = str(item.get("type", "")).lower()
+        channel = str(item.get("channel", "RGB"))
+        source = before
+        if channel == "Alpha":
+            alpha = before[:, :, 3]
+            source = np.dstack((alpha, alpha, alpha, alpha)).astype(np.float32)
         if kind == "blur":
-            filtered = blur(out, int(item.get("radius", 3)))
+            filtered = normalize_rgba(blur(source, int(item.get("radius", 3))))
         elif kind == "sharpen":
-            filtered = sharpen(out, float(item.get("amount", 1.0)))
+            filtered = normalize_rgba(sharpen(source, float(item.get("amount", 1.0))))
         elif kind == "noise":
-            filtered = deterministic_noise(out, float(item.get("amount", 0.03)), int(item.get("seed", 12345)))
+            filtered = normalize_rgba(deterministic_noise(source, float(item.get("amount", 0.03)), int(item.get("seed", 12345))))
         elif kind == "median":
-            filtered = median_filter(out, int(item.get("size", 3)))
+            filtered = normalize_rgba(median_filter(source, int(item.get("size", 3))))
         elif kind == "edge":
-            filtered = edge_filter(out, float(item.get("strength", 1.0)))
+            filtered = normalize_rgba(edge_filter(source, float(item.get("strength", 1.0))))
         elif kind == "emboss":
-            filtered = emboss_filter(out, float(item.get("strength", 1.0)))
+            filtered = normalize_rgba(emboss_filter(source, float(item.get("strength", 1.0))))
         else:
             continue
+        if channel == "Alpha":
+            effect = before.copy()
+            effect[:, :, 3] = filtered[:, :, 0]
+            channel_indices: tuple[int, ...] = ()
+        else:
+            effect = filtered
+            channel_indices = {"Red": (0,), "Green": (1,), "Blue": (2,), "RGB": (0, 1, 2)}.get(channel, (0, 1, 2))
+            for index in {0, 1, 2} - set(channel_indices):
+                effect[:, :, index] = before[:, :, index]
+            effect[:, :, 3] = before[:, :, 3]
         opacity = float(np.clip(item.get("opacity", 1.0), 0.0, 1.0))
         blend_mode = str(item.get("blend_mode", "Normal"))
-        blend_source = filtered
+        blend_source = effect
         if blend_mode != "Normal":
-            blend_source = filtered.copy()
-            blend_source[:, :, :3] = blend_rgb(filtered[:, :, :3].astype(np.float32), before[:, :, :3].astype(np.float32), blend_mode).clip(0, 255).astype(np.uint8)
+            blend_source = effect.copy()
+            blend_source[:, :, :3] = blend_rgb(effect[:, :, :3], before[:, :, :3], blend_mode, 1.0).clip(0, 1)
+            for index in {0, 1, 2} - set(channel_indices):
+                blend_source[:, :, index] = before[:, :, index]
         mask = filter_mask_from_item(item, out.shape[:2])
-        if opacity >= 0.999:
-            if mask is None:
-                out = blend_source
-            else:
-                out = before.copy().astype(np.float32)
-                out[:, :, :3] = before[:, :, :3].astype(np.float32) * (1.0 - mask[:, :, None]) + blend_source[:, :, :3].astype(np.float32) * mask[:, :, None]
-                out = np.clip(out, 0, 255).astype(np.uint8)
-        elif opacity <= 0.001:
+        if opacity <= 0.001:
             out = before
         else:
-            if mask is not None:
-                mask = mask * opacity
-            else:
-                mask = np.full(out.shape[:2], opacity, dtype=np.float32)
-            out = before.copy().astype(np.float32)
-            out[:, :, :3] = before[:, :, :3].astype(np.float32) * (1.0 - mask[:, :, None]) + blend_source[:, :, :3].astype(np.float32) * mask[:, :, None]
-            out = np.clip(out, 0, 255).astype(np.uint8)
-    return out
+            mix = np.full(out.shape[:2], opacity, dtype=np.float32) if mask is None else mask * opacity
+            out = before * (1.0 - mix[:, :, None]) + blend_source * mix[:, :, None]
+            if channel == "Alpha":
+                out[:, :, :3] = before[:, :, :3]
+            elif channel != "RGB":
+                for index in {0, 1, 2} - set(channel_indices):
+                    out[:, :, index] = before[:, :, index]
+    return _restore_pixel_dtype(out, original_dtype)
 
 
 def filter_mask_from_item(item: dict[str, Any], shape: tuple[int, int]) -> np.ndarray | None:
@@ -4835,41 +4858,51 @@ def filter_mask_from_item(item: dict[str, Any], shape: tuple[int, int]) -> np.nd
     target_h, target_w = shape
     if mask.shape != (target_h, target_w):
         mask = cv2.resize(mask, (target_w, target_h), interpolation=cv2.INTER_LINEAR)
-    return (mask.astype(np.float32) / 255.0).clip(0, 1)
+    result = (mask.astype(np.float32) / 255.0).clip(0, 1)
+    feather = max(0.0, float(item.get("mask_feather", 0.0)))
+    if feather > 0.01:
+        result = cv2.GaussianBlur(result, (0, 0), feather).clip(0, 1)
+    if bool(item.get("mask_inverted", False)):
+        result = 1.0 - result
+    density = float(np.clip(item.get("mask_density", 1.0), 0.0, 1.0))
+    return ((1.0 - density) + result * density).clip(0, 1)
 
 
 def median_filter(arr: np.ndarray, size: int) -> np.ndarray:
-    k = max(3, int(size) | 1)
-    out = arr.copy()
-    out[:, :, :3] = cv2.medianBlur(out[:, :, :3], k)
-    return out
+    maximum = max(3, min(arr.shape[0], arr.shape[1]))
+    k = min(maximum if maximum % 2 else maximum - 1, max(3, int(size) | 1))
+    out = normalize_rgba(arr)
+    passes = max(1, int(math.ceil((k - 1) / 4.0)))
+    for _ in range(passes):
+        out[:, :, :3] = cv2.medianBlur(out[:, :, :3], 3 if k == 3 else 5)
+    return _restore_pixel_dtype(out, arr.dtype)
 
 
 def deterministic_noise(arr: np.ndarray, amount: float, seed: int = 12345) -> np.ndarray:
-    out = arr.copy().astype(np.float32)
+    out = normalize_rgba(arr)
     rng = np.random.default_rng(int(seed))
-    noise = rng.normal(0, float(amount) * 255, out[:, :, :3].shape)
-    out[:, :, :3] = np.clip(out[:, :, :3] + noise, 0, 255)
-    return out.astype(np.uint8)
+    noise = rng.normal(0, float(amount), out[:, :, :3].shape)
+    out[:, :, :3] = np.clip(out[:, :, :3] + noise, 0, 1)
+    return _restore_pixel_dtype(out, arr.dtype)
 
 
 def edge_filter(arr: np.ndarray, strength: float = 1.0) -> np.ndarray:
-    gray = cv2.cvtColor(arr[:, :, :3], cv2.COLOR_RGB2GRAY)
-    edges = cv2.Canny(gray, 80, 160)
-    edge_rgb = cv2.cvtColor(edges, cv2.COLOR_GRAY2RGB).astype(np.float32)
-    out = arr.copy().astype(np.float32)
+    out = normalize_rgba(arr)
+    gray = cv2.cvtColor(out[:, :, :3], cv2.COLOR_RGB2GRAY)
+    edges = cv2.Canny(np.rint(gray * 255.0).astype(np.uint8), 80, 160).astype(np.float32) / 255.0
+    edge_rgb = cv2.cvtColor(edges, cv2.COLOR_GRAY2RGB)
     mix = np.clip(float(strength), 0, 1)
     out[:, :, :3] = out[:, :, :3] * (1.0 - mix) + edge_rgb * mix
-    return np.clip(out, 0, 255).astype(np.uint8)
+    return _restore_pixel_dtype(out, arr.dtype)
 
 
 def emboss_filter(arr: np.ndarray, strength: float = 1.0) -> np.ndarray:
     kernel = np.array([[-2, -1, 0], [-1, 1, 1], [0, 1, 2]], dtype=np.float32)
-    embossed = cv2.filter2D(arr[:, :, :3], -1, kernel) + 128
-    out = arr.copy().astype(np.float32)
+    out = normalize_rgba(arr)
+    embossed = cv2.filter2D(out[:, :, :3], -1, kernel) + 0.5
     mix = np.clip(float(strength), 0, 1)
-    out[:, :, :3] = out[:, :, :3] * (1.0 - mix) + embossed.astype(np.float32) * mix
-    return np.clip(out, 0, 255).astype(np.uint8)
+    out[:, :, :3] = np.clip(out[:, :, :3] * (1.0 - mix) + embossed * mix, 0, 1)
+    return _restore_pixel_dtype(out, arr.dtype)
 
 
 def _nearest_source_texture(pixels: np.ndarray, source_mask: np.ndarray) -> np.ndarray:
@@ -5202,41 +5235,64 @@ def image_statistics(arr: np.ndarray) -> dict[str, Any]:
     return stats
 
 
+def apply_adjustment(arr: np.ndarray, adjustment: dict[str, Any]) -> np.ndarray:
+    kind = str(adjustment.get("type", "")).lower()
+    if kind == "brightness_contrast":
+        adjusted = adjust_brightness_contrast(arr, int(adjustment.get("brightness", 0)), float(adjustment.get("contrast", 1.0)))
+    elif kind == "saturation":
+        adjusted = adjust_saturation(arr, float(adjustment.get("saturation", 1.0)))
+    elif kind == "vibrance":
+        adjusted = adjust_vibrance(arr, float(adjustment.get("vibrance", 0.0)), float(adjustment.get("saturation", 1.0)))
+    elif kind == "temperature_tint":
+        adjusted = adjust_temperature_tint(arr, float(adjustment.get("temperature", 0.0)), float(adjustment.get("tint", 0.0)))
+    elif kind == "hue_saturation":
+        adjusted = adjust_hue_saturation(arr, int(adjustment.get("hue", 0)), float(adjustment.get("saturation", 1.0)), int(adjustment.get("lightness", 0)))
+    elif kind == "exposure":
+        adjusted = adjust_exposure(arr, float(adjustment.get("exposure", 0.0)), float(adjustment.get("offset", 0.0)), float(adjustment.get("gamma", 1.0)))
+    elif kind == "color_balance":
+        adjusted = adjust_color_balance(arr, int(adjustment.get("red", 0)), int(adjustment.get("green", 0)), int(adjustment.get("blue", 0)))
+    elif kind == "threshold":
+        adjusted = adjust_threshold(arr, int(adjustment.get("threshold", 128)))
+    elif kind == "posterize":
+        adjusted = adjust_posterize(arr, int(adjustment.get("levels", 6)))
+    elif kind == "levels":
+        adjusted = levels(arr, int(adjustment.get("black", 0)), int(adjustment.get("white", 255)), float(adjustment.get("gamma", 1.0)))
+    elif kind == "curves":
+        adjusted = curves(arr, int(adjustment.get("shadows", 64)), int(adjustment.get("midtones", 128)), int(adjustment.get("highlights", 192)))
+    elif kind == "invert":
+        normalized = normalize_rgba(arr)
+        normalized[:, :, :3] = 1.0 - normalized[:, :, :3]
+        adjusted = _restore_pixel_dtype(normalized, arr.dtype)
+    elif kind == "grayscale":
+        normalized = normalize_rgba(arr)
+        gray = cv2.cvtColor(normalized[:, :, :3], cv2.COLOR_RGB2GRAY)
+        normalized[:, :, :3] = cv2.cvtColor(gray, cv2.COLOR_GRAY2RGB)
+        adjusted = _restore_pixel_dtype(normalized, arr.dtype)
+    else:
+        return arr.copy()
+    channel = str(adjustment.get("channel", "RGB"))
+    if channel == "RGB":
+        return adjusted
+    before_normalized = normalize_rgba(arr)
+    adjusted_normalized = normalize_rgba(adjusted)
+    if channel == "Alpha":
+        alpha_source = np.dstack([before_normalized[:, :, 3]] * 4).astype(np.float32)
+        alpha_adjustment = dict(adjustment)
+        alpha_adjustment["channel"] = "RGB"
+        alpha_result = normalize_rgba(apply_adjustment(alpha_source, alpha_adjustment))
+        before_normalized[:, :, 3] = alpha_result[:, :, 0]
+    else:
+        index = {"Red": 0, "Green": 1, "Blue": 2}.get(channel)
+        if index is None:
+            return adjusted
+        before_normalized[:, :, index] = adjusted_normalized[:, :, index]
+    return _restore_pixel_dtype(before_normalized, arr.dtype)
+
+
 def apply_adjustment_layer(out: np.ndarray, layer: Layer, clipping_mask: np.ndarray | None = None) -> None:
     if layer.adjustment is None:
         return
-    kind = str(layer.adjustment.get("type", "")).lower()
-    if kind == "brightness_contrast":
-        adjusted = adjust_brightness_contrast(out, int(layer.adjustment.get("brightness", 0)), float(layer.adjustment.get("contrast", 1.0)))
-    elif kind == "saturation":
-        adjusted = adjust_saturation(out, float(layer.adjustment.get("saturation", 1.0)))
-    elif kind == "vibrance":
-        adjusted = adjust_vibrance(out, float(layer.adjustment.get("vibrance", 0.0)), float(layer.adjustment.get("saturation", 1.0)))
-    elif kind == "temperature_tint":
-        adjusted = adjust_temperature_tint(out, float(layer.adjustment.get("temperature", 0.0)), float(layer.adjustment.get("tint", 0.0)))
-    elif kind == "hue_saturation":
-        adjusted = adjust_hue_saturation(out, int(layer.adjustment.get("hue", 0)), float(layer.adjustment.get("saturation", 1.0)), int(layer.adjustment.get("lightness", 0)))
-    elif kind == "exposure":
-        adjusted = adjust_exposure(out, float(layer.adjustment.get("exposure", 0.0)), float(layer.adjustment.get("offset", 0.0)), float(layer.adjustment.get("gamma", 1.0)))
-    elif kind == "color_balance":
-        adjusted = adjust_color_balance(out, int(layer.adjustment.get("red", 0)), int(layer.adjustment.get("green", 0)), int(layer.adjustment.get("blue", 0)))
-    elif kind == "threshold":
-        adjusted = adjust_threshold(out, int(layer.adjustment.get("threshold", 128)))
-    elif kind == "posterize":
-        adjusted = adjust_posterize(out, int(layer.adjustment.get("levels", 6)))
-    elif kind == "levels":
-        adjusted = levels(out, int(layer.adjustment.get("black", 0)), int(layer.adjustment.get("white", 255)), float(layer.adjustment.get("gamma", 1.0)))
-    elif kind == "curves":
-        adjusted = curves(out, int(layer.adjustment.get("shadows", 64)), int(layer.adjustment.get("midtones", 128)), int(layer.adjustment.get("highlights", 192)))
-    elif kind == "invert":
-        adjusted = out.copy()
-        adjusted[:, :, :3] = 255 - adjusted[:, :, :3]
-    elif kind == "grayscale":
-        adjusted = out.copy()
-        gray = cv2.cvtColor(adjusted[:, :, :3], cv2.COLOR_RGB2GRAY)
-        adjusted[:, :, :3] = cv2.cvtColor(gray, cv2.COLOR_GRAY2RGB)
-    else:
-        return
+    adjusted = apply_adjustment(out, layer.adjustment)
     alpha = np.full(out.shape[:2], float(layer.opacity), dtype=np.float32)
     if layer.mask is not None and layer.mask_enabled:
         mask_canvas = np.zeros(out.shape[:2], dtype=np.uint8)
@@ -5246,4 +5302,7 @@ def apply_adjustment_layer(out: np.ndarray, layer: Layer, clipping_mask: np.ndar
     if clipping_mask is not None:
         alpha *= (clipping_mask.astype(np.float32) / 255.0).clip(0, 1)
     alpha = alpha[:, :, None].clip(0, 1)
-    out[:, :, :3] = np.clip(adjusted[:, :, :3].astype(np.float32) * alpha + out[:, :, :3].astype(np.float32) * (1.0 - alpha), 0, 255).astype(np.uint8)
+    adjustment_rgb = adjusted[:, :, :3].astype(np.float32)
+    if layer.blend_mode != "Normal":
+        adjustment_rgb = blend_rgb(adjustment_rgb, out[:, :, :3], layer.blend_mode)
+    out[:, :, :3] = np.clip(adjustment_rgb * alpha + out[:, :, :3].astype(np.float32) * (1.0 - alpha), 0, 255).astype(np.uint8)

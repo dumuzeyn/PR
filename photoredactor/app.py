@@ -36,6 +36,7 @@ from .core import (
     adjust_threshold,
     adjust_vibrance,
     automatic_selection_mask,
+    apply_adjustment,
     apply_gradient,
     apply_filter_stack,
     bezier_curve_points,
@@ -47,6 +48,7 @@ from .core import (
     clone_or_heal,
     draw_mask_brush,
     draw_brush,
+    decode_png,
     encode_png,
     edge_aware_cleanup,
     flood_fill,
@@ -344,6 +346,9 @@ FILTER_LABELS = {
     "edge": "Края",
     "emboss": "Тиснение",
 }
+FILTER_VALUES = {label: value for value, label in FILTER_LABELS.items()}
+CHANNEL_LABELS = {"RGB": "RGB", "Red": "Красный", "Green": "Зелёный", "Blue": "Синий", "Alpha": "Альфа"}
+CHANNEL_VALUES = {label: value for value, label in CHANNEL_LABELS.items()}
 
 FILTER_STACK_PRESETS = {
     "Портрет мягко": [
@@ -395,6 +400,7 @@ ADJUSTMENT_LABELS = {
     "invert": "\u0418\u043d\u0432\u0435\u0440\u0441\u0438\u044f",
     "grayscale": "\u0427\u0435\u0440\u043d\u043e-\u0431\u0435\u043b\u043e\u0435",
 }
+ADJUSTMENT_VALUES = {label: value for value, label in ADJUSTMENT_LABELS.items()}
 
 ADJUSTMENT_PRESETS = {
     "Яркий портрет": {"type": "brightness_contrast", "brightness": 12, "contrast": 1.18},
@@ -6706,7 +6712,7 @@ class PhotoRedactorApp(tk.Tk):
         dialog.grab_set()
 
         preview = ttk.Label(dialog)
-        preview.grid(row=0, column=0, rowspan=11, padx=12, pady=12, sticky="n")
+        preview.grid(row=0, column=0, rowspan=13, padx=12, pady=12, sticky="n")
         listbox = tk.Listbox(dialog, height=8, width=26, exportselection=False)
         listbox.grid(row=0, column=1, rowspan=6, padx=(0, 8), pady=12, sticky="ns")
 
@@ -6718,8 +6724,8 @@ class PhotoRedactorApp(tk.Tk):
         preset_box.grid(row=0, column=1, sticky="ew", pady=(0, 6))
         ttk.Button(controls, text="Применить", command=lambda: apply_preset()).grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 10))
         ttk.Label(controls, text="Тип").grid(row=2, column=0, sticky="w")
-        filter_type = tk.StringVar(value=FILTER_TYPES[0])
-        type_box = ttk.Combobox(controls, textvariable=filter_type, values=FILTER_TYPES, state="readonly", width=14)
+        filter_type = tk.StringVar(value=FILTER_LABELS[FILTER_TYPES[0]])
+        type_box = ttk.Combobox(controls, textvariable=filter_type, values=list(FILTER_VALUES), state="readonly", width=14)
         type_box.grid(row=2, column=1, sticky="ew", pady=(0, 6))
         ttk.Label(controls, text="Параметр").grid(row=3, column=0, sticky="w")
         value_var = tk.DoubleVar(value=3.0)
@@ -6736,8 +6742,22 @@ class PhotoRedactorApp(tk.Tk):
         filter_blend_mode = tk.StringVar(value="Normal")
         filter_blend_box = ttk.Combobox(controls, textvariable=filter_blend_mode, values=BLEND_MODES, state="readonly", width=14)
         filter_blend_box.grid(row=6, column=1, sticky="ew", pady=(0, 8))
+        ttk.Label(controls, text="Канал").grid(row=7, column=0, sticky="w")
+        filter_channel = tk.StringVar(value="RGB")
+        filter_channel_box = ttk.Combobox(controls, textvariable=filter_channel, values=list(CHANNEL_VALUES), state="readonly", width=14)
+        filter_channel_box.grid(row=7, column=1, sticky="ew", pady=(0, 8))
+        mask_inverted = tk.BooleanVar(value=False)
+        ttk.Checkbutton(controls, text="Инвертировать маску", variable=mask_inverted).grid(row=8, column=0, columnspan=2, sticky="w", pady=(0, 6))
+        ttk.Label(controls, text="Плотность маски").grid(row=9, column=0, sticky="w")
+        mask_density = tk.DoubleVar(value=100.0)
+        mask_density_spin = ttk.Spinbox(controls, textvariable=mask_density, from_=0, to=100, increment=5, width=12)
+        mask_density_spin.grid(row=9, column=1, sticky="ew", pady=(0, 6))
+        ttk.Label(controls, text="Растушёвка").grid(row=10, column=0, sticky="w")
+        mask_feather = tk.DoubleVar(value=0.0)
+        mask_feather_spin = ttk.Spinbox(controls, textvariable=mask_feather, from_=0, to=500, increment=1, width=12)
+        mask_feather_spin.grid(row=10, column=1, sticky="ew", pady=(0, 8))
         hint = ttk.Label(controls, text="", wraplength=190, justify=tk.LEFT)
-        hint.grid(row=7, column=0, columnspan=2, sticky="w", pady=(0, 8))
+        hint.grid(row=11, column=0, columnspan=2, sticky="w", pady=(0, 8))
 
         buttons = ttk.Frame(dialog)
         buttons.grid(row=6, column=1, columnspan=2, sticky="ew", padx=(0, 12), pady=(0, 8))
@@ -6752,6 +6772,9 @@ class PhotoRedactorApp(tk.Tk):
             selection = listbox.curselection()
             return None if not selection else int(selection[0])
 
+        def selected_filter_kind() -> str:
+            return FILTER_VALUES.get(filter_type.get(), filter_type.get())
+
         def item_text(item: dict) -> str:
             kind = str(item.get("type", "")).lower()
             label = FILTER_LABELS.get(kind, kind)
@@ -6762,7 +6785,8 @@ class PhotoRedactorApp(tk.Tk):
             prefix = "" if enabled else "выкл. "
             mask = ", маска" if item.get("mask") else ""
             blend = "" if blend_mode == "Normal" else f", {blend_mode}"
-            return f"{prefix}{label}: {value:g}, {opacity}%{blend}{mask}"
+            channel = CHANNEL_LABELS.get(str(item.get("channel", "RGB")), "RGB")
+            return f"{prefix}{label}: {value:g}, {opacity}%, {channel}{blend}{mask}"
 
         def refresh_list(select_index: int | None = None) -> None:
             listbox.delete(0, tk.END)
@@ -6795,18 +6819,22 @@ class PhotoRedactorApp(tk.Tk):
             nonlocal updating_controls
             index = selected_index()
             if index is None:
-                update_value_controls(filter_type.get())
+                update_value_controls(selected_filter_kind())
                 return
             updating_controls = True
             item = filters[index]
             kind = str(item.get("type", "blur")).lower()
-            filter_type.set(kind if kind in FILTER_TYPES else "blur")
-            update_value_controls(filter_type.get())
+            filter_type.set(FILTER_LABELS.get(kind, FILTER_LABELS["blur"]))
+            update_value_controls(selected_filter_kind())
             value_var.set(self.filter_primary_value(item))
             enabled_var.set(bool(item.get("enabled", True)))
             opacity_var.set(float(item.get("opacity", 1.0)) * 100.0)
             blend_mode = str(item.get("blend_mode", "Normal"))
             filter_blend_mode.set(blend_mode if blend_mode in BLEND_MODES else "Normal")
+            filter_channel.set(CHANNEL_LABELS.get(str(item.get("channel", "RGB")), "RGB"))
+            mask_inverted.set(bool(item.get("mask_inverted", False)))
+            mask_density.set(float(item.get("mask_density", 1.0)) * 100.0)
+            mask_feather.set(float(item.get("mask_feather", 0.0)))
             updating_controls = False
 
         def current_item(original: dict | None = None) -> dict:
@@ -6814,7 +6842,11 @@ class PhotoRedactorApp(tk.Tk):
             metadata["enabled"] = bool(enabled_var.get())
             metadata["opacity"] = float(opacity_var.get()) / 100.0
             metadata["blend_mode"] = filter_blend_mode.get()
-            return self.make_filter_item(filter_type.get(), value_var.get(), metadata)
+            metadata["channel"] = CHANNEL_VALUES.get(filter_channel.get(), "RGB")
+            metadata["mask_inverted"] = bool(mask_inverted.get())
+            metadata["mask_density"] = float(mask_density.get()) / 100.0
+            metadata["mask_feather"] = float(mask_feather.get())
+            return self.make_filter_item(selected_filter_kind(), value_var.get(), metadata)
 
         def apply_current(_event=None) -> None:
             if updating_controls:
@@ -6922,6 +6954,25 @@ class PhotoRedactorApp(tk.Tk):
             filters[index].pop("mask", None)
             refresh_list(index)
 
+        def edit_filter_mask() -> None:
+            index = selected_index()
+            if index is None:
+                return
+            filters[index] = current_item(filters[index])
+            encoded = filters[index].get("mask")
+            if isinstance(encoded, str) and encoded:
+                try:
+                    initial_mask = decode_png(encoded)[:, :, 0]
+                except Exception:
+                    initial_mask = np.full(pixels.shape[:2], 255, dtype=np.uint8)
+            else:
+                initial_mask = np.full(pixels.shape[:2], 255, dtype=np.uint8)
+            edited = self.filter_mask_editor(initial_mask, selection_mask)
+            if edited is None:
+                return
+            filters[index]["mask"] = encode_png(np.dstack([edited] * 4))
+            refresh_list(index)
+
         preview_scale = min(1.0, 180 / max(1, pixels.shape[1]), 180 / max(1, pixels.shape[0]))
         preview_size = max(1, round(pixels.shape[1] * preview_scale)), max(1, round(pixels.shape[0] * preview_scale))
         preview_source = pixels.copy() if preview_size == (pixels.shape[1], pixels.shape[0]) else cv2.resize(pixels, preview_size, interpolation=cv2.INTER_AREA)
@@ -6952,27 +7003,130 @@ class PhotoRedactorApp(tk.Tk):
         ttk.Button(buttons, text="Вверх", command=lambda: move_filter(-1)).pack(side=tk.LEFT, padx=(0, 4))
         ttk.Button(buttons, text="Вниз", command=lambda: move_filter(1)).pack(side=tk.LEFT)
         ttk.Button(mask_buttons, text="Маска из выделения", command=set_filter_mask_from_selection).pack(side=tk.LEFT, padx=(0, 4))
+        ttk.Button(mask_buttons, text="Редактировать маску", command=edit_filter_mask).pack(side=tk.LEFT, padx=(0, 4))
         ttk.Button(mask_buttons, text="Удалить маску", command=clear_filter_mask).pack(side=tk.LEFT)
         ttk.Button(preset_file_buttons, text="Загрузить пресет", command=load_preset_file).pack(side=tk.LEFT, padx=(0, 4))
         ttk.Button(preset_file_buttons, text="Сохранить пресет", command=save_preset_file).pack(side=tk.LEFT)
         ttk.Button(bottom, text="ОК", command=accept).pack(side=tk.RIGHT, padx=(6, 0))
         ttk.Button(bottom, text="Отмена", command=cancel).pack(side=tk.RIGHT)
         listbox.bind("<<ListboxSelect>>", load_selected)
-        type_box.bind("<<ComboboxSelected>>", lambda _event: (update_value_controls(filter_type.get()), apply_current()))
+        type_box.bind("<<ComboboxSelected>>", lambda _event: (update_value_controls(selected_filter_kind()), apply_current()))
         value_spin.bind("<KeyRelease>", apply_current)
         value_spin.bind("<FocusOut>", apply_current)
         opacity_spin.bind("<KeyRelease>", apply_current)
         opacity_spin.bind("<FocusOut>", apply_current)
         filter_blend_box.bind("<<ComboboxSelected>>", apply_current)
+        filter_channel_box.bind("<<ComboboxSelected>>", apply_current)
         value_var.trace_add("write", lambda *_args: apply_current())
         enabled_var.trace_add("write", lambda *_args: apply_current())
         opacity_var.trace_add("write", lambda *_args: apply_current())
         filter_blend_mode.trace_add("write", lambda *_args: apply_current())
+        filter_channel.trace_add("write", lambda *_args: apply_current())
+        mask_inverted.trace_add("write", lambda *_args: apply_current())
+        mask_density.trace_add("write", lambda *_args: apply_current())
+        mask_feather.trace_add("write", lambda *_args: apply_current())
         dialog.protocol("WM_DELETE_WINDOW", cancel)
+        self._filter_dialog_channel = filter_channel
+        self._filter_dialog_mask_inverted = mask_inverted
+        self._filter_dialog_mask_density = mask_density
+        self._filter_dialog_mask_feather = mask_feather
+        self._filter_dialog_accept = accept
         refresh_list(0 if filters else None)
         if not filters:
-            update_value_controls(filter_type.get())
+            update_value_controls(selected_filter_kind())
             update_preview()
+        dialog.wait_window()
+        return result
+
+    def filter_mask_editor(self, initial_mask: np.ndarray, selection_mask: np.ndarray | None = None) -> np.ndarray | None:
+        mask = np.asarray(initial_mask, dtype=np.uint8).copy()
+        result: np.ndarray | None = None
+        dialog = tk.Toplevel(self)
+        dialog.title("Редактирование маски фильтра")
+        dialog.transient(self)
+        dialog.resizable(False, False)
+        dialog.grab_set()
+        canvas_width, canvas_height = 520, 360
+        canvas = tk.Canvas(dialog, width=canvas_width, height=canvas_height, background="#202226", highlightthickness=0)
+        canvas.grid(row=0, column=0, rowspan=7, padx=12, pady=12)
+        mode = tk.StringVar(value="Белая кисть")
+        size = tk.DoubleVar(value=40)
+        ttk.Label(dialog, text="Кисть").grid(row=0, column=1, sticky="w", padx=(0, 12), pady=(12, 4))
+        ttk.Combobox(dialog, textvariable=mode, values=["Белая кисть", "Чёрная кисть"], state="readonly", width=20).grid(row=1, column=1, sticky="ew", padx=(0, 12))
+        ttk.Label(dialog, text="Размер").grid(row=2, column=1, sticky="w", padx=(0, 12), pady=(12, 4))
+        ttk.Scale(dialog, from_=2, to=max(20, min(mask.shape) // 2), variable=size, orient=tk.HORIZONTAL).grid(row=3, column=1, sticky="ew", padx=(0, 12))
+        ttk.Button(dialog, text="Из текущего выделения", command=lambda: set_from_selection()).grid(row=4, column=1, sticky="ew", padx=(0, 12), pady=(14, 4))
+        ttk.Button(dialog, text="Инвертировать", command=lambda: invert()).grid(row=5, column=1, sticky="ew", padx=(0, 12), pady=4)
+        fill_buttons = ttk.Frame(dialog)
+        fill_buttons.grid(row=6, column=1, sticky="ew", padx=(0, 12), pady=4)
+        ttk.Button(fill_buttons, text="Белая", command=lambda: fill(255)).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 2))
+        ttk.Button(fill_buttons, text="Чёрная", command=lambda: fill(0)).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(2, 0))
+        bottom = ttk.Frame(dialog)
+        bottom.grid(row=7, column=0, columnspan=2, sticky="e", padx=12, pady=(0, 12))
+        last_point: list[tuple[int, int] | None] = [None]
+        scale = min(canvas_width / max(1, mask.shape[1]), canvas_height / max(1, mask.shape[0]))
+        shown_width = max(1, round(mask.shape[1] * scale))
+        shown_height = max(1, round(mask.shape[0] * scale))
+        offset_x = (canvas_width - shown_width) // 2
+        offset_y = (canvas_height - shown_height) // 2
+
+        def refresh_mask() -> None:
+            shown = cv2.resize(mask, (shown_width, shown_height), interpolation=cv2.INTER_NEAREST)
+            rgba = np.dstack([shown, shown, shown, np.full_like(shown, 255)])
+            self._filter_mask_editor_image = ImageTk.PhotoImage(rgba_array_to_pil(rgba))
+            canvas.delete("all")
+            canvas.create_image(offset_x, offset_y, anchor=tk.NW, image=self._filter_mask_editor_image)
+
+        def canvas_point(event) -> tuple[int, int] | None:
+            x = int((event.x - offset_x) / max(scale, 1e-6))
+            y = int((event.y - offset_y) / max(scale, 1e-6))
+            return (x, y) if 0 <= x < mask.shape[1] and 0 <= y < mask.shape[0] else None
+
+        def paint(event) -> None:
+            point = canvas_point(event)
+            if point is None:
+                return
+            value = 255 if mode.get() == "Белая кисть" else 0
+            radius = max(1, int(size.get()) // 2)
+            previous = last_point[0] or point
+            cv2.line(mask, previous, point, value, radius * 2, cv2.LINE_AA)
+            cv2.circle(mask, point, radius, value, -1, cv2.LINE_AA)
+            last_point[0] = point
+            refresh_mask()
+
+        def end_stroke(_event=None) -> None:
+            last_point[0] = None
+
+        def set_from_selection() -> None:
+            if selection_mask is None or not np.any(selection_mask):
+                messagebox.showinfo("Маска фильтра", "Текущее выделение отсутствует.", parent=dialog)
+                return
+            mask[:] = cv2.resize(selection_mask, (mask.shape[1], mask.shape[0]), interpolation=cv2.INTER_LINEAR).astype(np.uint8)
+            refresh_mask()
+
+        def invert() -> None:
+            mask[:] = 255 - mask
+            refresh_mask()
+
+        def fill(value: int) -> None:
+            mask.fill(value)
+            refresh_mask()
+
+        def accept() -> None:
+            nonlocal result
+            result = mask.copy()
+            dialog.destroy()
+
+        canvas.bind("<Button-1>", paint)
+        canvas.bind("<B1-Motion>", paint)
+        canvas.bind("<ButtonRelease-1>", end_stroke)
+        ttk.Button(bottom, text="ОК", command=accept).pack(side=tk.RIGHT, padx=(6, 0))
+        ttk.Button(bottom, text="Отмена", command=dialog.destroy).pack(side=tk.RIGHT)
+        self._filter_mask_editor_mask = mask
+        self._filter_mask_editor_invert = invert
+        self._filter_mask_editor_accept = accept
+        refresh_mask()
+        self.center_toplevel(dialog, 760, 430)
         dialog.wait_window()
         return result
 
@@ -7000,6 +7154,11 @@ class PhotoRedactorApp(tk.Tk):
         item["opacity"] = max(0.0, min(1.0, float(original.get("opacity", 1.0))))
         blend_mode = str(original.get("blend_mode", "Normal"))
         item["blend_mode"] = blend_mode if blend_mode in BLEND_MODES else "Normal"
+        channel = str(original.get("channel", "RGB"))
+        item["channel"] = channel if channel in CHANNEL_LABELS else "RGB"
+        item["mask_inverted"] = bool(original.get("mask_inverted", False))
+        item["mask_density"] = max(0.0, min(1.0, float(original.get("mask_density", 1.0))))
+        item["mask_feather"] = max(0.0, float(original.get("mask_feather", 0.0)))
         if isinstance(original.get("mask"), str) and original.get("mask"):
             item["mask"] = original["mask"]
         return item
@@ -8418,24 +8577,29 @@ class PhotoRedactorApp(tk.Tk):
         dialog.grab_set()
 
         source = self.render_engine.render(self.doc, checker=False)
-        adjustment_type = tk.StringVar(value=str(initial.get("type", "brightness_contrast")))
+        initial_kind = str(initial.get("type", "brightness_contrast"))
+        adjustment_type = tk.StringVar(value=ADJUSTMENT_LABELS.get(initial_kind, ADJUSTMENT_LABELS["brightness_contrast"]))
+        adjustment_channel = tk.StringVar(value=CHANNEL_LABELS.get(str(initial.get("channel", "RGB")), "RGB"))
         values = [tk.DoubleVar(value=0.0), tk.DoubleVar(value=0.0), tk.DoubleVar(value=0.0)]
         labels: list[ttk.Label] = []
         spins: list[ttk.Spinbox] = []
         updating = False
 
         preview = ttk.Label(dialog)
-        preview.grid(row=0, column=0, rowspan=8, padx=12, pady=12, sticky="n")
+        preview.grid(row=0, column=0, rowspan=9, padx=12, pady=12, sticky="n")
         ttk.Label(dialog, text="Пресет").grid(row=0, column=1, sticky="w", padx=(0, 12), pady=(12, 4))
         adjustment_preset = tk.StringVar(value=next(iter(self.adjustment_presets)))
         preset_box = ttk.Combobox(dialog, textvariable=adjustment_preset, values=list(self.adjustment_presets), state="readonly", width=22)
         preset_box.grid(row=0, column=2, sticky="ew", padx=(0, 12), pady=(12, 4))
         ttk.Button(dialog, text="Применить пресет", command=lambda: apply_adjustment_preset()).grid(row=1, column=1, columnspan=2, sticky="ew", padx=(0, 12), pady=(0, 8))
         ttk.Label(dialog, text="\u0422\u0438\u043f").grid(row=2, column=1, sticky="w", padx=(0, 12), pady=(4, 4))
-        type_box = ttk.Combobox(dialog, textvariable=adjustment_type, values=ADJUSTMENT_TYPES, state="readonly", width=22)
+        type_box = ttk.Combobox(dialog, textvariable=adjustment_type, values=list(ADJUSTMENT_VALUES), state="readonly", width=22)
         type_box.grid(row=2, column=2, sticky="ew", padx=(0, 12), pady=(4, 4))
+        ttk.Label(dialog, text="Канал").grid(row=6, column=1, sticky="w", padx=(0, 12), pady=(4, 4))
+        channel_box = ttk.Combobox(dialog, textvariable=adjustment_channel, values=list(CHANNEL_VALUES), state="readonly", width=22)
+        channel_box.grid(row=6, column=2, sticky="ew", padx=(0, 12), pady=(4, 4))
         hint = ttk.Label(dialog, text="", wraplength=240, justify=tk.LEFT)
-        hint.grid(row=6, column=1, columnspan=2, sticky="w", padx=(0, 12), pady=(8, 0))
+        hint.grid(row=7, column=1, columnspan=2, sticky="w", padx=(0, 12), pady=(8, 0))
 
         for index in range(3):
             label = ttk.Label(dialog, text="")
@@ -8446,10 +8610,13 @@ class PhotoRedactorApp(tk.Tk):
             spins.append(spin)
 
         buttons = ttk.Frame(dialog)
-        buttons.grid(row=7, column=1, columnspan=2, sticky="e", padx=12, pady=12)
+        buttons.grid(row=8, column=1, columnspan=2, sticky="e", padx=12, pady=12)
 
         def current_adjustment() -> dict:
-            return self.make_adjustment_item(adjustment_type.get(), [value.get() for value in values])
+            kind = ADJUSTMENT_VALUES.get(adjustment_type.get(), adjustment_type.get())
+            item = self.make_adjustment_item(kind, [value.get() for value in values])
+            item["channel"] = CHANNEL_VALUES.get(adjustment_channel.get(), "RGB")
+            return item
 
         def set_values_for_kind(kind: str, adjustment: dict | None = None) -> None:
             nonlocal updating
@@ -8466,6 +8633,7 @@ class PhotoRedactorApp(tk.Tk):
                 labels[index].grid_remove()
                 spins[index].grid_remove()
             hint.configure(text=self.adjustment_hint(kind))
+            adjustment_channel.set(CHANNEL_LABELS.get(str(adjustment.get("channel", "RGB")), "RGB"))
             updating = False
 
         preview_scale = min(1.0, 180 / max(1, source.shape[1]), 180 / max(1, source.shape[0]))
@@ -8483,7 +8651,7 @@ class PhotoRedactorApp(tk.Tk):
             preview.configure(image=self._adjustment_preview_image)
 
         def type_changed(_event=None) -> None:
-            set_values_for_kind(adjustment_type.get())
+            set_values_for_kind(ADJUSTMENT_VALUES.get(adjustment_type.get(), adjustment_type.get()))
             update_preview()
 
         def apply_adjustment_preset() -> None:
@@ -8493,7 +8661,7 @@ class PhotoRedactorApp(tk.Tk):
             kind = str(preset.get("type", "brightness_contrast"))
             if kind not in ADJUSTMENT_TYPES:
                 return
-            adjustment_type.set(kind)
+            adjustment_type.set(ADJUSTMENT_LABELS[kind])
             set_values_for_kind(kind, preset)
             update_preview()
 
@@ -8542,6 +8710,7 @@ class PhotoRedactorApp(tk.Tk):
             dialog.destroy()
 
         type_box.bind("<<ComboboxSelected>>", type_changed)
+        channel_box.bind("<<ComboboxSelected>>", update_preview)
         for value in values:
             value.trace_add("write", update_preview)
         ttk.Button(buttons, text="\u041e\u041a", command=accept).pack(side=tk.RIGHT, padx=(6, 0))
@@ -8549,7 +8718,9 @@ class PhotoRedactorApp(tk.Tk):
         ttk.Button(buttons, text="Экспорт", command=export_adjustment_presets).pack(side=tk.LEFT, padx=(0, 4))
         ttk.Button(buttons, text="Импорт", command=import_adjustment_presets).pack(side=tk.LEFT)
         dialog.protocol("WM_DELETE_WINDOW", cancel)
-        set_values_for_kind(adjustment_type.get(), initial)
+        self._adjustment_dialog_channel = adjustment_channel
+        self._adjustment_dialog_accept = accept
+        set_values_for_kind(initial_kind, initial)
         update_preview()
         dialog.wait_window()
         return result
@@ -8622,34 +8793,7 @@ class PhotoRedactorApp(tk.Tk):
         return ADJUSTMENT_LABELS.get(kind, "Adjustment")
 
     def apply_adjustment_preview(self, arr: np.ndarray, adjustment: dict) -> np.ndarray:
-        kind = str(adjustment.get("type", "")).lower()
-        if kind == "brightness_contrast":
-            return adjust_brightness_contrast(arr, int(adjustment.get("brightness", 0)), float(adjustment.get("contrast", 1.0)))
-        if kind == "saturation":
-            return adjust_saturation(arr, float(adjustment.get("saturation", 1.0)))
-        if kind == "vibrance":
-            return adjust_vibrance(arr, float(adjustment.get("vibrance", 0.0)), float(adjustment.get("saturation", 1.0)))
-        if kind == "temperature_tint":
-            return adjust_temperature_tint(arr, float(adjustment.get("temperature", 0.0)), float(adjustment.get("tint", 0.0)))
-        if kind == "hue_saturation":
-            return adjust_hue_saturation(arr, int(adjustment.get("hue", 0)), float(adjustment.get("saturation", 1.0)), int(adjustment.get("lightness", 0)))
-        if kind == "exposure":
-            return adjust_exposure(arr, float(adjustment.get("exposure", 0.0)), float(adjustment.get("offset", 0.0)), float(adjustment.get("gamma", 1.0)))
-        if kind == "color_balance":
-            return adjust_color_balance(arr, int(adjustment.get("red", 0)), int(adjustment.get("green", 0)), int(adjustment.get("blue", 0)))
-        if kind == "levels":
-            return levels(arr, int(adjustment.get("black", 0)), int(adjustment.get("white", 255)), float(adjustment.get("gamma", 1.0)))
-        if kind == "curves":
-            return curves(arr, int(adjustment.get("shadows", 64)), int(adjustment.get("midtones", 128)), int(adjustment.get("highlights", 192)))
-        if kind == "threshold":
-            return adjust_threshold(arr, int(adjustment.get("threshold", 128)))
-        if kind == "posterize":
-            return adjust_posterize(arr, int(adjustment.get("levels", 6)))
-        if kind == "invert":
-            return self._invert(arr)
-        if kind == "grayscale":
-            return self._grayscale(arr)
-        return arr.copy()
+        return apply_adjustment(arr, adjustment)
 
     @staticmethod
     def _invert(arr):

@@ -461,6 +461,58 @@ class StartupTests(unittest.TestCase):
             self.assertEqual(layer.kind, "embedded")
             self.assertTrue(np.array_equal(layer.smart_source, cached))
 
+    def test_filter_and_adjustment_dialogs_edit_channels_and_filter_mask(self) -> None:
+        original_wait = tk.Toplevel.wait_window
+
+        def accept_filter(window, target=None) -> None:
+            window.update()
+            self.app._filter_dialog_channel.set("Красный")
+            self.app._filter_dialog_mask_inverted.set(True)
+            self.app._filter_dialog_mask_density.set(65)
+            self.app._filter_dialog_mask_feather.set(4)
+            self.app._filter_dialog_accept()
+
+        tk.Toplevel.wait_window = accept_filter
+        try:
+            filters = self.app.layer_filters_dialog(
+                [{"type": "blur", "radius": 3}],
+                self.app.doc.layer.pixels,
+                np.full(self.app.doc.layer.pixels.shape[:2], 255, dtype=np.uint8),
+            )
+        finally:
+            tk.Toplevel.wait_window = original_wait
+        self.assertIsNotNone(filters)
+        self.assertEqual(filters[0]["channel"], "Red")
+        self.assertTrue(filters[0]["mask_inverted"])
+        self.assertAlmostEqual(filters[0]["mask_density"], 0.65)
+        self.assertEqual(filters[0]["mask_feather"], 4.0)
+
+        def accept_adjustment(window, target=None) -> None:
+            window.update()
+            self.app._adjustment_dialog_channel.set("Синий")
+            self.app._adjustment_dialog_accept()
+
+        tk.Toplevel.wait_window = accept_adjustment
+        try:
+            adjustment = self.app.adjustment_layer_dialog({"type": "invert", "channel": "RGB"})
+        finally:
+            tk.Toplevel.wait_window = original_wait
+        self.assertIsNotNone(adjustment)
+        self.assertEqual(adjustment["adjustment"]["channel"], "Blue")
+
+        def accept_mask(window, target=None) -> None:
+            window.update()
+            self.app._filter_mask_editor_invert()
+            self.app._filter_mask_editor_accept()
+
+        tk.Toplevel.wait_window = accept_mask
+        try:
+            edited_mask = self.app.filter_mask_editor(np.full((40, 60), 255, dtype=np.uint8))
+        finally:
+            tk.Toplevel.wait_window = original_wait
+        self.assertIsNotNone(edited_mask)
+        self.assertFalse(np.any(edited_mask))
+
     def test_editor_shows_tool_names_and_explicit_options_title(self) -> None:
         move_button = self.app.tool_palette.buttons["move"]
         self.assertEqual(str(move_button.cget("text")), "Перемещение")
