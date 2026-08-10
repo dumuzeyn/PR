@@ -332,23 +332,3 @@ class ContentAwareMixin:
         strength = simpledialog.askfloat("Очистка краев", "Сила 0..1:", initialvalue=0.65, minvalue=0.0, maxvalue=1.0)
         if strength is not None:
             self.apply_to_layer("edge-aware cleanup", lambda arr: edge_aware_cleanup(arr, selection_mask, radius, strength))
-
-    def filter_red_eye(self) -> None:
-        selection_mask = self.doc.layer_selection_mask(self.doc.layer)
-        strength = simpledialog.askfloat("Удаление красных глаз", "Сила 0..1:", initialvalue=0.85, minvalue=0.0, maxvalue=1.0)
-        if strength is not None:
-            self.apply_to_layer("Удаление красных глаз", lambda arr: reduce_red_eye(arr, selection_mask, strength))
-
-    def filter_patch_selection(self) -> None:
-        if self.doc.selection_mask is None:
-            messagebox.showinfo("Заплатка", "Сначала создайте выделение.")
-            return
-        x = simpledialog.askinteger("Заплатка", "X левого верхнего угла источника:", initialvalue=0, minvalue=-100000, maxvalue=100000)
-        if x is None:
-            return
-        y = simpledialog.askinteger("Заплатка", "Y левого верхнего угла источника:", initialvalue=0, minvalue=-100000, maxvalue=100000)
-        if y is None:
-            return
-        heal = messagebox.askyesno("Заплатка", "Подогнать цвет источника под место назначения?")
-        self.run_document_command("Заплатка", lambda: self.doc.patch_active_selection(x, y, heal))
-        self.refresh()

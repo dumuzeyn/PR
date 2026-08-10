@@ -317,6 +317,58 @@ class StartupTests(unittest.TestCase):
         self.app.undo()
         self.assertEqual(self.app.doc.layer.shape_data, before)
 
+    def test_red_eye_dialog_exposes_complete_live_controls(self) -> None:
+        source = np.full((80, 120, 4), (160, 120, 100, 255), dtype=np.uint8)
+        cv2.circle(source, (60, 40), 10, (220, 30, 25, 255), -1)
+        selection = np.zeros((80, 120), dtype=np.uint8)
+        cv2.circle(selection, (60, 40), 16, 255, -1)
+        original_wait = tk.Toplevel.wait_window
+
+        def accept_dialog(window, target=None) -> None:
+            window.update()
+            self.app._red_eye_variables["strength"].set(0.72)
+            self.app._red_eye_variables["threshold"].set(0.44)
+            self.app._red_eye_variables["darken"].set(0.26)
+            self.app._red_eye_variables["feather"].set(3.5)
+            self.app._red_eye_accept()
+
+        tk.Toplevel.wait_window = accept_dialog
+        try:
+            settings = self.app.red_eye_dialog(source, selection)
+        finally:
+            tk.Toplevel.wait_window = original_wait
+        self.assertIsNotNone(settings)
+        self.assertAlmostEqual(settings["strength"], 0.72)
+        self.assertAlmostEqual(settings["threshold"], 0.44)
+        self.assertAlmostEqual(settings["darken"], 0.26)
+        self.assertAlmostEqual(settings["feather"], 3.5)
+        self.assertEqual(len(self.app._red_eye_preview_images), 2)
+
+    def test_red_eye_correction_is_undoable_and_redoable(self) -> None:
+        self.app.doc = self.app.doc.new(120, 80, (160, 120, 100, 255))
+        cv2.circle(self.app.doc.layer.pixels, (60, 40), 10, (220, 30, 25, 255), -1)
+        self.app.doc.selection_mask = np.zeros((80, 120), dtype=np.uint8)
+        cv2.circle(self.app.doc.selection_mask, (60, 40), 16, 255, -1)
+        before = self.app.doc.layer.pixels.copy()
+        self.app.history.clear()
+        self.app.red_eye_dialog = lambda _source, _selection: {
+            "strength": 0.9, "threshold": 0.3, "darken": 0.2, "feather": 2.0
+        }
+        self.app.run_background = lambda _label, worker, done, _is_current=None: done(worker())
+        self.app.filter_red_eye()
+        after = self.app.doc.layer.pixels.copy()
+        self.assertFalse(np.array_equal(after, before))
+        self.app.undo()
+        self.assertTrue(np.array_equal(self.app.doc.layer.pixels, before))
+        self.app.redo()
+        self.assertTrue(np.array_equal(self.app.doc.layer.pixels, after))
+
+    def test_patch_menu_selects_interactive_tool(self) -> None:
+        self.app.doc.selection_mask = np.full((self.app.doc.height, self.app.doc.width), 255, dtype=np.uint8)
+        self.app.tool.set("move")
+        self.app.filter_patch_selection()
+        self.assertEqual(self.app.tool.get(), "patch")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -89,6 +89,7 @@ class RetouchMixin:
         radius.trace_add("write", update_preview)
         texture_strength.trace_add("write", update_preview)
         dialog.protocol("WM_DELETE_WINDOW", dialog.destroy)
+        self.center_toplevel(dialog, 630, 390)
         update_preview()
         dialog.wait_window()
         return result
@@ -103,7 +104,15 @@ class RetouchMixin:
             return
         self.apply_to_layer(
             "Портретная обработка",
-            lambda arr: portrait_cleanup(arr, settings["smoothing"], settings["texture"], settings["even_tone"], settings["redness"]),
+            lambda arr: portrait_cleanup(
+                arr,
+                settings["smoothing"],
+                settings["texture"],
+                settings["even_tone"],
+                settings["redness"],
+                self.doc.layer_selection_mask(self.doc.layer),
+                settings["detail_protection"],
+            ),
         )
 
     def portrait_cleanup_dialog(self, source: np.ndarray) -> dict[str, float] | None:
@@ -118,6 +127,7 @@ class RetouchMixin:
             "texture": tk.DoubleVar(value=0.7),
             "even_tone": tk.DoubleVar(value=0.2),
             "redness": tk.DoubleVar(value=0.2),
+            "detail_protection": tk.DoubleVar(value=0.75),
         }
 
         preview_row = ttk.Frame(dialog)
@@ -149,6 +159,7 @@ class RetouchMixin:
             ("texture", "Сохранение текстуры", 0.0, 1.5),
             ("even_tone", "Выравнивание тона", 0.0, 1.0),
             ("redness", "Уменьшение покраснений", 0.0, 1.0),
+            ("detail_protection", "Защита глаз и волос", 0.0, 1.0),
         ]
         for row, (key, title, start, end) in enumerate(specs):
             ttk.Label(controls, text=title).grid(row=row, column=0, sticky="w", pady=3)
@@ -166,6 +177,8 @@ class RetouchMixin:
                 variables["texture"].get(),
                 variables["even_tone"].get(),
                 variables["redness"].get(),
+                None,
+                variables["detail_protection"].get(),
             )
             self._portrait_preview_images = [original_photo, photo_for(cleaned)]
             for label, image in zip(preview_labels, self._portrait_preview_images):
@@ -186,6 +199,7 @@ class RetouchMixin:
         for variable in variables.values():
             variable.trace_add("write", update_preview)
         dialog.protocol("WM_DELETE_WINDOW", dialog.destroy)
+        self.center_toplevel(dialog, 570, 610)
         update_preview()
         dialog.wait_window()
         return result

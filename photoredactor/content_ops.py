@@ -202,6 +202,8 @@ def generative_expand_pixels(
     return np.ascontiguousarray(expanded)
 
 def frequency_separation(arr: np.ndarray, radius: float = 8.0, texture_strength: float = 1.0) -> tuple[np.ndarray, np.ndarray]:
+    if arr.ndim != 3 or arr.shape[2] != 4:
+        raise ValueError("Frequency separation expects RGBA pixels")
     radius = max(0.5, float(radius))
     texture_strength = max(0.0, float(texture_strength))
     low = arr.copy()
@@ -218,35 +220,61 @@ def portrait_cleanup(
     texture: float = 0.7,
     even_tone: float = 0.2,
     redness: float = 0.2,
+    selection_mask: np.ndarray | None = None,
+    detail_protection: float = 0.75,
 ) -> np.ndarray:
     smoothing = float(np.clip(smoothing, 0.0, 1.0))
     texture = float(np.clip(texture, 0.0, 1.5))
     even_tone = float(np.clip(even_tone, 0.0, 1.0))
     redness = float(np.clip(redness, 0.0, 1.0))
+    detail_protection = float(np.clip(detail_protection, 0.0, 1.0))
     if max(smoothing, even_tone, redness) <= 0.0:
         return arr.copy()
 
     rgb = arr[:, :, :3]
-    ycrcb = cv2.cvtColor(rgb, cv2.COLOR_RGB2YCrCb)
-    cr, cb = ycrcb[:, :, 1], ycrcb[:, :, 2]
-    skin_binary = ((cr >= 132) & (cr <= 183) & (cb >= 76) & (cb <= 136) & (arr[:, :, 3] > 0)).astype(np.uint8) * 255
-    if not np.any(skin_binary):
+    height, width = rgb.shape[:2]
+    scale = max(1.0, min(height, width) / 320.0)
+    ycrcb = cv2.cvtColor(rgb, cv2.COLOR_RGB2YCrCb).astype(np.float32)
+    luminance, cr, cb = ycrcb[:, :, 0], ycrcb[:, :, 1], ycrcb[:, :, 2]
+    chroma_distance = np.sqrt(((cr - 154.0) / 34.0) ** 2 + ((cb - 108.0) / 27.0) ** 2)
+    skin = np.clip((1.55 - chroma_distance) / 0.75, 0.0, 1.0)
+    skin *= np.clip((luminance - 8.0) / 24.0, 0.0, 1.0)
+    skin *= (arr[:, :, 3].astype(np.float32) / 255.0)
+    binary = (skin >= 0.12).astype(np.uint8) * 255
+    if not np.any(binary):
         return arr.copy()
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-    skin_binary = cv2.morphologyEx(skin_binary, cv2.MORPH_CLOSE, kernel)
-    skin = cv2.GaussianBlur(skin_binary, (0, 0), 2.0).astype(np.float32) / 255.0
-    skin *= skin_binary.astype(np.float32) / 255.0
+    kernel_size = max(3, min(11, int(round(scale * 3.0)) | 1))
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
+    binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
+    skin *= cv2.GaussianBlur(binary, (0, 0), max(0.8, scale * 1.15)).astype(np.float32) / 255.0
+
+    gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY).astype(np.float32)
+    gx = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
+    gy = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
+    edge = cv2.GaussianBlur(cv2.magnitude(gx, gy), (0, 0), max(0.6, scale * 0.45))
+    edge_protection = 1.0 - np.clip(edge / 150.0, 0.0, 0.92) * detail_protection
+    skin *= edge_protection
+    if selection_mask is not None:
+        selected = np.asarray(selection_mask, dtype=np.uint8)
+        if selected.shape != (height, width):
+            selected = cv2.resize(selected, (width, height), interpolation=cv2.INTER_LINEAR)
+        skin *= selected.astype(np.float32) / 255.0
 
     source = rgb.astype(np.float32)
-    diameter = 9
-    smooth = cv2.bilateralFilter(rgb, diameter, 30.0 + smoothing * 70.0, 18.0 + smoothing * 42.0).astype(np.float32)
-    base = cv2.GaussianBlur(source, (0, 0), 1.2)
+    diameter = max(5, min(25, int(round(scale * 7.0)) | 1))
+    smooth = cv2.bilateralFilter(
+        rgb,
+        diameter,
+        24.0 + smoothing * 58.0,
+        max(7.0, scale * (9.0 + smoothing * 13.0)),
+    ).astype(np.float32)
+    base = cv2.GaussianBlur(source, (0, 0), max(0.7, scale * 0.85))
     detail = source - base
     smoothed = smooth + detail * texture
     cleaned = source * (1.0 - smoothing) + smoothed * smoothing
 
     if even_tone > 0.0:
-        tone = cv2.GaussianBlur(cleaned, (0, 0), 5.0 + even_tone * 9.0)
+        tone = cv2.GaussianBlur(cleaned, (0, 0), scale * (3.5 + even_tone * 6.5))
         cleaned = cleaned * (1.0 - even_tone * 0.45) + tone * (even_tone * 0.45)
 
     if redness > 0.0:
@@ -284,19 +312,89 @@ def edge_aware_cleanup(arr: np.ndarray, selection_mask: np.ndarray | None, radiu
     out[:, :, 3] = out[:, :, 3] * (1.0 - feather) + smooth_alpha * feather
     return np.clip(out, 0, 255).astype(np.uint8)
 
-def reduce_red_eye(arr: np.ndarray, selection_mask: np.ndarray | None = None, strength: float = 0.85) -> np.ndarray:
-    out = arr.copy().astype(np.float32)
-    rgb = out[:, :, :3]
-    r, g, b = rgb[:, :, 0], rgb[:, :, 1], rgb[:, :, 2]
-    red_mask = (r > 90) & (r > g * 1.35) & (r > b * 1.35) & (arr[:, :, 3] > 0)
-    if selection_mask is not None:
-        red_mask &= selection_mask > 0
-    if not np.any(red_mask):
+def reduce_red_eye(
+    arr: np.ndarray,
+    selection_mask: np.ndarray | None = None,
+    strength: float = 0.85,
+    threshold: float = 0.35,
+    darken: float = 0.18,
+    feather: float = 2.0,
+) -> np.ndarray:
+    """Neutralize compact red pupils while preserving highlights, alpha, and unselected pixels."""
+    if arr.ndim != 3 or arr.shape[2] != 4:
+        raise ValueError("Red-eye correction expects RGBA pixels")
+    strength = float(np.clip(strength, 0.0, 1.0))
+    threshold = float(np.clip(threshold, 0.0, 1.0))
+    darken = float(np.clip(darken, 0.0, 1.0))
+    feather = max(0.0, float(feather))
+    if strength <= 0.0:
         return arr.copy()
-    replacement = (g[red_mask] + b[red_mask]) * 0.5
-    mix = np.clip(float(strength), 0, 1)
-    r[red_mask] = r[red_mask] * (1.0 - mix) + replacement * mix
-    return np.clip(out, 0, 255).astype(np.uint8)
+
+    source = arr.astype(np.float32)
+    r, g, b = source[:, :, 0], source[:, :, 1], source[:, :, 2]
+    comparison = np.maximum(g, b)
+    dominance = r - comparison
+    ratio = r / np.maximum(comparison, 1.0)
+    red_fraction = r / np.maximum(r + g + b, 1.0)
+    minimum_dominance = 12.0 + threshold * 48.0
+    minimum_ratio = 1.18 + threshold * 0.92
+    minimum_fraction = 0.43 + threshold * 0.17
+    candidate = (
+        (r > 55.0)
+        & (dominance >= minimum_dominance)
+        & (ratio >= minimum_ratio)
+        & (red_fraction >= minimum_fraction)
+        & (arr[:, :, 3] > 0)
+    )
+    selection_alpha: np.ndarray | None = None
+    if selection_mask is not None:
+        selection_alpha = np.asarray(selection_mask, dtype=np.uint8)
+        if selection_alpha.shape != arr.shape[:2]:
+            selection_alpha = cv2.resize(selection_alpha, (arr.shape[1], arr.shape[0]), interpolation=cv2.INTER_LINEAR)
+        candidate &= selection_alpha > 0
+    if not np.any(candidate):
+        return arr.copy()
+
+    binary = candidate.astype(np.uint8)
+    binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, np.ones((3, 3), dtype=np.uint8))
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(binary, 8)
+    accepted = np.zeros_like(binary)
+    image_area = float(binary.size)
+    minimum_area = max(3, int(round(image_area * 0.00002)))
+    for index in range(1, count):
+        x, y, width, height, area = (int(value) for value in stats[index])
+        aspect = width / max(1.0, float(height))
+        fill = area / max(1.0, float(width * height))
+        if area < minimum_area or not 0.24 <= aspect <= 4.2 or fill < 0.08:
+            continue
+        if selection_mask is None and area > image_area * 0.015:
+            continue
+        accepted[labels == index] = 255
+    if not np.any(accepted):
+        return arr.copy()
+
+    radius = max(1, min(9, int(round(min(arr.shape[:2]) / 360.0))))
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (radius * 2 + 1, radius * 2 + 1))
+    accepted = cv2.morphologyEx(accepted, cv2.MORPH_CLOSE, kernel)
+    soft = accepted.astype(np.float32) / 255.0
+    if feather > 0.0:
+        soft = cv2.GaussianBlur(soft, (0, 0), feather)
+    if selection_alpha is not None:
+        soft *= selection_alpha.astype(np.float32) / 255.0
+    dominance_weight = np.clip((dominance - minimum_dominance) / max(8.0, 72.0 - minimum_dominance), 0.0, 1.0)
+    fraction_weight = np.clip((red_fraction - minimum_fraction) / 0.18, 0.0, 1.0)
+    amount_2d = np.clip(soft * dominance_weight * fraction_weight * strength, 0.0, 1.0)
+    amount_2d[amount_2d < 0.02] = 0.0
+    amount = amount_2d[:, :, None]
+
+    neutral = (g + b) * 0.5
+    corrected = source[:, :, :3].copy()
+    corrected[:, :, 0] = neutral
+    corrected *= 1.0 - darken * soft[:, :, None]
+    output = source.copy()
+    output[:, :, :3] = source[:, :, :3] * (1.0 - amount) + corrected * amount
+    output[:, :, 3] = source[:, :, 3]
+    return np.clip(output, 0, 255).astype(np.uint8)
 
 def image_statistics(arr: np.ndarray) -> dict[str, Any]:
     rgb = arr[:, :, :3].astype(np.float32)
