@@ -10,6 +10,7 @@ from PIL import Image
 
 from photoredactor.app import PhotoRedactorApp
 from photoredactor.history import DocumentStateCommand, LayerInsertCommand, LayerMoveCommand, SelectionMaskCommand, ShapeDataCommand
+from photoredactor.ui.shortcuts import COMMAND_SHORTCUTS
 
 
 class StartupTests(unittest.TestCase):
@@ -123,6 +124,104 @@ class StartupTests(unittest.TestCase):
         event = SimpleNamespace(keycode=90, keysym="Cyrillic_ya", state=0x0004)
         self.assertEqual(self.app.shortcut_control_key(event), "break")
         self.assertEqual(calls, ["undo"])
+
+    def test_control_shortcuts_support_shift_variants_and_russian_layout(self) -> None:
+        calls: list[str] = []
+        self.app._editor_active = True
+        self.app.redo = lambda: calls.append("redo")
+        self.app.save_as_project = lambda: calls.append("save_as")
+        self.app.invert_selection = lambda: calls.append("invert")
+        self.assertEqual(
+            self.app.shortcut_control_key(SimpleNamespace(keycode=90, keysym="Cyrillic_ya", state=0x0005)),
+            "break",
+        )
+        self.assertEqual(
+            self.app.shortcut_control_key(SimpleNamespace(keycode=83, keysym="Cyrillic_yeru", state=0x0005)),
+            "break",
+        )
+        self.assertEqual(
+            self.app.shortcut_control_key(SimpleNamespace(keycode=73, keysym="Cyrillic_sha", state=0x0005)),
+            "break",
+        )
+        self.assertEqual(calls, ["redo", "save_as", "invert"])
+
+    def test_every_registered_control_command_reaches_its_callback(self) -> None:
+        methods = {
+            "undo": "shortcut_undo", "redo": "shortcut_redo", "save": "shortcut_save",
+            "save_as": "shortcut_save_as", "open": "shortcut_open", "new_document": "shortcut_new",
+            "select_all": "shortcut_select_all", "deselect": "shortcut_deselect",
+            "invert_selection": "shortcut_invert_selection", "copy": "shortcut_copy",
+            "cut": "shortcut_cut", "paste": "shortcut_paste", "new_layer": "shortcut_new_layer",
+            "duplicate_layer": "shortcut_duplicate_layer", "merge_down": "shortcut_merge_down",
+            "flatten": "shortcut_flatten", "free_transform": "shortcut_free_transform",
+            "fit_to_screen": "shortcut_fit_to_screen", "actual_size": "shortcut_actual_size",
+        }
+        calls: list[str] = []
+        for command, method_name in methods.items():
+            setattr(self.app, method_name, lambda _event=None, value=command: calls.append(value) or "break")
+        for shortcut in COMMAND_SHORTCUTS:
+            state = 0x0004 | (0x0001 if shortcut.shift else 0)
+            result = self.app.shortcut_control_key(
+                SimpleNamespace(keycode=ord(shortcut.key.upper()), keysym=shortcut.key, state=state)
+            )
+            self.assertEqual(result, "break")
+            self.assertEqual(calls[-1], shortcut.command)
+
+    def test_global_key_dispatchers_are_registered(self) -> None:
+        self.assertTrue(self.app.bind_all("<Control-KeyPress>"))
+        self.assertTrue(self.app.bind_all("<KeyPress>"))
+
+    def test_tool_shortcuts_cycle_groups_and_brackets_change_size(self) -> None:
+        self.app._editor_active = True
+        self.app.tool.set("select")
+        key_m = SimpleNamespace(keycode=77, keysym="Cyrillic_softsign", state=0)
+        self.assertEqual(self.app.shortcut_plain_key(key_m), "break")
+        self.assertEqual(self.app.tool.get(), "ellipse_select")
+        self.assertEqual(self.app.shortcut_plain_key(key_m), "break")
+        self.assertEqual(self.app.tool.get(), "select")
+
+        self.app.tool.set("brush")
+        self.app.brush_size.set(20)
+        self.assertEqual(
+            self.app.shortcut_plain_key(SimpleNamespace(keycode=221, keysym="Cyrillic_hardsign", state=0)),
+            "break",
+        )
+        self.assertEqual(self.app.brush_size.get(), 22)
+        self.assertEqual(
+            self.app.shortcut_plain_key(SimpleNamespace(keycode=219, keysym="Cyrillic_ha", state=0)),
+            "break",
+        )
+        self.assertEqual(self.app.brush_size.get(), 20)
+
+    def test_plain_shortcuts_do_not_modify_text_fields(self) -> None:
+        entry = tk.Entry(self.app.startup_frame)
+        entry.pack()
+        entry.focus_force()
+        self.app.update()
+        self.app._editor_active = True
+        self.app.tool.set("move")
+        self.app.brush_size.set(20)
+        self.assertIsNone(self.app.shortcut_plain_key(SimpleNamespace(keycode=66, keysym="b", state=0)))
+        self.assertIsNone(self.app.shortcut_plain_key(SimpleNamespace(keycode=221, keysym="bracketright", state=0)))
+        self.assertEqual(self.app.tool.get(), "move")
+        self.assertEqual(self.app.brush_size.get(), 20)
+
+    def test_menu_accelerators_come_from_working_shortcuts(self) -> None:
+        def accelerator_for(menu: tk.Menu, label: str) -> str:
+            end = menu.index(tk.END)
+            self.assertIsNotNone(end)
+            for index in range(int(end) + 1):
+                if menu.type(index) != "separator" and menu.entrycget(index, "label") == label:
+                    return str(menu.entrycget(index, "accelerator"))
+            self.fail(f"Menu entry not found: {label}")
+
+        self.assertEqual(accelerator_for(self.app.file_menu, "Сохранить проект как"), "Ctrl+Shift+S")
+        self.assertEqual(accelerator_for(self.app.edit_menu, "Копировать"), "Ctrl+C")
+        self.assertEqual(accelerator_for(self.app.select_menu, "Инвертировать выделение"), "Ctrl+Shift+I")
+        self.assertEqual(accelerator_for(self.app.layer_menu, "Новый слой"), "Ctrl+Shift+N")
+        self.assertEqual(accelerator_for(self.app.layer_menu, "Свободная трансформация"), "Ctrl+T")
+        self.assertEqual(accelerator_for(self.app.view_menu, "По размеру окна"), "Ctrl+0")
+        self.assertEqual(accelerator_for(self.app.tools_menu, "Размытие"), "R")
 
     def test_custom_canvas_size_is_reused(self) -> None:
         self.app.save_settings = lambda: None

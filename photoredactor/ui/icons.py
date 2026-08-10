@@ -7,14 +7,10 @@ from PIL import Image, ImageDraw, ImageTk
 from .theme import TOKENS
 
 
-SHORTCUTS = {
-    "move": "V", "hand": "H", "brush": "B", "eraser": "E", "fill": "G", "gradient": "G",
-    "text": "T", "eyedropper": "I", "crop": "C", "select": "M", "ellipse_select": "M",
-    "lasso": "L", "magnetic_lasso": "L", "polygon_lasso": "L", "quick_selection": "W",
-    "magic_wand": "W", "color_range": "W", "clone": "S", "healing": "J", "spot_healing": "J",
-    "rect_shape": "U", "ellipse_shape": "U", "line_shape": "U", "bezier_shape": "P",
-    "polygon_shape": "U", "star_shape": "U", "custom_shape": "U",
-}
+from .shortcuts import TOOL_SHORTCUT_GROUPS
+
+
+SHORTCUTS = {tool: key.upper() for key, tools in TOOL_SHORTCUT_GROUPS.items() for tool in tools}
 
 
 TOOL_GROUPS = {

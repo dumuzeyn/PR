@@ -113,6 +113,9 @@ Every push to `master` starts the `Build PhotoRedactor for Windows` workflow. Op
 
 ## Navigation
 
+- Command shortcuts shown in menus come from the same validated registry as their handlers and work by physical key on Russian and English layouts.
+- Repeated `M`, `L`, `W`, `U`, `J`, `R`, `O` or `G` presses cycle through tools in that group.
+- `[` and `]` decrease and increase the active brush-like tool size.
 - Mouse wheel scrolls vertically.
 - `Shift` + mouse wheel scrolls horizontally.
 - Middle mouse button drags the canvas.

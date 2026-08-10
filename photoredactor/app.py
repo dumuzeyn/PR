@@ -103,6 +103,7 @@ from .plugins import PluginRegistry
 from .ui.tool_options import ToolOptionsPanel
 from .ui.tool_palette import ToolPalette, ToolPaletteDialog, normalize_tool_order, normalize_visible_tools
 from .ui.icons import SHORTCUTS, action_icon
+from .ui.shortcuts import TOOL_SHORTCUT_GROUPS, accelerator, command_for_event, event_key
 from .ui.scrollable_frame import ScrollableFrame
 from .ui.theme import TOKENS, configure_theme
 
@@ -1024,71 +1025,49 @@ class PhotoRedactorApp(tk.Tk):
 
     def _build_shortcuts(self) -> None:
         bindings = {
-            "<Control-z>": self.shortcut_undo,
-            "<Control-y>": self.shortcut_redo,
-            "<Control-s>": self.shortcut_save,
-            "<Control-o>": self.shortcut_open,
-            "<Control-n>": self.shortcut_new,
-            "<Control-a>": self.shortcut_select_all,
-            "<Control-c>": self.shortcut_copy,
-            "<Control-x>": self.shortcut_cut,
-            "<Control-v>": self.shortcut_paste,
             "<Delete>": self.shortcut_delete,
             "<Escape>": self.cancel_incomplete_interaction,
             "<Return>": self.shortcut_enter,
-            "<plus>": self.shortcut_zoom_in,
-            "<minus>": self.shortcut_zoom_out,
-            "<Key-x>": self.shortcut_swap_colors,
-            "<Key-d>": self.shortcut_reset_colors,
         }
         for sequence, callback in bindings.items():
             self.bind_all(sequence, callback)
         self.bind_all("<Control-KeyPress>", self.shortcut_control_key)
-        tool_shortcuts = {
-            "v": "move", "h": "hand", "b": "brush", "e": "eraser", "j": "healing", "s": "clone",
-            "g": "gradient", "t": "text", "i": "eyedropper", "c": "crop", "m": "select", "l": "lasso",
-            "w": "quick_selection", "u": "rect_shape", "p": "bezier_shape",
-        }
-        for key, tool in tool_shortcuts.items():
-            self.bind_all(f"<Key-{key}>", lambda _event, value=tool: self.shortcut_tool(value))
+        self.bind_all("<KeyPress>", self.shortcut_plain_key)
 
     def shortcut_control_key(self, event):
-        """Use physical Windows key codes so shortcuts survive a Russian layout."""
-        callbacks_by_keycode = {
-            90: self.shortcut_undo,
-            89: self.shortcut_redo,
-            83: self.shortcut_save,
-            79: self.shortcut_open,
-            78: self.shortcut_new,
-            65: self.shortcut_select_all,
-            67: self.shortcut_copy,
-            88: self.shortcut_cut,
-            86: self.shortcut_paste,
+        callbacks = {
+            "undo": self.shortcut_undo, "redo": self.shortcut_redo, "save": self.shortcut_save,
+            "save_as": self.shortcut_save_as, "open": self.shortcut_open, "new_document": self.shortcut_new,
+            "select_all": self.shortcut_select_all, "deselect": self.shortcut_deselect,
+            "invert_selection": self.shortcut_invert_selection, "copy": self.shortcut_copy,
+            "cut": self.shortcut_cut, "paste": self.shortcut_paste, "new_layer": self.shortcut_new_layer,
+            "duplicate_layer": self.shortcut_duplicate_layer, "merge_down": self.shortcut_merge_down,
+            "flatten": self.shortcut_flatten, "free_transform": self.shortcut_free_transform,
+            "fit_to_screen": self.shortcut_fit_to_screen, "actual_size": self.shortcut_actual_size,
         }
-        callbacks_by_keysym = {
-            "z": self.shortcut_undo,
-            "cyrillic_ya": self.shortcut_undo,
-            "y": self.shortcut_redo,
-            "cyrillic_en": self.shortcut_redo,
-            "s": self.shortcut_save,
-            "cyrillic_yeru": self.shortcut_save,
-            "o": self.shortcut_open,
-            "cyrillic_shcha": self.shortcut_open,
-            "n": self.shortcut_new,
-            "cyrillic_te": self.shortcut_new,
-            "a": self.shortcut_select_all,
-            "cyrillic_ef": self.shortcut_select_all,
-            "c": self.shortcut_copy,
-            "cyrillic_es": self.shortcut_copy,
-            "x": self.shortcut_cut,
-            "cyrillic_che": self.shortcut_cut,
-            "v": self.shortcut_paste,
-            "cyrillic_em": self.shortcut_paste,
-        }
-        callback = callbacks_by_keycode.get(int(getattr(event, "keycode", -1)))
-        if callback is None:
-            callback = callbacks_by_keysym.get(str(getattr(event, "keysym", "")).lower())
+        callback = callbacks.get(command_for_event(event))
         return callback(event) if callback is not None else None
+
+    def shortcut_plain_key(self, event):
+        if int(getattr(event, "state", 0)) & 0x0004:
+            return None
+        key = event_key(event)
+        if key == "x":
+            return self.shortcut_swap_colors(event)
+        if key == "d":
+            return self.shortcut_reset_colors(event)
+        if key == "+":
+            return self.shortcut_zoom_in(event)
+        if key == "-":
+            return self.shortcut_zoom_out(event)
+        if key in {"[", "]"}:
+            return self.shortcut_brush_size(1 if key == "]" else -1)
+        tools = TOOL_SHORTCUT_GROUPS.get(key)
+        if tools and self.shortcut_context() == "canvas" and self._editor_active:
+            current = self.tool.get()
+            target = tools[(tools.index(current) + 1) % len(tools)] if current in tools else tools[0]
+            return self.shortcut_tool(target)
+        return None
 
     def shortcut_tool(self, tool: str):
         if self.shortcut_context() == "canvas" and self._editor_active:
@@ -1135,6 +1114,11 @@ class PhotoRedactorApp(tk.Tk):
             self.save()
         return "break"
 
+    def shortcut_save_as(self, _event=None):
+        if self._editor_active:
+            self.save_as_project()
+        return "break"
+
     def shortcut_open(self, _event=None):
         self.open_file()
         return "break"
@@ -1159,6 +1143,18 @@ class PhotoRedactorApp(tk.Tk):
             return "break"
         if context == "canvas" and self._editor_active:
             self.select_all()
+            return "break"
+        return None
+
+    def shortcut_deselect(self, _event=None):
+        if self.shortcut_context() == "canvas" and self._editor_active:
+            self.clear_selection()
+            return "break"
+        return None
+
+    def shortcut_invert_selection(self, _event=None):
+        if self.shortcut_context() == "canvas" and self._editor_active:
+            self.invert_selection()
             return "break"
         return None
 
@@ -1208,6 +1204,59 @@ class PhotoRedactorApp(tk.Tk):
     def shortcut_zoom_out(self, _event=None):
         if self._editor_active and self.shortcut_context() != "text":
             self.set_zoom(self.zoom.get() / 1.25)
+            return "break"
+        return None
+
+    def shortcut_brush_size(self, direction: int):
+        sized_tools = {"brush", "eraser", "blur_tool", "sharpen_tool", "dodge", "burn", "clone", "healing", "spot_healing", "quick_selection"}
+        if self.shortcut_context() != "canvas" or not self._editor_active or self.tool.get() not in sized_tools:
+            return None
+        current = int(self.brush_size.get())
+        step = max(1, current // 10)
+        updated = max(1, min(220, current + step * int(direction)))
+        self.brush_size.set(updated)
+        self.status_text(f"Размер инструмента: {updated} px")
+        return "break"
+
+    def shortcut_new_layer(self, _event=None):
+        if self.shortcut_context() != "text" and self._editor_active:
+            self.new_layer()
+            return "break"
+        return None
+
+    def shortcut_duplicate_layer(self, _event=None):
+        if self.shortcut_context() != "text" and self._editor_active:
+            self.duplicate_layer()
+            return "break"
+        return None
+
+    def shortcut_merge_down(self, _event=None):
+        if self.shortcut_context() != "text" and self._editor_active:
+            self.merge_down()
+            return "break"
+        return None
+
+    def shortcut_flatten(self, _event=None):
+        if self.shortcut_context() != "text" and self._editor_active:
+            self.flatten()
+            return "break"
+        return None
+
+    def shortcut_free_transform(self, _event=None):
+        if self.shortcut_context() == "canvas" and self._editor_active:
+            self.free_transform_layer()
+            return "break"
+        return None
+
+    def shortcut_fit_to_screen(self, _event=None):
+        if self.shortcut_context() == "canvas" and self._editor_active:
+            self.fit_to_screen()
+            return "break"
+        return None
+
+    def shortcut_actual_size(self, _event=None):
+        if self.shortcut_context() == "canvas" and self._editor_active:
+            self.set_zoom(1.0)
             return "break"
         return None
 
@@ -1269,16 +1318,17 @@ class PhotoRedactorApp(tk.Tk):
 
         file_menu = tk.Menu(menu, tearoff=False)
         menu.add_cascade(label="Файл", menu=file_menu)
-        file_menu.add_command(label="Новый холст", command=self.new_document, accelerator="Ctrl+N")
-        file_menu.add_command(label="Открыть изображение/проект", command=self.open_file, accelerator="Ctrl+O")
+        self.file_menu = file_menu
+        file_menu.add_command(label="Новый холст", command=self.new_document, accelerator=accelerator("new_document"))
+        file_menu.add_command(label="Открыть изображение/проект", command=self.open_file, accelerator=accelerator("open"))
         self.recent_menu = tk.Menu(file_menu, tearoff=False)
         file_menu.add_cascade(label="Недавние файлы", menu=self.recent_menu)
         file_menu.add_command(label="Поместить встроенное", command=self.place_embedded)
         file_menu.add_command(label="Поместить связанное", command=self.place_linked)
         file_menu.add_command(label="Загрузить файлы как слои", command=self.load_files_as_layers)
         file_menu.add_separator()
-        file_menu.add_command(label="Сохранить проект", command=self.save, accelerator="Ctrl+S")
-        file_menu.add_command(label="Сохранить проект как", command=self.save_as_project)
+        file_menu.add_command(label="Сохранить проект", command=self.save, accelerator=accelerator("save"))
+        file_menu.add_command(label="Сохранить проект как", command=self.save_as_project, accelerator=accelerator("save_as"))
         file_menu.add_command(label="Экспорт изображения", command=self.export_image)
         file_menu.add_command(label="Экспорт слоев", command=self.export_layers)
         file_menu.add_separator()
@@ -1290,21 +1340,28 @@ class PhotoRedactorApp(tk.Tk):
         file_menu.add_command(label="Выход", command=self.destroy)
 
         edit = tk.Menu(menu, tearoff=False)
+        self.edit_menu = edit
         menu.add_cascade(label="Правка", menu=edit)
-        edit.add_command(label="Отменить", command=self.undo, accelerator="Ctrl+Z")
-        edit.add_command(label="Повторить", command=self.redo, accelerator="Ctrl+Y")
+        edit.add_command(label="Отменить", command=self.undo, accelerator=accelerator("undo"))
+        edit.add_command(label="Повторить", command=self.redo, accelerator=accelerator("redo"))
         edit.add_separator()
-        edit.add_command(label="Снять выделение", command=self.clear_selection)
+        edit.add_command(label="Вырезать", command=self.shortcut_cut, accelerator=accelerator("cut"))
+        edit.add_command(label="Копировать", command=self.shortcut_copy, accelerator=accelerator("copy"))
+        edit.add_command(label="Вставить", command=self.shortcut_paste, accelerator=accelerator("paste"))
+        edit.add_command(label="Удалить выбранные пиксели", command=self.shortcut_delete, accelerator="Delete")
+        edit.add_separator()
+        edit.add_command(label="Снять выделение", command=self.clear_selection, accelerator=accelerator("deselect"))
 
         self.tools_menu = tk.Menu(menu, tearoff=False)
         menu.add_cascade(label="Инструменты", menu=self.tools_menu)
         self.refresh_tool_menu()
 
         select = tk.Menu(menu, tearoff=False)
+        self.select_menu = select
         menu.add_cascade(label="Выделение", menu=select)
-        select.add_command(label="Выделить все", command=self.select_all)
-        select.add_command(label="Инвертировать выделение", command=self.invert_selection)
-        select.add_command(label="Снять выделение", command=self.clear_selection)
+        select.add_command(label="Выделить все", command=self.select_all, accelerator=accelerator("select_all"))
+        select.add_command(label="Инвертировать выделение", command=self.invert_selection, accelerator=accelerator("invert_selection"))
+        select.add_command(label="Снять выделение", command=self.clear_selection, accelerator=accelerator("deselect"))
         select.add_separator()
         select.add_command(label="Выделить непрозрачные пиксели", command=self.select_opaque_pixels)
         select.add_command(label="Выделить объект", command=self.select_subject)
@@ -1356,9 +1413,10 @@ class PhotoRedactorApp(tk.Tk):
             depth_menu.add_command(label=f"{depth} бит", command=lambda value=depth: self.change_bit_depth(value))
 
         layer = tk.Menu(menu, tearoff=False)
+        self.layer_menu = layer
         menu.add_cascade(label="Слой", menu=layer)
-        layer.add_command(label="Новый слой", command=self.new_layer)
-        layer.add_command(label="Дублировать слой", command=self.duplicate_layer)
+        layer.add_command(label="Новый слой", command=self.new_layer, accelerator=accelerator("new_layer"))
+        layer.add_command(label="Дублировать слой", command=self.duplicate_layer, accelerator=accelerator("duplicate_layer"))
         layer.add_command(label="Удалить слой", command=self.delete_layer)
         layer.add_command(label="Переименовать слой", command=self.rename_layer)
         layer.add_command(label="Заблокировать/разблокировать", command=self.toggle_layer_lock)
@@ -1371,7 +1429,7 @@ class PhotoRedactorApp(tk.Tk):
         layer.add_separator()
         layer.add_command(label="Поднять выше", command=lambda: self.move_layer(1))
         layer.add_command(label="Опустить ниже", command=lambda: self.move_layer(-1))
-        layer.add_command(label="Свободная трансформация", command=self.free_transform_layer)
+        layer.add_command(label="Свободная трансформация", command=self.free_transform_layer, accelerator=accelerator("free_transform"))
         layer.add_command(label="Трансформировать выделенные пиксели", command=self.transform_selected_pixels)
         layer.add_command(label="Перспективная трансформация", command=self.perspective_transform_layer)
         layer.add_command(label="Деформация слоя", command=self.warp_layer)
@@ -1387,8 +1445,8 @@ class PhotoRedactorApp(tk.Tk):
         layer.add_command(label="Стили слоя", command=self.edit_layer_styles)
         layer.add_command(label="Фильтры слоя", command=self.edit_layer_filters)
         layer.add_command(label="Очистить фильтры слоя", command=self.clear_layer_filters)
-        layer.add_command(label="Объединить с нижним", command=self.merge_down)
-        layer.add_command(label="Свести изображение", command=self.flatten)
+        layer.add_command(label="Объединить с нижним", command=self.merge_down, accelerator=accelerator("merge_down"))
+        layer.add_command(label="Свести изображение", command=self.flatten, accelerator=accelerator("flatten"))
         layer.add_separator()
         layer.add_command(label="Редактировать маску как канал", command=self.edit_active_mask_channel)
         layer.add_command(label="Добавить маску из выделения", command=self.add_mask_from_selection)
@@ -1465,11 +1523,12 @@ class PhotoRedactorApp(tk.Tk):
         actions.add_command(label="Ошибки плагинов", command=self.show_plugin_errors)
 
         view = tk.Menu(menu, tearoff=False)
+        self.view_menu = view
         menu.add_cascade(label="Вид", menu=view)
-        view.add_command(label="Увеличить", command=lambda: self.set_zoom(self.zoom.get() * 1.25))
-        view.add_command(label="Уменьшить", command=lambda: self.set_zoom(self.zoom.get() / 1.25))
-        view.add_command(label="100%", command=lambda: self.set_zoom(1.0))
-        view.add_command(label="По размеру окна", command=self.fit_to_screen)
+        view.add_command(label="Увеличить", command=lambda: self.set_zoom(self.zoom.get() * 1.25), accelerator="+")
+        view.add_command(label="Уменьшить", command=lambda: self.set_zoom(self.zoom.get() / 1.25), accelerator="-")
+        view.add_command(label="100%", command=lambda: self.set_zoom(1.0), accelerator=accelerator("actual_size"))
+        view.add_command(label="По размеру окна", command=self.fit_to_screen, accelerator=accelerator("fit_to_screen"))
         view.add_separator()
         channel = tk.Menu(view, tearoff=False)
         view.add_cascade(label="Канал", menu=channel)
@@ -1691,7 +1750,13 @@ class PhotoRedactorApp(tk.Tk):
             if value not in by_id:
                 continue
             label, _description = by_id[value]
-            self.tools_menu.add_radiobutton(label=label, value=value, variable=self.tool, command=lambda v=value: self.select_tool(v))
+            self.tools_menu.add_radiobutton(
+                label=label,
+                value=value,
+                variable=self.tool,
+                command=lambda v=value: self.select_tool(v),
+                accelerator=SHORTCUTS.get(value, ""),
+            )
         self.tools_menu.add_separator()
         self.tools_menu.add_command(label="Настроить панель инструментов...", command=self.configure_tool_palette)
 
