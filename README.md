@@ -22,7 +22,7 @@ This repository starts with a real working editor and an architecture intended t
 - frequency separation into editable tone/texture layers with Linear Light reconstruction and a live three-panel preview
 - portrait cleanup with live before/after preview, skin-aware smoothing, texture preservation, tone evening and redness reduction
 - content-aware fill for selected areas, patch selection, edge-aware cleanup and red-eye reduction
-- editable shape layers for rectangles, ellipses, lines, custom shapes, Bezier curves with draggable control points, polygons, stars and boolean shape combinations
+- editable shape layers for rectangles, ellipses, lines, custom shapes, Bezier curves with draggable control points, polygons and stars; boolean compounds keep editable source contours with a live operation preview
 - text layer font, size, block width, wrapping, alignment, line-spacing, tracking, bold/italic/underline, baseline shift, text-on-arc/wave and editable transform handles
 - grid and guide overlays plus RGB/Red/Green/Blue/Alpha channel preview
 - Russian main interface labels and hover tooltips for the tool palette

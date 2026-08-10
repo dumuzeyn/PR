@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import tkinter as tk
 import time
 from types import SimpleNamespace
@@ -291,6 +292,63 @@ class StartupTests(unittest.TestCase):
         item_ids = tuple(self.app._object_bounds_ids)
         self.app.update_object_bounds()
         self.assertEqual(tuple(self.app._object_bounds_ids), item_ids)
+
+    def test_boolean_shape_creation_is_undoable_and_keeps_sources(self) -> None:
+        self.app.doc = self.app.doc.new(180, 140, (0, 0, 0, 0))
+        self.app.doc.layers.clear()
+        lower = self.app.doc.add_shape_layer("rectangle", (15, 20, 100, 100), (220, 40, 40, 255))
+        upper = self.app.doc.add_shape_layer("ellipse", (65, 35, 145, 115), (40, 120, 220, 255))
+        self.app.history.clear()
+        self.app.boolean_shape_editor = lambda initial, _title: {**initial, "boolean_mode": "subtract"}
+        self.app.boolean_shape_layers()
+        self.assertEqual(len(self.app.doc.layers), 1)
+        self.assertEqual(self.app.doc.layer.shape_data["boolean_mode"], "subtract")
+        self.assertEqual(len(self.app.doc.layer.shape_data["children"]), 2)
+        self.app.undo()
+        self.assertEqual(len(self.app.doc.layers), 2)
+        self.assertEqual([layer.id for layer in self.app.doc.layers], [lower.id, upper.id])
+        self.app.redo()
+        self.assertEqual(len(self.app.doc.layers), 1)
+
+    def test_boolean_shape_editor_has_contours_and_live_preview(self) -> None:
+        self.app.doc = self.app.doc.new(180, 140, (0, 0, 0, 0))
+        self.app.doc.layers.clear()
+        self.app.doc.add_shape_layer("rectangle", (15, 20, 100, 100), (220, 40, 40, 255))
+        self.app.doc.add_shape_layer("ellipse", (65, 35, 145, 115), (40, 120, 220, 255))
+        initial = self.app.doc.boolean_shape_data_with_lower("union")
+        self.assertIsNotNone(initial)
+        original_wait = tk.Toplevel.wait_window
+        captured: list[tuple[int, int]] = []
+
+        def inspect(window, target=None) -> None:
+            self.app.update()
+            captured.append((self.app._boolean_editor_list.size(), len(self.app._boolean_editor_preview.find_all())))
+            window.destroy()
+
+        tk.Toplevel.wait_window = inspect
+        try:
+            self.assertIsNone(self.app.boolean_shape_editor(initial, "Проверка"))
+        finally:
+            tk.Toplevel.wait_window = original_wait
+        self.assertEqual(captured[0][0], 2)
+        self.assertGreaterEqual(captured[0][1], 1)
+
+    def test_boolean_contour_edit_is_undoable(self) -> None:
+        self.app.doc = self.app.doc.new(180, 140, (0, 0, 0, 0))
+        self.app.doc.layers.clear()
+        self.app.doc.add_shape_layer("rectangle", (15, 20, 100, 100), (220, 40, 40, 255))
+        self.app.doc.add_shape_layer("ellipse", (65, 35, 145, 115), (40, 120, 220, 255))
+        self.assertTrue(self.app.doc.boolean_active_shape_with_lower("union"))
+        self.app.history.clear()
+        before = copy.deepcopy(self.app.doc.layer.shape_data)
+        edited = copy.deepcopy(before)
+        edited["children"][1]["_enabled"] = False
+        self.app.boolean_shape_editor = lambda _initial, _title: edited
+        self.app.edit_boolean_shape()
+        self.assertFalse(self.app.doc.layer.shape_data["children"][1]["_enabled"])
+        self.assertIsInstance(self.app.history.undo_stack[-1], ShapeDataCommand)
+        self.app.undo()
+        self.assertEqual(self.app.doc.layer.shape_data, before)
 
     def test_gradient_options_follow_selected_mode(self) -> None:
         def labels(widget) -> set[str]:

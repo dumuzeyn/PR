@@ -1073,31 +1073,52 @@ class Document:
         render_shape_layer(layer)
         self.dirty = True
 
-    def boolean_active_shape_with_lower(self, mode: str) -> bool:
+    def boolean_shape_data_with_lower(self, mode: str) -> dict[str, Any] | None:
         if self.active_layer <= 0:
-            return False
+            return None
         upper = self.layer
         lower = self.layers[self.active_layer - 1]
         if upper.locked or lower.locked or upper.kind != "shape" or lower.kind != "shape" or upper.shape_data is None or lower.shape_data is None:
-            return False
+            return None
         mode = str(mode).lower().strip()
         if mode not in {"union", "subtract", "intersect", "xor"}:
-            return False
+            return None
         fill = upper.shape_data.get("fill", lower.shape_data.get("fill", [255, 255, 255, 255]))
         stroke = upper.shape_data.get("stroke")
         stroke_width = int(upper.shape_data.get("stroke_width", 0))
+        lower_data = translated_shape_data(lower.shape_data, lower.x, lower.y)
+        upper_data = translated_shape_data(upper.shape_data, upper.x, upper.y)
+        lower_data.setdefault("_name", lower.name)
+        upper_data.setdefault("_name", upper.name)
+        lower_data.setdefault("_enabled", True)
+        upper_data.setdefault("_enabled", True)
+        result = {
+            "shape": "boolean",
+            "boolean_mode": mode,
+            "children": [lower_data, upper_data],
+            "fill": list(fill),
+            "stroke": None if stroke is None else list(stroke),
+            "stroke_width": max(0, stroke_width),
+        }
+        result["box"] = list(shape_data_bounds(result) or (0, 0, 1, 1))
+        return result
+
+    def boolean_active_shape_with_lower(self, mode: str, shape_data: dict[str, Any] | None = None) -> bool:
+        data = self.boolean_shape_data_with_lower(mode) if shape_data is None else json.loads(json.dumps(shape_data))
+        if data is None or self.active_layer <= 0:
+            return False
+        upper = self.layer
+        lower = self.layers[self.active_layer - 1]
+        if upper.locked or lower.locked or upper.kind != "shape" or lower.kind != "shape":
+            return False
+        data["shape"] = "boolean"
+        data["boolean_mode"] = str(data.get("boolean_mode", mode)).lower()
+        data["box"] = list(shape_data_bounds(data) or (0, 0, 1, 1))
         combined = Layer(
-            name=f"Boolean {mode}",
+            name=f"Булева фигура: {data['boolean_mode']}",
             pixels=blank_rgba(self.width, self.height, (0, 0, 0, 0)),
             kind="shape",
-            shape_data={
-                "shape": "boolean",
-                "boolean_mode": mode,
-                "children": [json.loads(json.dumps(lower.shape_data)), json.loads(json.dumps(upper.shape_data))],
-                "fill": list(fill),
-                "stroke": None if stroke is None else list(stroke),
-                "stroke_width": max(0, stroke_width),
-            },
+            shape_data=data,
         )
         render_shape_layer(combined)
         self.layers[self.active_layer - 1] = combined
@@ -3559,7 +3580,7 @@ def render_shape_layer(layer: Layer) -> None:
 
 
 def shape_render_region(data: dict[str, Any], width: int, height: int) -> tuple[int, int, int, int] | None:
-    box = normalized_box(tuple(int(value) for value in data.get("box", [0, 0, 1, 1])))
+    box = shape_data_bounds(data) or (0, 0, 1, 1)
     margin = max(1, int(data.get("stroke_width", 0)) * 2 + 1)
     x1 = max(0, box[0] - margin)
     y1 = max(0, box[1] - margin)
@@ -3569,13 +3590,84 @@ def shape_render_region(data: dict[str, Any], width: int, height: int) -> tuple[
 
 
 def translated_shape_data(data: dict[str, Any], dx: int, dy: int) -> dict[str, Any]:
-    translated = dict(data)
-    box = list(data.get("box", [0, 0, 1, 1]))
-    translated["box"] = [box[0] + dx, box[1] + dy, box[2] + dx, box[3] + dy]
-    points = data.get("control_points")
-    if isinstance(points, list):
-        translated["control_points"] = [[float(point[0]) + dx, float(point[1]) + dy] for point in points]
+    translated = json.loads(json.dumps(data))
+    if str(data.get("shape", "rectangle")).lower() == "boolean":
+        translated["children"] = [
+            translated_shape_data(child, dx, dy) if isinstance(child, dict) else child
+            for child in data.get("children", [])
+        ]
+    else:
+        box = list(data.get("box", [0, 0, 1, 1]))
+        translated["box"] = [box[0] + dx, box[1] + dy, box[2] + dx, box[3] + dy]
+        points = data.get("control_points")
+        if isinstance(points, list):
+            translated["control_points"] = [[float(point[0]) + dx, float(point[1]) + dy] for point in points]
+        gradient = data.get("gradient")
+        if isinstance(gradient, dict):
+            for key in ("start", "end"):
+                point = gradient.get(key)
+                if isinstance(point, list) and len(point) >= 2:
+                    gradient[key] = [float(point[0]) + dx, float(point[1]) + dy]
+    translated["box"] = list(shape_data_bounds(translated) or (0, 0, 1, 1))
     return translated
+
+
+def shape_data_bounds(data: dict[str, Any]) -> tuple[int, int, int, int] | None:
+    if str(data.get("shape", "rectangle")).lower() == "boolean":
+        bounds = [
+            shape_data_bounds(child)
+            for child in data.get("children", [])
+            if isinstance(child, dict) and bool(child.get("_enabled", True))
+        ]
+        bounds = [box for box in bounds if box is not None]
+        if not bounds:
+            return None
+        return (
+            min(box[0] for box in bounds), min(box[1] for box in bounds),
+            max(box[2] for box in bounds), max(box[3] for box in bounds),
+        )
+    try:
+        return normalized_box(tuple(int(round(value)) for value in data.get("box", [0, 0, 1, 1])))
+    except (TypeError, ValueError):
+        return None
+
+
+def transform_shape_data_to_box(data: dict[str, Any], target: tuple[int, int, int, int]) -> dict[str, Any]:
+    """Scale all editable geometry, including nested boolean operands, into target."""
+    source = shape_data_bounds(data)
+    if source is None:
+        return json.loads(json.dumps(data))
+    tx1, ty1, tx2, ty2 = normalized_box(target)
+    sx1, sy1, sx2, sy2 = source
+    scale_x = (tx2 - tx1) / max(1, sx2 - sx1)
+    scale_y = (ty2 - ty1) / max(1, sy2 - sy1)
+
+    def point(value: Any) -> list[float]:
+        return [tx1 + (float(value[0]) - sx1) * scale_x, ty1 + (float(value[1]) - sy1) * scale_y]
+
+    def transform(current: dict[str, Any]) -> dict[str, Any]:
+        result = json.loads(json.dumps(current))
+        if str(current.get("shape", "rectangle")).lower() == "boolean":
+            result["children"] = [transform(child) if isinstance(child, dict) else child for child in current.get("children", [])]
+        else:
+            raw_box = current.get("box", [0, 0, 1, 1])
+            first, second = point(raw_box[:2]), point(raw_box[2:4])
+            result["box"] = [first[0], first[1], second[0], second[1]]
+            points = current.get("control_points")
+            if isinstance(points, list):
+                result["control_points"] = [point(value) for value in points]
+            gradient = result.get("gradient")
+            if isinstance(gradient, dict):
+                for key in ("start", "end"):
+                    value = current.get("gradient", {}).get(key)
+                    if isinstance(value, list) and len(value) >= 2:
+                        gradient[key] = point(value)
+        result["box"] = list(shape_data_bounds(result) or (tx1, ty1, tx2, ty2))
+        return result
+
+    transformed = transform(data)
+    transformed["box"] = [tx1, ty1, tx2, ty2]
+    return transformed
 
 
 def render_boolean_shape_layer(layer: Layer) -> None:
@@ -3604,7 +3696,11 @@ def boolean_shape_mask(data: dict[str, Any], shape: tuple[int, int]) -> np.ndarr
     children = data.get("children", [])
     if not isinstance(children, list) or not children:
         return np.zeros(shape, dtype=np.uint8)
-    masks = [shape_data_to_mask(child, shape) for child in children if isinstance(child, dict)]
+    masks = [
+        shape_data_to_mask(child, shape)
+        for child in children
+        if isinstance(child, dict) and bool(child.get("_enabled", True))
+    ]
     if not masks:
         return np.zeros(shape, dtype=np.uint8)
     mode = str(data.get("boolean_mode", "union")).lower()
