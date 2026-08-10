@@ -59,6 +59,10 @@ This repository starts with a real working editor and an architecture intended t
 
 PhotoRedactor does not depend on placeholder packages or simulated AI libraries. Runtime dependencies are established projects installed from their real distributions: NumPy, OpenCV, Pillow and rawpy. New dependencies must be checked for a genuine upstream project, an importable implementation and actual use in the packaged application before they are added.
 
+## Architecture
+
+Public facade modules remain stable while editor, document and rendering behavior is divided by responsibility. Python sources are limited to 500 lines by an automated CI check. The module map and extension rules are documented in [`ARCHITECTURE.md`](ARCHITECTURE.md).
+
 ## Build exe
 
 ```powershell
