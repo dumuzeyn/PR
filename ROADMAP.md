@@ -1,46 +1,59 @@
-# PhotoRedactor Roadmap
+# Дорожная карта PhotoRedactor
 
-## Implemented in this foundation
+Эта дорожная карта отражает готовность пользовательских функций, а не только наличие классов, кнопок или автоматических тестов.
 
-- Local documents: new, open, save, save as, export.
-- Workflow: document presets, recent files, layer export and project metadata.
-- Startup workflow: centered medium-size editor-free welcome screen with recent files, recovery, clipboard-image detection and a visual preset-based canvas creator; the editor opens maximized, documents open centered and zoom keeps the viewport focus.
-- Document geometry: resize image, resize canvas, trim transparent pixels, reveal all layers, rotate, flip, crop.
-- Navigation: zoom, fit to screen, pan with scrollbars.
-- Raster layers: create, duplicate, delete, reorder, visibility, opacity, merge, flatten.
-- Layer compositing: clipping masks including adjustment-layer clipping, basic layer styles, opacity and blend modes.
-- Non-destructive filters: per-layer editable filter stack with visual editor, built-in/importable/exportable presets, preview, reordering, per-filter enable/opacity/blend modes/masks, blur, sharpen, noise, median, edge detect and emboss.
-- Raster selections: rectangular, elliptical, freehand lasso, magnetic lasso, polygon lasso, persistent replace/add/subtract/intersect modes, quick selection brush with a live result-mask preview and image-aware edge refinement controls, magic wand, color range, single row/column, opaque pixels, subject/background/sky selection, select all, invert, feather, smooth, grow, shrink, border/refine, smart edge cleanup/correction, richer Select and Mask previews/output including edge confidence, saved alpha selections.
-- Raster layer masks: reveal all, hide all, from selection, mask thumbnails, thumbnail-click mask channel editing, red-overlay/black-white mask preview, linked/unlinked movement, paint on mask, density, feather, live edge refinement with smooth/contrast/shift and smart image-aware correction, invert, toggle, apply, delete.
-- Blend modes: Normal, Multiply, Screen, Overlay, Soft Light, Darken, Lighten, Difference, Color, Luminosity.
-- Tools: move, brush, eraser, fill, gradient, editable text, rectangular/elliptical/lasso/magnetic/polygon selection, magic wand, color range, brush/quick-selection canvas previews, interactive patch and crop.
-- Text layers: font selection, multiline editing, paragraph width, word wrapping, alignment, line spacing and tracking.
-- Local retouching: blur, sharpen, dodge, burn, clone stamp, source-based healing, automatic spot healing, retouch presets, interactive patch selection, edge-aware cleanup, red-eye reduction and content-aware fill.
-- Advanced retouching: frequency separation into editable tone/texture layers with Linear Light reconstruction, plus skin-aware portrait cleanup with live preview and controls for smoothing, texture, tone and redness.
-- Layer import: place embedded images, place linked images, update/relink linked layers and load several image files as layers.
-- Shape layers: editable rectangle, ellipse, line, Bezier curve, polygon, star and boolean-combination layers.
-- View helpers: grid overlay, numeric guides and channel preview for RGB/Red/Green/Blue/Alpha.
-- UI: centralized neutral DesignTokens theme with light controls and a dark canvas workspace, readable icon-and-name toolbar with Russian tooltips and shortcuts, explicitly labeled horizontal contextual options, tabbed Properties/Layers/History, visible color swatches, canvas-first responsive layout and compact status feedback.
-- Object UX: corner-based shape creation with Shift/Alt modifiers, reusable real-shape preview items, direct alpha-aware Shape/Text selection, topmost visible-layer mapping, synchronized canvas/layer selection, screen-stable handles, modifier-aware resize and keyboard nudging.
-- Analysis: eyedropper, metadata/EXIF viewer, histogram and image statistics.
-- Recovery and automation: autosave recovery file, manual recovery opening and action recording to JSON logs.
-- Adjustments: destructive and previewable non-destructive brightness, contrast, saturation, vibrance, temperature/tint, hue/saturation, exposure, color balance, levels, curves, threshold, posterize, grayscale and invert, with importable/exportable preset libraries.
-- Filters: Gaussian blur, sharpen, noise, median, edge detect, emboss, content-aware fill and red-eye reduction.
-- History: sparse tile commands for strokes, property/list commands for layers and compact changed-field commands, with full snapshots reserved for global document operations.
-- Automation: simple batch resize/convert.
-- Transform: visual Free Transform with eight handles for scale/move, rotate, position, flips, selected pixels, perspective corner transforms and live warp previews.
-- Text: editable paragraph and path text, bold/italic/underline, baseline shift, tracking and transform handles that preserve editability.
-- Shapes: custom-shape presets and visual four-point Bezier editing with live handles.
-- Tool previews: real ellipse, line, polygon, star, custom shape and Bezier previews before creation.
-- Performance: dirty-region 256 px composition, tiled Tk canvas output, cached filters/masks/effects/thumbnails, sparse stroke history, incremental selection previews, revision-safe background filters, regional cached object movement/resize and an opt-in profiler/benchmark.
-- Dense shape documents: partial composition rejects non-intersecting Shape layers before filter/cache lookup and blending, keeping direct movement responsive as layer count grows.
-- Export: PNG, JPEG, WebP, BMP, TIFF, plus `.prdx` project files.
-- Smart Objects: embedded source payloads inside `.prdx`, transforms re-rendered from the original, replace/reset/embed operations and linked-file current/modified/missing status.
-- RAW and color management: RAW decoding, assigned/converted ICC profiles, 8/16/32-bit working channels, 16-bit TIFF output, RGB/Lab/CMYK conversions and editable project metadata.
-- Large documents: optional CUDA detection with CPU fallback, zoom mipmap pyramids and LRU scratch-disk eviction with a configurable memory budget.
-- Extensibility and automation: replayable action v2 commands, batch action execution, Python plugin discovery and validated in-process or external executable filters.
-- Generative tools: content-aware fill plus non-destructive local generative canvas expansion with content-aware, mirror and edge modes and live preview.
+- `[x]` - функция реализована как законченный локальный рабочий процесс.
+- `[ ]` - функция отсутствует либо реализована частично и требует дальнейшей работы.
 
-## Long-term research and optional integrations
+## Реализовано
 
-The original roadmap milestones are implemented. Future work can add optional cloud model providers, GPU kernels for individual filters and more third-party plugin adapters without changing the local editor's core behavior.
+- [x] Создание, открытие, сохранение и экспорт локальных документов.
+- [x] Стартовый экран с недавними файлами, восстановлением, изображением из буфера и диалогом размеров нового холста.
+- [x] Центрирование холста, масштабирование с сохранением центра, прокрутка и перемещение рабочей области.
+- [x] Базовая геометрия документа: размер изображения и холста, кадрирование, поворот, отражение и обрезка прозрачных краёв.
+- [x] Базовые растровые слои: создание, дублирование, удаление, порядок, видимость, непрозрачность, объединение и сведение.
+- [x] Основные режимы наложения, обтравочные маски и базовые стили слоя.
+- [x] Кисть, ластик, заливка, градиент, пипетка, перемещение, локальное размытие, резкость, осветление и затемнение.
+- [x] Штамп, лечение по источнику, точечное восстановление и заплатка как локальные растровые инструменты.
+- [x] Прямоугольное, эллиптическое, свободное и полигональное выделение с режимами замены, добавления, вычитания и пересечения.
+- [x] Базовые маски слоя: создание, просмотр, рисование, инверсия, включение, применение и удаление.
+- [x] Редактируемые прямоугольники, эллипсы, линии, кривые Безье, многоугольники, звёзды и готовые пользовательские формы.
+- [x] Редактируемый обычный и абзацный текст с основными параметрами шрифта и выравнивания.
+- [x] Сетка, направляющие и просмотр каналов RGB, Red, Green, Blue и Alpha.
+- [x] Гистограмма, статистика изображения и просмотр метаданных/EXIF.
+- [x] История базовых операций, отмена и повтор, включая компактное хранение штрихов и изменений свойств.
+- [x] Форматы PNG, JPEG, WebP, BMP, TIFF и проектный формат `.prdx`.
+- [x] Настраиваемая панель инструментов, русские подсказки и анимированные демонстрации всех инструментов.
+- [x] Автоматическая сборка и проверка однофайлового Windows EXE на GitHub Actions.
+
+## Частично реализовано: остаётся в работе
+
+- [ ] **Автоматические выделения.** Быстрое выделение, волшебная палочка, цветовой диапазон, магнитное лассо, выбор неба/фона/объекта и уточнение края существуют, но качество сложных волос, полупрозрачных краёв, мелких объектов и неоднородного фона ещё не соответствует полноценному профессиональному инструменту.
+- [ ] **Select and Mask.** Предпросмотр, сглаживание, контраст, сдвиг и очистка края есть, но нет полного набора профессиональных кистей уточнения, стабильной обработки волос и всех вариантов вывода результата.
+- [ ] **Неразрушающие фильтры и корректирующие слои.** Стек фильтров и основные корректировки работают, но ещё нужны единая цветовая точность, полноценное редактирование всех масок/каналов и проверка каждого сочетания режимов наложения.
+- [ ] **Продвинутая ретушь.** Частотное разложение, очистка портрета, удаление красных глаз и локальное заполнение реализованы алгоритмически, но требуют дальнейшей проверки качества на фотографиях разного размера, кожи, волос и сложных текстур.
+- [ ] **Content-Aware Fill.** Сейчас используется локальный алгоритм OpenCV Inpaint. Нужны управление областью-источником, адаптация цвета/поворота/масштаба, несколько вариантов результата и профессиональный предпросмотр.
+- [ ] **Трансформации.** Перемещение, масштабирование, поворот, перспектива и несколько деформаций доступны, но они ещё не объединены в один полностью интерактивный режим с сеткой, произвольными узлами, числовыми параметрами и надёжной работой со всеми типами слоёв.
+- [ ] **Текст по контуру.** Обычный текст и пресеты дуги/волны существуют, но произвольный редактируемый векторный контур, положение начала/конца и перенос текста между сторонами пути ещё не реализованы полностью.
+- [ ] **Булевы операции фигур.** Сочетания контуров поддерживаются на базовом уровне; нужны полноценное редактирование каждого исходного контура, стабильные операции объединения/вычитания/пересечения и корректный экспорт.
+- [ ] **Smart Objects.** Встроенный оригинал, связанный файл, замена содержимого и повторный рендер масштаба работают. Ещё нужны полноценные вложенные документы, редактируемые фильтры Smart Object, все неразрушающие трансформации и надёжное разрешение конфликтов связанных файлов.
+- [ ] **RAW и управление цветом.** RAW-файлы открываются, профили и рабочие представления 8/16/32 бит сохраняются. Основной растровый конвейер всё ещё во многих операциях использует 8-битные RGBA-данные; нужны сквозные 16/32-битные вычисления, корректный soft proof, CMYK-печать и проверка реальными ICC-профилями.
+- [ ] **Большие документы.** Mipmap, ограничение памяти и временный scratch-кэш работают, но нет полноценного дискового тайлового формата документа, фоновой загрузки всех слоёв и проверки на действительно больших многослойных проектах.
+- [ ] **GPU-ускорение.** Обнаружение CUDA и отдельный путь уменьшения изображения существуют, но инструменты, композиция и фильтры в основном выполняются на CPU. Нужны реальные GPU-ядра, измерения и одинаковый результат с CPU.
+- [ ] **Запись действий и пакетная обработка.** JSON-действия и обработка набора файлов работают для ограниченного списка команд. Нужны запись и повтор всего пользовательского инструментария, условия, остановки, обработка ошибок и полноценная очередь заданий.
+- [ ] **Плагины.** Локальный Python API и протокол внешнего фильтра существуют, но API покрывает только часть редактора. Нужны версионирование, изоляция, разрешения, стабильный SDK и больше точек расширения.
+- [ ] **Производительность интерактивных инструментов.** Частичный рендер, тайлы и кэши внедрены, но плавность ещё должна быть проверена и улучшена для больших кистей, сложных градиентных объектов, трансформаций и документов с большим количеством слоёв.
+- [ ] **Полная проверка горячих клавиш.** Основные сочетания, включая отмену/повтор, работают; требуется систематическая проверка всех команд, раскладок клавиатуры, конфликтов и отображения сочетаний в меню.
+
+## Не реализовано
+
+- [ ] **Настоящее генеративное заполнение.** Нет модели или реального внешнего провайдера, который создаёт новое содержимое по контексту изображения и текстовому запросу.
+- [ ] **Настоящее генеративное расширение.** Текущий пункт меню выполняет детерминированное локальное отражение/растяжение краёв и синтез текстуры через OpenCV. Это не генеративный ИИ и не считается выполнением данного пункта.
+- [ ] Текстовые запросы, отрицательные запросы, варианты генерации, seed, история вариантов и повторная генерация выбранной области.
+- [ ] Локальная модель с проверенными весами либо подключение к реальному документированному API генерации изображений.
+- [ ] Профессиональная поддержка PSD/PSB с сохранением редактируемых слоёв, эффектов, текста, Smart Objects и цветовых профилей.
+- [ ] Полноценная печать, soft proof, плашечные цвета и допечатная проверка.
+
+## Правило обновления
+
+Пункт переносится в раздел «Реализовано» только после завершения интерфейса, основной логики, отмены/повтора, сохранения проекта, проверки собранного EXE и тестирования реального пользовательского сценария. Наличие одной функции в коде или одного автоматического теста больше не считается завершением этапа.

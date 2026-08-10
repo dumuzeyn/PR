@@ -34,7 +34,7 @@ This repository starts with a real working editor and an architecture intended t
 - RAW decoding, ICC profile assignment/conversion, RGB/Lab/CMYK workflows and 8/16/32-bit working channels
 - mipmap rendering for distant zoom, scratch-disk cache eviction and optional CUDA detection with CPU fallback
 - Python plugin API plus validated external executable filters
-- non-destructive generative canvas expansion with a live preview
+- local algorithmic canvas expansion with a live preview; true AI generative fill/expand remains unfinished in `ROADMAP.md`
 - metadata/EXIF view, histogram, image statistics and eyedropper
 - non-destructive adjustment layers with importable/exportable preset libraries for brightness/contrast, saturation, vibrance, temperature/tint, hue/saturation, exposure, color balance, levels, curves, threshold, posterize, invert and grayscale
 - undo/redo
@@ -125,4 +125,4 @@ Every push to `master` starts the `Build PhotoRedactor for Windows` workflow. Op
 
 ## Scope
 
-The long requirements file describes a Photoshop-scale application. The roadmap milestones are implemented as local, testable workflows; optional research integrations remain clearly separated from the editor core in `ROADMAP.md`.
+The long requirements file describes a Photoshop-scale application. `ROADMAP.md` separates completed workflows from partial prototypes and unimplemented features; a code path or isolated test is not treated as proof that a milestone is finished.
