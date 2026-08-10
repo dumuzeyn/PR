@@ -10,7 +10,7 @@ import numpy as np
 from PIL import Image
 
 from photoredactor.app import PhotoRedactorApp
-from photoredactor.history import DocumentStateCommand, LayerInsertCommand, LayerMoveCommand, SelectionMaskCommand, ShapeDataCommand
+from photoredactor.history import DocumentStateCommand, LayerInsertCommand, LayerMoveCommand, SelectionMaskCommand, ShapeDataCommand, TextDataCommand
 from photoredactor.ui.shortcuts import COMMAND_SHORTCUTS
 
 
@@ -109,6 +109,48 @@ class StartupTests(unittest.TestCase):
         preset = self.app.available_document_presets()[3]
         self.assertIsNotNone(settings)
         self.assertEqual((settings["width"], settings["height"]), (preset["width"], preset["height"]))
+
+    def test_text_path_editor_exposes_visual_controls_and_compact_undo(self) -> None:
+        self.app.doc = self.app.doc.new(520, 320, (245, 245, 245, 255))
+        self.app.doc.layers.clear()
+        layer = self.app.doc.add_text_layer("Текст по контуру", 40, 80, (20, 30, 40, 255), 34)
+        self.app.selected_layer_ids = {layer.id}
+        self.app.history.clear()
+        original_wait = tk.Toplevel.wait_window
+        centered: list[bool] = []
+
+        def edit_and_accept(window, target=None) -> None:
+            window.update()
+            self.assertGreaterEqual(self.app._text_path_canvas.winfo_width(), 500)
+            self.assertEqual(len(self.app._text_path_points), 4)
+            self.app._text_path_points[1][1] -= 75
+            self.app._text_path_points[2][1] += 45
+            self.app._text_path_start_var.set(0.12)
+            self.app._text_path_end_var.set(0.82)
+            self.app._text_path_side_var.set(-1)
+            self.app._text_path_reverse_var.set(True)
+            expected_x = (window.winfo_screenwidth() - window.winfo_width()) // 2
+            expected_y = (window.winfo_screenheight() - window.winfo_height()) // 2
+            centered.append(abs(window.winfo_x() - expected_x) <= 3 and abs(window.winfo_y() - expected_y) <= 3)
+            self.app._text_path_accept()
+
+        tk.Toplevel.wait_window = edit_and_accept
+        try:
+            self.app.edit_text_path()
+        finally:
+            tk.Toplevel.wait_window = original_wait
+        self.assertEqual(layer.text_data["path_mode"], "bezier")
+        self.assertAlmostEqual(layer.text_data["path_start"], 0.12)
+        self.assertAlmostEqual(layer.text_data["path_end"], 0.82)
+        self.assertEqual(layer.text_data["path_side"], -1)
+        self.assertTrue(layer.text_data["path_reverse"])
+        self.assertTrue(centered[0])
+        self.assertEqual(len(self.app.history.undo_stack), 1)
+        self.assertIsInstance(self.app.history.undo_stack[-1], TextDataCommand)
+        self.app.undo()
+        self.assertEqual(layer.text_data.get("path_mode"), "none")
+        self.app.redo()
+        self.assertEqual(layer.text_data.get("path_mode"), "bezier")
 
     def test_editor_shows_tool_names_and_explicit_options_title(self) -> None:
         move_button = self.app.tool_palette.buttons["move"]

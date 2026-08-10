@@ -284,7 +284,7 @@ class Layer:
             effects=json.loads(json.dumps(self.effects)),
             filters=json.loads(json.dumps(self.filters)),
             kind=self.kind,
-            text_data=None if self.text_data is None else dict(self.text_data),
+            text_data=None if self.text_data is None else json.loads(json.dumps(self.text_data)),
             shape_data=None if self.shape_data is None else json.loads(json.dumps(self.shape_data)),
             adjustment=None if self.adjustment is None else dict(self.adjustment),
             smart_data=None if self.smart_data is None else json.loads(json.dumps(self.smart_data, ensure_ascii=False)),
@@ -405,7 +405,7 @@ class Document:
                     "effects": json.loads(json.dumps(layer.effects)),
                     "filters": json.loads(json.dumps(layer.filters)),
                     "kind": layer.kind,
-                    "text_data": None if layer.text_data is None else dict(layer.text_data),
+                    "text_data": None if layer.text_data is None else json.loads(json.dumps(layer.text_data)),
                     "shape_data": None if layer.shape_data is None else dict(layer.shape_data),
                     "adjustment": None if layer.adjustment is None else dict(layer.adjustment),
                     "smart_data": None if layer.smart_data is None else json.loads(json.dumps(layer.smart_data, ensure_ascii=False)),
@@ -964,9 +964,15 @@ class Document:
         underline: bool = False,
         path_mode: str = "none",
         path_amount: int = 0,
+        path_points: list[tuple[float, float]] | list[list[float]] | None = None,
+        path_start: float = 0.0,
+        path_end: float = 1.0,
+        path_side: int = 1,
+        path_reverse: bool = False,
         baseline_shift: int = 0,
         rotation: float = 0.0,
     ) -> Layer:
+        normalized_path_start, normalized_path_end = normalize_text_path_range(path_start, path_end)
         layer = Layer(
             name=f"Text: {text[:24]}",
             pixels=blank_rgba(self.width, self.height, (0, 0, 0, 0)),
@@ -985,8 +991,13 @@ class Document:
                 "bold": bool(bold),
                 "italic": bool(italic),
                 "underline": bool(underline),
-                "path_mode": path_mode if path_mode in {"none", "arc", "wave"} else "none",
+                "path_mode": path_mode if path_mode in {"none", "arc", "wave", "bezier"} else "none",
                 "path_amount": int(path_amount),
+                "path_points": normalize_text_path_points(path_points, int(x), int(y) + int(size), max(int(box_width), int(size) * 8)),
+                "path_start": normalized_path_start,
+                "path_end": normalized_path_end,
+                "path_side": -1 if int(path_side) < 0 else 1,
+                "path_reverse": bool(path_reverse),
                 "baseline_shift": int(baseline_shift),
                 "rotation": float(rotation),
             },
@@ -1142,6 +1153,11 @@ class Document:
         underline: bool | None = None,
         path_mode: str | None = None,
         path_amount: int | None = None,
+        path_points: list[tuple[float, float]] | list[list[float]] | None = None,
+        path_start: float | None = None,
+        path_end: float | None = None,
+        path_side: int | None = None,
+        path_reverse: bool | None = None,
         baseline_shift: int | None = None,
         rotation: float | None = None,
     ) -> None:
@@ -1172,9 +1188,27 @@ class Document:
         if underline is not None:
             layer.text_data["underline"] = bool(underline)
         if path_mode is not None:
-            layer.text_data["path_mode"] = path_mode if path_mode in {"none", "arc", "wave"} else "none"
+            layer.text_data["path_mode"] = path_mode if path_mode in {"none", "arc", "wave", "bezier"} else "none"
         if path_amount is not None:
             layer.text_data["path_amount"] = int(path_amount)
+        if path_points is not None:
+            layer.text_data["path_points"] = normalize_text_path_points(
+                path_points,
+                int(layer.text_data.get("x", 0)),
+                int(layer.text_data.get("y", 0)) + int(layer.text_data.get("size", 48)),
+                max(int(layer.text_data.get("box_width", 0) or 0), int(layer.text_data.get("size", 48)) * 8),
+            )
+        if path_start is not None or path_end is not None:
+            normalized_start, normalized_end = normalize_text_path_range(
+                float(layer.text_data.get("path_start", 0.0)) if path_start is None else path_start,
+                float(layer.text_data.get("path_end", 1.0)) if path_end is None else path_end,
+            )
+            layer.text_data["path_start"] = normalized_start
+            layer.text_data["path_end"] = normalized_end
+        if path_side is not None:
+            layer.text_data["path_side"] = -1 if int(path_side) < 0 else 1
+        if path_reverse is not None:
+            layer.text_data["path_reverse"] = bool(path_reverse)
         if baseline_shift is not None:
             layer.text_data["baseline_shift"] = int(baseline_shift)
         if rotation is not None:
@@ -1208,6 +1242,16 @@ class Document:
             data["box_width"] = max(1, round(int(data["box_width"]) * scale_x))
         data["line_spacing"] = max(0, round(int(data.get("line_spacing", 0)) * scale_y))
         data["tracking"] = round(int(data.get("tracking", 0)) * scale_x)
+        raw_path = data.get("path_points")
+        if isinstance(raw_path, list) and len(raw_path) == 4:
+            data["path_points"] = [
+                [
+                    int(x) + (float(point[0]) - x1) * scale_x,
+                    int(y) + (float(point[1]) - y1) * scale_y,
+                ]
+                for point in raw_path
+                if isinstance(point, (list, tuple)) and len(point) >= 2
+            ]
         data["rotation"] = float(data.get("rotation", 0.0)) + float(angle)
         if flip_horizontal:
             data["flip_horizontal"] = not bool(data.get("flip_horizontal", False))
@@ -3337,29 +3381,32 @@ def render_text_layer(layer: Layer) -> None:
     path_mode = str(data.get("path_mode", "none")).lower()
     path_amount = int(data.get("path_amount", 0))
     baseline_shift = int(data.get("baseline_shift", 0))
-    lines = wrapped_text_lines(draw, str(data.get("text", "")), font, box_width, tracking)
-    line_y = y
-    for line in lines:
-        bbox = draw.textbbox((0, 0), line or " ", font=font)
-        line_width = text_line_width(draw, line or " ", font, tracking)
-        dx = 0
-        if box_width > 0 and align == "center":
-            dx = max(0, (box_width - line_width) // 2)
-        elif box_width > 0 and align == "right":
-            dx = max(0, box_width - line_width)
-        draw_text_styled(
-            draw,
-            (x + dx, line_y - baseline_shift),
-            line,
-            fill=color,
-            font=font,
-            tracking=tracking,
-            bold=bold,
-            underline=underline,
-            path_mode=path_mode,
-            path_amount=path_amount,
-        )
-        line_y += max(1, bbox[3] - bbox[1]) + spacing
+    if path_mode == "bezier":
+        draw_text_on_bezier_path(pil, data, font, color, tracking, bold, underline)
+    else:
+        lines = wrapped_text_lines(draw, str(data.get("text", "")), font, box_width, tracking)
+        line_y = y
+        for line in lines:
+            bbox = draw.textbbox((0, 0), line or " ", font=font)
+            line_width = text_line_width(draw, line or " ", font, tracking)
+            dx = 0
+            if box_width > 0 and align == "center":
+                dx = max(0, (box_width - line_width) // 2)
+            elif box_width > 0 and align == "right":
+                dx = max(0, box_width - line_width)
+            draw_text_styled(
+                draw,
+                (x + dx, line_y - baseline_shift),
+                line,
+                fill=color,
+                font=font,
+                tracking=tracking,
+                bold=bold,
+                underline=underline,
+                path_mode=path_mode,
+                path_amount=path_amount,
+            )
+            line_y += max(1, bbox[3] - bbox[1]) + spacing
     rendered = pil_to_rgba_array(pil)
     rotation = float(data.get("rotation", 0.0))
     flip_horizontal = bool(data.get("flip_horizontal", False))
@@ -3380,6 +3427,192 @@ def render_text_layer(layer: Layer) -> None:
         alpha_blend_inplace(rotated, patch, px, py, 1.0)
         rendered = rotated
     layer.pixels = rendered
+
+
+def normalize_text_path_points(
+    points: list[tuple[float, float]] | list[list[float]] | None,
+    x: int,
+    baseline_y: int,
+    width: int,
+) -> list[list[float]]:
+    if isinstance(points, list) and len(points) == 4:
+        normalized: list[list[float]] = []
+        for point in points:
+            if not isinstance(point, (list, tuple)) or len(point) < 2:
+                break
+            try:
+                normalized.append([float(point[0]), float(point[1])])
+            except (TypeError, ValueError):
+                break
+        if len(normalized) == 4:
+            return normalized
+    path_width = max(40.0, float(width))
+    return [
+        [float(x), float(baseline_y)],
+        [float(x) + path_width / 3.0, float(baseline_y)],
+        [float(x) + path_width * 2.0 / 3.0, float(baseline_y)],
+        [float(x) + path_width, float(baseline_y)],
+    ]
+
+
+def normalize_text_path_range(start: float, end: float) -> tuple[float, float]:
+    normalized_start = max(0.0, min(0.99, float(start)))
+    normalized_end = max(0.01, min(1.0, float(end)))
+    if normalized_end - normalized_start < 0.01:
+        if normalized_start <= 0.99:
+            normalized_end = min(1.0, normalized_start + 0.01)
+        else:
+            normalized_start = max(0.0, normalized_end - 0.01)
+    return normalized_start, normalized_end
+
+
+def text_path_samples(
+    points: list[tuple[float, float]] | list[list[float]],
+    steps: int = 512,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    normalized = normalize_text_path_points(points, 0, 0, 100)
+    control = np.asarray(normalized, dtype=np.float64)
+    count = max(16, int(steps))
+    t = np.linspace(0.0, 1.0, count + 1, dtype=np.float64)
+    omt = 1.0 - t
+    positions = (
+        (omt ** 3)[:, None] * control[0]
+        + (3.0 * omt * omt * t)[:, None] * control[1]
+        + (3.0 * omt * t * t)[:, None] * control[2]
+        + (t ** 3)[:, None] * control[3]
+    )
+    tangents = (
+        (3.0 * omt * omt)[:, None] * (control[1] - control[0])
+        + (6.0 * omt * t)[:, None] * (control[2] - control[1])
+        + (3.0 * t * t)[:, None] * (control[3] - control[2])
+    )
+    lengths = np.linalg.norm(tangents, axis=1)
+    invalid = lengths < 1e-8
+    if np.any(invalid):
+        differences = np.gradient(positions, axis=0)
+        tangents[invalid] = differences[invalid]
+        lengths = np.linalg.norm(tangents, axis=1)
+    tangents /= np.maximum(lengths[:, None], 1e-8)
+    segments = np.linalg.norm(np.diff(positions, axis=0), axis=1)
+    cumulative = np.concatenate(([0.0], np.cumsum(segments)))
+    return positions, tangents, cumulative
+
+
+def text_path_point_at_distance(
+    positions: np.ndarray,
+    tangents: np.ndarray,
+    cumulative: np.ndarray,
+    distance: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    if len(cumulative) < 2 or cumulative[-1] <= 1e-8:
+        return positions[0].copy(), tangents[0].copy()
+    target = max(0.0, min(float(cumulative[-1]), float(distance)))
+    upper = min(len(cumulative) - 1, max(1, int(np.searchsorted(cumulative, target, side="right"))))
+    lower = upper - 1
+    span = max(1e-8, float(cumulative[upper] - cumulative[lower]))
+    ratio = (target - float(cumulative[lower])) / span
+    point = positions[lower] * (1.0 - ratio) + positions[upper] * ratio
+    tangent = tangents[lower] * (1.0 - ratio) + tangents[upper] * ratio
+    tangent /= max(1e-8, float(np.linalg.norm(tangent)))
+    return point, tangent
+
+
+def draw_text_on_bezier_path(
+    image: Image.Image,
+    data: dict[str, Any],
+    font: ImageFont.ImageFont,
+    fill: tuple[int, int, int, int],
+    tracking: int = 0,
+    bold: bool = False,
+    underline: bool = False,
+) -> None:
+    size = max(4, int(data.get("size", 48)))
+    points = normalize_text_path_points(
+        data.get("path_points"),
+        int(data.get("x", 0)),
+        int(data.get("y", 0)) + size,
+        max(int(data.get("box_width", 0) or 0), size * 8),
+    )
+    sample_count = min(4096, max(256, int(cumulative_path_estimate(points) * 1.5)))
+    positions, tangents, cumulative = text_path_samples(points, sample_count)
+    path_reversed = bool(data.get("path_reverse", False))
+    if path_reversed:
+        positions = positions[::-1].copy()
+        tangents = (-tangents[::-1]).copy()
+        segments = np.linalg.norm(np.diff(positions, axis=0), axis=1)
+        cumulative = np.concatenate(([0.0], np.cumsum(segments)))
+    total_path = float(cumulative[-1])
+    start_fraction = max(0.0, min(1.0, float(data.get("path_start", 0.0))))
+    end_fraction = max(0.0, min(1.0, float(data.get("path_end", 1.0))))
+    start_distance, end_distance = sorted((start_fraction * total_path, end_fraction * total_path))
+    available = end_distance - start_distance
+    if available <= 1.0:
+        return
+    text = " ".join(str(data.get("text", "")).splitlines())
+    if not text:
+        return
+    measure = ImageDraw.Draw(image)
+    advances: list[float] = []
+    for char in text:
+        bbox = measure.textbbox((0, 0), char or " ", font=font, stroke_width=1 if bold else 0)
+        advances.append(float(max(1, bbox[2] - bbox[0]) + int(tracking)))
+    total_text = max(0.0, sum(advances) - int(tracking))
+    align = str(data.get("align", "left")).lower()
+    cursor = start_distance
+    if align == "center":
+        cursor += max(0.0, (available - total_text) / 2.0)
+    elif align == "right":
+        cursor += max(0.0, available - total_text)
+    baseline_shift = float(data.get("baseline_shift", 0))
+    side = -1 if int(data.get("path_side", 1)) < 0 else 1
+    first_distance = cursor
+    last_distance = cursor
+    for char, advance in zip(text, advances):
+        center_distance = cursor + advance / 2.0
+        if center_distance > end_distance:
+            break
+        point, tangent = text_path_point_at_distance(positions, tangents, cumulative, center_distance)
+        normal = np.array([-tangent[1], tangent[0]], dtype=np.float64)
+        if path_reversed:
+            normal = -normal
+        bbox = measure.textbbox((0, 0), char or " ", font=font, stroke_width=1 if bold else 0)
+        glyph_width = max(1, bbox[2] - bbox[0])
+        glyph_height = max(1, bbox[3] - bbox[1])
+        padding = max(4, size // 4)
+        glyph = Image.new("RGBA", (glyph_width + padding * 2, glyph_height + padding * 2), (0, 0, 0, 0))
+        glyph_draw = ImageDraw.Draw(glyph)
+        glyph_draw.text(
+            (padding - bbox[0], padding - bbox[1]),
+            char,
+            fill=fill,
+            font=font,
+            stroke_width=1 if bold else 0,
+            stroke_fill=fill,
+        )
+        angle = math.degrees(math.atan2(float(tangent[1]), float(tangent[0])))
+        rotated = glyph.rotate(-angle, resample=Image.Resampling.BICUBIC, expand=True)
+        center = point - normal * side * (glyph_height / 2.0 + baseline_shift)
+        left = round(float(center[0]) - rotated.width / 2.0)
+        top = round(float(center[1]) - rotated.height / 2.0)
+        image.paste(rotated, (left, top), rotated)
+        cursor += advance
+        last_distance = min(cursor, end_distance)
+    if underline and last_distance > first_distance:
+        path_draw = ImageDraw.Draw(image)
+        samples = max(8, round((last_distance - first_distance) / 4.0))
+        line_points: list[tuple[float, float]] = []
+        for distance in np.linspace(first_distance, last_distance, samples):
+            point, tangent = text_path_point_at_distance(positions, tangents, cumulative, float(distance))
+            normal = np.array([-tangent[1], tangent[0]], dtype=np.float64)
+            if path_reversed:
+                normal = -normal
+            underline_point = point + normal * side * (max(1.0, size * 0.08) - baseline_shift)
+            line_points.append((float(underline_point[0]), float(underline_point[1])))
+        path_draw.line(line_points, fill=fill, width=max(1, size // 16), joint="curve")
+
+
+def cumulative_path_estimate(points: list[list[float]]) -> float:
+    return max(16.0, sum(math.hypot(points[index + 1][0] - points[index][0], points[index + 1][1] - points[index][1]) for index in range(3)))
 
 
 def wrapped_text_lines(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont, box_width: int, tracking: int = 0) -> list[str]:

@@ -74,6 +74,7 @@ class ToolOptionsPanel(ttk.Frame):
         text_box_width: tk.IntVar,
         finish_text_edit,
         edit_active_text,
+        edit_text_path,
         tooltip_factory=None,
         compact: bool = False,
         auto_select: tk.BooleanVar | None = None,
@@ -137,6 +138,7 @@ class ToolOptionsPanel(ttk.Frame):
         self.text_box_width = text_box_width
         self.finish_text_edit = finish_text_edit
         self.edit_active_text = edit_active_text
+        self.edit_text_path = edit_text_path
         self.tooltip_factory = tooltip_factory
         self.compact = compact
         self.auto_select = auto_select
@@ -340,6 +342,7 @@ class ToolOptionsPanel(ttk.Frame):
         elif tool == "text":
             self._compact_combo(parent, "Выравнивание", self.text_align, ["left", "center", "right"], 9)
             self._compact_spin(parent, "Интервал", self.text_tracking, -100, 500, 5)
+            ttk.Button(parent, text="Контур...", command=self.edit_text_path).pack(side=tk.LEFT, padx=3)
         elif tool == "crop" and self.crop_aspect.get() == "Свое":
             self._compact_spin(parent, "Ширина", self.crop_custom_width, 1, 50000, 7)
             self._compact_spin(parent, "Высота", self.crop_custom_height, 1, 50000, 7)
@@ -514,6 +517,7 @@ class ToolOptionsPanel(ttk.Frame):
         self._add_spinbox("Ширина блока", self.text_box_width, 0, 50000)
         self._add_scale("Поворот", self.text_rotation, -180, 180, "°")
         ttk.Button(self.body, text="Редактировать активный текст", command=self.edit_active_text).pack(fill=tk.X, padx=8, pady=(8, 2))
+        ttk.Button(self.body, text="Текст по контуру...", command=self.edit_text_path).pack(fill=tk.X, padx=8, pady=2)
         ttk.Button(self.body, text="Готово", command=self.finish_text_edit).pack(fill=tk.X, padx=8, pady=(2, 2))
 
     def _add_shape_options(self, tool: str) -> None:
