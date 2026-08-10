@@ -1531,14 +1531,25 @@ class Document:
         lx, ly = int(x) - layer.x, int(y) - layer.y
         if lx < 0 or ly < 0 or lx >= layer.pixels.shape[1] or ly >= layer.pixels.shape[0]:
             return
-        seed = layer.pixels[ly, lx].astype(np.int16)
-        diff = np.abs(layer.pixels.astype(np.int16) - seed).max(axis=2)
-        candidates = (diff <= int(tolerance)).astype(np.uint8)
+        tolerance = max(0, int(tolerance))
+        seed = layer.pixels[ly, lx]
+        if tolerance == 0:
+            soft = np.where(np.all(layer.pixels == seed, axis=2), 255, 0).astype(np.uint8)
+        else:
+            lab = cv2.cvtColor(layer.pixels[:, :, :3], cv2.COLOR_RGB2LAB).astype(np.float32)
+            seed_lab = lab[ly, lx]
+            color_distance = np.linalg.norm(lab - seed_lab, axis=2)
+            alpha_distance = np.abs(layer.pixels[:, :, 3].astype(np.float32) - float(seed[3])) / 255.0 * 100.0
+            distance = np.sqrt(color_distance * color_distance + alpha_distance * alpha_distance)
+            outer = max(1.0, tolerance * 0.9)
+            inner = outer * 0.55
+            soft = np.clip((outer - distance) / max(1e-6, outer - inner) * 255.0, 0, 255).astype(np.uint8)
+        candidates = (soft > 0).astype(np.uint8)
         if contiguous:
             _, labels, _, _ = cv2.connectedComponentsWithStats(candidates, 4)
-            local = (labels == labels[ly, lx]).astype(np.uint8) * 255
+            local = np.where(labels == labels[ly, lx], soft, 0).astype(np.uint8)
         else:
-            local = candidates * 255
+            local = soft
         self.apply_selection_mask(self._layer_mask_to_document(layer, local), mode)
 
     def color_range_selection(self, layer: Layer, x: int, y: int, tolerance: int, mode: str = "replace") -> None:
@@ -1556,7 +1567,9 @@ class Document:
             color_distance = np.linalg.norm(lab - seed_lab, axis=2)
             alpha_distance = np.abs(layer.pixels[:, :, 3].astype(np.float32) - float(seed_rgba[3])) / 255.0 * 100.0
             perceptual_distance = np.sqrt(color_distance * color_distance + alpha_distance * alpha_distance)
-            local = (perceptual_distance <= tolerance * 0.8).astype(np.uint8) * 255
+            outer = max(1.0, tolerance * 0.9)
+            inner = outer * 0.55
+            local = np.clip((outer - perceptual_distance) / max(1e-6, outer - inner) * 255.0, 0, 255).astype(np.uint8)
         self.apply_selection_mask(self._layer_mask_to_document(layer, local), mode)
 
     def _quick_selection_mask(
@@ -1687,18 +1700,18 @@ class Document:
         local = (layer.pixels[:, :, 3] > 0).astype(np.uint8) * 255
         self.apply_selection_mask(self._layer_mask_to_document(layer, local), mode)
 
-    def select_subject(self, layer: Layer, mode: str = "replace") -> None:
-        local = subject_selection_mask(layer.pixels)
+    def select_subject(self, layer: Layer, mode: str = "replace", sensitivity: float = 0.5) -> None:
+        local = subject_selection_mask(layer.pixels, sensitivity)
         if np.any(local):
             self.apply_selection_mask(self._layer_mask_to_document(layer, local), mode)
 
-    def select_background(self, layer: Layer, mode: str = "replace") -> None:
-        local = background_selection_mask(layer.pixels)
+    def select_background(self, layer: Layer, mode: str = "replace", sensitivity: float = 0.5) -> None:
+        local = background_selection_mask(layer.pixels, sensitivity)
         if np.any(local):
             self.apply_selection_mask(self._layer_mask_to_document(layer, local), mode)
 
-    def select_sky(self, layer: Layer, mode: str = "replace") -> None:
-        local = sky_selection_mask(layer.pixels)
+    def select_sky(self, layer: Layer, mode: str = "replace", sensitivity: float = 0.5) -> None:
+        local = sky_selection_mask(layer.pixels, sensitivity)
         if np.any(local):
             self.apply_selection_mask(self._layer_mask_to_document(layer, local), mode)
 
@@ -2590,7 +2603,7 @@ def correct_selection_edges(mask: np.ndarray, image: np.ndarray, radius: int = 3
     return np.where(blend >= 128, 255, 0).astype(np.uint8)
 
 
-def subject_selection_mask(pixels: np.ndarray) -> np.ndarray:
+def subject_selection_mask(pixels: np.ndarray, sensitivity: float = 0.5) -> np.ndarray:
     if pixels.size == 0:
         return np.zeros(pixels.shape[:2], dtype=np.uint8)
     alpha = pixels[:, :, 3]
@@ -2599,91 +2612,83 @@ def subject_selection_mask(pixels: np.ndarray) -> np.ndarray:
         return np.zeros(alpha.shape, dtype=np.uint8)
     coverage = float(np.count_nonzero(visible)) / float(visible.size)
     if coverage < 0.92:
-        seed = visible.astype(np.uint8) * 255
-    else:
-        rgb = pixels[:, :, :3].astype(np.uint8)
-        border = np.zeros(alpha.shape, dtype=bool)
-        border[0, :] = True
-        border[-1, :] = True
-        border[:, 0] = True
-        border[:, -1] = True
-        border &= visible
-        if np.count_nonzero(border) < 8:
-            border = visible
-        background = np.median(rgb[border].astype(np.float32), axis=0)
-        diff = np.linalg.norm(rgb.astype(np.float32) - background, axis=2)
-        diff = np.where(visible, diff, 0.0).astype(np.float32)
-        diff_u8 = cv2.normalize(diff, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
-        threshold, _ = cv2.threshold(diff_u8[visible], 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        seed = np.where((diff_u8 >= max(12, int(threshold))) & visible, 255, 0).astype(np.uint8)
+        return alpha.copy()
 
-    h, w = seed.shape
-    radius = max(1, min(h, w) // 80)
+    sensitivity = float(np.clip(sensitivity, 0.0, 1.0))
+    original_height, original_width = alpha.shape
+    scale = min(1.0, 900.0 / max(original_height, original_width))
+    work_size = (max(2, round(original_width * scale)), max(2, round(original_height * scale)))
+    rgb = pixels[:, :, :3].astype(np.uint8)
+    work_rgb = rgb if work_size == (original_width, original_height) else cv2.resize(rgb, work_size, interpolation=cv2.INTER_AREA)
+    work_visible = visible if work_size == (original_width, original_height) else cv2.resize(visible.astype(np.uint8), work_size, interpolation=cv2.INTER_NEAREST) > 0
+    height, width = work_visible.shape
+    border_width = max(1, min(height, width) // 80)
+    border = np.zeros((height, width), dtype=bool)
+    border[:border_width, :] = True
+    border[-border_width:, :] = True
+    border[:, :border_width] = True
+    border[:, -border_width:] = True
+    border &= work_visible
+    if np.count_nonzero(border) < 8:
+        border = work_visible
+
+    lab = cv2.cvtColor(work_rgb, cv2.COLOR_RGB2LAB).astype(np.float32)
+    background_color = np.median(lab[border], axis=0)
+    distance = np.linalg.norm(lab - background_color, axis=2)
+    border_noise = float(np.percentile(distance[border], 90)) if np.any(border) else 0.0
+    threshold = max(7.0, border_noise + 5.0 + (1.0 - sensitivity) * 20.0)
+    foreground_seed = (distance >= threshold) & work_visible
+    radius = max(1, min(height, width) // 100)
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (radius * 2 + 1, radius * 2 + 1))
-    seed = cv2.morphologyEx(seed, cv2.MORPH_CLOSE, kernel)
-    seed = cv2.morphologyEx(seed, cv2.MORPH_OPEN, kernel)
-    num, labels, stats, _ = cv2.connectedComponentsWithStats(seed, 8)
-    if num <= 1:
-        return seed
+    strong_foreground = cv2.erode(foreground_seed.astype(np.uint8) * 255, kernel) > 0
+    grab_mask = np.full((height, width), cv2.GC_PR_BGD, dtype=np.uint8)
+    grab_mask[~work_visible] = cv2.GC_BGD
+    grab_mask[border] = cv2.GC_BGD
+    grab_mask[foreground_seed] = cv2.GC_PR_FGD
+    grab_mask[strong_foreground] = cv2.GC_FGD
+    if np.any(strong_foreground) and np.any(grab_mask == cv2.GC_BGD):
+        try:
+            background_model = np.zeros((1, 65), dtype=np.float64)
+            foreground_model = np.zeros((1, 65), dtype=np.float64)
+            cv2.grabCut(work_rgb, grab_mask, None, background_model, foreground_model, 4, cv2.GC_INIT_WITH_MASK)
+        except cv2.error:
+            pass
+    binary = np.where((grab_mask == cv2.GC_FGD) | (grab_mask == cv2.GC_PR_FGD), 255, 0).astype(np.uint8)
+    if not np.any(binary):
+        binary = foreground_seed.astype(np.uint8) * 255
 
-    yy, xx = np.indices(seed.shape)
-    cx = (w - 1) * 0.5
-    cy = (h - 1) * 0.5
-    diagonal = max(1.0, float(np.hypot(w, h)))
-    best_label = 0
-    best_score = -1.0
-    for label in range(1, num):
-        area = float(stats[label, cv2.CC_STAT_AREA])
-        if area < 4:
-            continue
-        component = labels == label
-        component_cx = float(xx[component].mean())
-        component_cy = float(yy[component].mean())
-        center_bonus = 1.0 - min(1.0, float(np.hypot(component_cx - cx, component_cy - cy)) / diagonal)
-        score = area * (0.65 + center_bonus)
-        if score > best_score:
-            best_score = score
-            best_label = label
-    if best_label == 0:
-        return np.zeros_like(seed)
-    subject = np.where(labels == best_label, 255, 0).astype(np.uint8)
-    feather_radius = max(1, min(h, w) // 160)
-    soft = cv2.GaussianBlur(subject, (feather_radius * 2 + 1, feather_radius * 2 + 1), feather_radius)
-    return np.where(soft >= 96, 255, 0).astype(np.uint8)
+    inner = cv2.erode(binary, kernel) > 0
+    outer = cv2.dilate(binary, kernel) == 0
+    if np.count_nonzero(inner) >= 4 and np.count_nonzero(outer & work_visible) >= 4:
+        foreground_color = np.median(lab[inner], axis=0)
+        background_color = np.median(lab[outer & work_visible], axis=0)
+        foreground_distance = np.linalg.norm(lab - foreground_color, axis=2)
+        background_distance = np.linalg.norm(lab - background_color, axis=2)
+        matte = background_distance / np.maximum(1e-6, foreground_distance + background_distance)
+        matte = cv2.bilateralFilter((matte * 255.0).astype(np.uint8), 5, 24, 24)
+        boundary = cv2.subtract(cv2.dilate(binary, kernel), cv2.erode(binary, kernel)) > 0
+        soft = binary.copy()
+        soft[boundary] = matte[boundary]
+    else:
+        soft = binary
+    soft = np.minimum(soft, work_visible.astype(np.uint8) * 255)
+    if work_size != (original_width, original_height):
+        soft = cv2.resize(soft, (original_width, original_height), interpolation=cv2.INTER_LINEAR)
+    return np.minimum(soft, alpha).astype(np.uint8)
 
 
-def background_selection_mask(pixels: np.ndarray) -> np.ndarray:
+def background_selection_mask(pixels: np.ndarray, sensitivity: float = 0.5) -> np.ndarray:
     if pixels.size == 0:
         return np.zeros(pixels.shape[:2], dtype=np.uint8)
     alpha = pixels[:, :, 3]
     visible = alpha > 0
     if not np.any(visible):
         return np.full(alpha.shape, 255, dtype=np.uint8)
-    coverage = float(np.count_nonzero(visible)) / float(visible.size)
-    if coverage < 0.92:
-        return border_connected_mask(~visible)
-
-    rgb = pixels[:, :, :3].astype(np.uint8)
-    border = np.zeros(alpha.shape, dtype=bool)
-    border[0, :] = True
-    border[-1, :] = True
-    border[:, 0] = True
-    border[:, -1] = True
-    border &= visible
-    if np.count_nonzero(border) < 8:
-        border = visible
-    background = np.median(rgb[border].astype(np.float32), axis=0)
-    diff = np.linalg.norm(rgb.astype(np.float32) - background, axis=2)
-    border_diff = diff[border]
-    tolerance = max(18.0, float(np.percentile(border_diff, 75)) + 14.0)
-    candidates = (diff <= tolerance) & visible
-    mask = border_connected_mask(candidates)
-    radius = max(1, min(mask.shape) // 120)
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (radius * 2 + 1, radius * 2 + 1))
-    return cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel).astype(np.uint8)
+    subject = subject_selection_mask(pixels, sensitivity)
+    return np.where(visible, 255 - subject, 255).astype(np.uint8)
 
 
-def sky_selection_mask(pixels: np.ndarray) -> np.ndarray:
+def sky_selection_mask(pixels: np.ndarray, sensitivity: float = 0.5) -> np.ndarray:
     if pixels.size == 0:
         return np.zeros(pixels.shape[:2], dtype=np.uint8)
     alpha = pixels[:, :, 3]
@@ -2698,8 +2703,9 @@ def sky_selection_mask(pixels: np.ndarray) -> np.ndarray:
     h, w = alpha.shape
     yy = np.arange(h)[:, None]
     upper_weight = yy < max(1, int(h * 0.72))
-    blue_sky = (hue >= 85) & (hue <= 132) & (saturation >= 24) & (value >= 70)
-    pale_sky = (saturation < 55) & (value >= 172) & (rgb[:, :, 2] >= rgb[:, :, 0] - 8)
+    sensitivity = float(np.clip(sensitivity, 0.0, 1.0))
+    blue_sky = (hue >= 78 + round((1.0 - sensitivity) * 12)) & (hue <= 138 - round((1.0 - sensitivity) * 6)) & (saturation >= max(8, 38 - round(sensitivity * 28))) & (value >= max(45, 95 - round(sensitivity * 45)))
+    pale_sky = (saturation < 40 + round(sensitivity * 35)) & (value >= 195 - round(sensitivity * 48)) & (rgb[:, :, 2] >= rgb[:, :, 0] - round(2 + sensitivity * 16))
     candidates = (blue_sky | pale_sky) & upper_weight & visible
     connected = top_connected_mask(candidates)
     if not np.any(connected):
@@ -2708,7 +2714,20 @@ def sky_selection_mask(pixels: np.ndarray) -> np.ndarray:
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (radius * 2 + 1, radius * 2 + 1))
     connected = cv2.morphologyEx(connected, cv2.MORPH_CLOSE, kernel)
     connected = cv2.morphologyEx(connected, cv2.MORPH_OPEN, kernel)
-    return connected.astype(np.uint8)
+    soft = cv2.GaussianBlur(connected, (radius * 2 + 1, radius * 2 + 1), radius)
+    soft[connected == 255] = np.maximum(soft[connected == 255], 220)
+    return np.minimum(soft, alpha).astype(np.uint8)
+
+
+def automatic_selection_mask(pixels: np.ndarray, target: str, sensitivity: float = 0.5) -> np.ndarray:
+    normalized = str(target).lower()
+    if normalized in {"subject", "object", "объект"}:
+        return subject_selection_mask(pixels, sensitivity)
+    if normalized in {"background", "фон"}:
+        return background_selection_mask(pixels, sensitivity)
+    if normalized in {"sky", "небо"}:
+        return sky_selection_mask(pixels, sensitivity)
+    raise ValueError(f"Unsupported automatic selection target: {target}")
 
 
 def border_connected_mask(candidates: np.ndarray) -> np.ndarray:

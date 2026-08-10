@@ -235,6 +235,43 @@ class StartupTests(unittest.TestCase):
         self.assertTrue(np.array_equal(self.app.doc.layer.mask, refined))
         self.assertIsInstance(self.app.history.undo_stack[-1], LayerInsertCommand)
 
+    def test_automatic_selection_preview_and_refine_handoff(self) -> None:
+        self.app.doc = self.app.doc.new(320, 240, (55, 105, 165, 255))
+        layer = self.app.doc.layer
+        cv2.ellipse(layer.pixels, (160, 135), (58, 70), 0, 0, 360, (190, 60, 45, 255), -1)
+        cv2.circle(layer.pixels, (235, 165), 9, (190, 60, 45, 255), -1)
+        self.app.history.clear()
+        original_wait = tk.Toplevel.wait_window
+        original_refine = self.app.select_and_mask_workspace
+        refine_calls: list[bool] = []
+        centered: list[bool] = []
+        self.app.select_and_mask_workspace = lambda: refine_calls.append(True)
+
+        def configure_and_accept(window, target=None) -> None:
+            window.update()
+            self.assertTrue(self.app._automatic_selection_preview.cget("image"))
+            self.app._automatic_selection_target.set("Объект")
+            self.app._automatic_selection_sensitivity.set(0.65)
+            self.app._automatic_selection_output.set("Уточнить в «Выделить и маска»")
+            expected_x = (window.winfo_screenwidth() - window.winfo_width()) // 2
+            expected_y = (window.winfo_screenheight() - window.winfo_height()) // 2
+            centered.append(abs(window.winfo_x() - expected_x) <= 3 and abs(window.winfo_y() - expected_y) <= 3)
+            self.app._automatic_selection_accept()
+
+        tk.Toplevel.wait_window = configure_and_accept
+        try:
+            self.app.automatic_selection_workspace()
+        finally:
+            tk.Toplevel.wait_window = original_wait
+            self.app.select_and_mask_workspace = original_refine
+        self.assertIsNotNone(self.app.doc.selection_mask)
+        self.assertEqual(int(self.app.doc.selection_mask[135, 160]), 255)
+        self.assertEqual(int(self.app.doc.selection_mask[10, 10]), 0)
+        self.assertTrue(np.any((self.app.doc.selection_mask > 0) & (self.app.doc.selection_mask < 255)))
+        self.assertIsInstance(self.app.history.undo_stack[-1], SelectionMaskCommand)
+        self.assertEqual(refine_calls, [True])
+        self.assertTrue(centered[0])
+
     def test_editor_shows_tool_names_and_explicit_options_title(self) -> None:
         move_button = self.app.tool_palette.buttons["move"]
         self.assertEqual(str(move_button.cget("text")), "Перемещение")
