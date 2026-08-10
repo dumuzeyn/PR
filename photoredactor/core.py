@@ -2431,6 +2431,82 @@ def refine_layer_mask(
     return refine_selection_mask(out, 0, max(0, int(feather)), max(0.0, float(contrast)), 0)
 
 
+def refine_selection_brush(
+    mask: np.ndarray,
+    image: np.ndarray,
+    brush: np.ndarray,
+    mode: str = "refine",
+    radius: int = 5,
+    strength: float = 0.75,
+) -> np.ndarray:
+    if mask is None or mask.size == 0:
+        return np.zeros((0, 0), dtype=np.uint8)
+    if brush.shape != mask.shape:
+        raise ValueError("Brush and selection mask must have the same size")
+    radius = max(1, int(radius))
+    strength = float(np.clip(strength, 0.0, 1.0))
+    coverage = brush.astype(np.float32) / 255.0 * strength
+    source = mask.astype(np.float32)
+    if mode == "add":
+        return np.maximum(source, coverage * 255.0).astype(np.uint8)
+    if mode == "subtract":
+        return np.clip(source * (1.0 - coverage), 0, 255).astype(np.uint8)
+    kernel_size = radius * 2 + 1
+    if mode == "smooth":
+        smoothed = cv2.GaussianBlur(mask, (kernel_size, kernel_size), radius)
+        return np.clip(source * (1.0 - coverage) + smoothed.astype(np.float32) * coverage, 0, 255).astype(np.uint8)
+
+    binary = np.where(mask >= 128, 255, 0).astype(np.uint8)
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
+    definite_foreground = cv2.erode(binary, kernel) > 0
+    definite_background = cv2.dilate(binary, kernel) == 0
+    visible = image[:, :, 3] > 0 if image.shape[2] > 3 else np.ones(mask.shape, dtype=bool)
+    definite_foreground &= visible
+    definite_background &= visible
+    if np.count_nonzero(definite_foreground) < 4 or np.count_nonzero(definite_background) < 4:
+        fallback = cv2.GaussianBlur(mask, (kernel_size, kernel_size), radius)
+        return np.clip(source * (1.0 - coverage) + fallback.astype(np.float32) * coverage, 0, 255).astype(np.uint8)
+
+    lab = cv2.cvtColor(image[:, :, :3].astype(np.uint8), cv2.COLOR_RGB2LAB).astype(np.float32)
+    foreground_color = np.median(lab[definite_foreground], axis=0)
+    background_color = np.median(lab[definite_background], axis=0)
+    foreground_distance = np.linalg.norm(lab - foreground_color, axis=2)
+    background_distance = np.linalg.norm(lab - background_color, axis=2)
+    matte = background_distance / np.maximum(1e-6, foreground_distance + background_distance)
+    matte = cv2.bilateralFilter((matte * 255.0).astype(np.uint8), 5, 28, 28).astype(np.float32)
+    matte[definite_foreground] = 255.0
+    matte[definite_background] = 0.0
+    boundary = cv2.subtract(cv2.dilate(binary, kernel), cv2.erode(binary, kernel)).astype(np.float32) / 255.0
+    blend = coverage * np.maximum(boundary, (brush.astype(np.float32) / 255.0) * 0.35)
+    return np.clip(source * (1.0 - blend) + matte * blend, 0, 255).astype(np.uint8)
+
+
+def decontaminate_edge_colors(pixels: np.ndarray, mask: np.ndarray, strength: float = 0.5, radius: int = 3) -> np.ndarray:
+    if pixels.size == 0 or mask.shape != pixels.shape[:2]:
+        return pixels.copy()
+    strength = float(np.clip(strength, 0.0, 1.0))
+    radius = max(1, int(radius))
+    out = pixels.copy()
+    soft = mask.astype(np.float32) / 255.0
+    edge = (soft > 0.02) & (soft < 0.98)
+    if not np.any(edge):
+        return out
+    solid = mask >= 245
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (radius * 2 + 1, radius * 2 + 1))
+    solid_rgb = np.where(solid[:, :, None], pixels[:, :, :3], 0).astype(np.uint8)
+    expanded = np.empty_like(solid_rgb)
+    for channel in range(3):
+        expanded[:, :, channel] = cv2.dilate(solid_rgb[:, :, channel], kernel)
+    edge &= np.any(expanded > 0, axis=2)
+    if not np.any(edge):
+        return out
+    mix = np.clip((1.0 - np.abs(soft - 0.5) * 2.0) * strength, 0.0, 1.0)
+    rgb = pixels[:, :, :3].astype(np.float32)
+    rgb[edge] = rgb[edge] * (1.0 - mix[edge, None]) + expanded[edge].astype(np.float32) * mix[edge, None]
+    out[:, :, :3] = np.clip(rgb, 0, 255).astype(np.uint8)
+    return out
+
+
 def cleanup_selection_edges(mask: np.ndarray, image: np.ndarray, radius: int = 3, strength: float = 0.7) -> np.ndarray:
     if mask is None:
         return np.zeros((0, 0), dtype=np.uint8)

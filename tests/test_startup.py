@@ -6,11 +6,12 @@ import time
 from types import SimpleNamespace
 import unittest
 
+import cv2
 import numpy as np
 from PIL import Image
 
 from photoredactor.app import PhotoRedactorApp
-from photoredactor.history import DocumentStateCommand, LayerInsertCommand, LayerMoveCommand, SelectionMaskCommand, ShapeDataCommand, TextDataCommand
+from photoredactor.history import DocumentStateCommand, LayerFieldsCommand, LayerInsertCommand, LayerMoveCommand, SelectionMaskCommand, ShapeDataCommand, TextDataCommand
 from photoredactor.ui.shortcuts import COMMAND_SHORTCUTS
 
 
@@ -151,6 +152,88 @@ class StartupTests(unittest.TestCase):
         self.assertEqual(layer.text_data.get("path_mode"), "none")
         self.app.redo()
         self.assertEqual(layer.text_data.get("path_mode"), "bezier")
+
+    def test_select_and_mask_brush_outputs_new_layer_with_compact_undo(self) -> None:
+        self.app.doc = self.app.doc.new(320, 240, (30, 80, 160, 255))
+        layer = self.app.doc.layer
+        layer.pixels[55:190, 70:220, :3] = (190, 65, 45)
+        selection = np.zeros((240, 320), dtype=np.uint8)
+        selection[70:180, 85:205] = 255
+        self.app.doc.selection_mask = selection
+        self.app.history.clear()
+        original_wait = tk.Toplevel.wait_window
+
+        def paint_and_accept(window, target=None) -> None:
+            window.update()
+            self.assertGreaterEqual(self.app._select_mask_canvas.winfo_width(), 500)
+            self.app._select_mask_brush_mode.set("Добавить")
+            self.app._select_mask_brush_size.set(30)
+            self.app._select_mask_apply_stroke((220, 120), (260, 120))
+            self.app._select_mask_output.set("Новый слой")
+            self.app._select_mask_decontaminate.set(True)
+            self.app._select_mask_accept()
+
+        tk.Toplevel.wait_window = paint_and_accept
+        try:
+            self.app.select_and_mask_workspace()
+        finally:
+            tk.Toplevel.wait_window = original_wait
+        self.assertEqual(len(self.app.doc.layers), 2)
+        result_layer = self.app.doc.layer
+        self.assertEqual(result_layer.kind, "raster")
+        self.assertGreater(int(result_layer.pixels[120, 250, 3]), 0)
+        self.assertEqual(len(self.app.history.undo_stack), 1)
+        self.assertIsInstance(self.app.history.undo_stack[-1], LayerInsertCommand)
+        self.app.undo()
+        self.assertEqual(len(self.app.doc.layers), 1)
+        self.app.redo()
+        self.assertEqual(len(self.app.doc.layers), 2)
+
+    def test_select_and_mask_layer_mask_output_uses_layer_fields_history(self) -> None:
+        self.app.doc = self.app.doc.new(180, 120, (255, 255, 255, 255))
+        selection = np.zeros((120, 180), dtype=np.uint8)
+        selection[20:100, 35:145] = 180
+        self.app.doc.selection_mask = np.where(selection > 0, 255, 0).astype(np.uint8)
+        self.app.history.clear()
+        original_dialog = self.app.select_and_mask_dialog
+        self.app.select_and_mask_dialog = lambda: {"mask": selection, "output": "Маска слоя", "decontaminate": False}
+        try:
+            self.app.select_and_mask_workspace()
+        finally:
+            self.app.select_and_mask_dialog = original_dialog
+        self.assertTrue(np.array_equal(self.app.doc.layer.mask, selection))
+        self.assertIsInstance(self.app.history.undo_stack[-1], LayerFieldsCommand)
+        self.app.undo()
+        self.assertIsNone(self.app.doc.layer.mask)
+        self.app.redo()
+        self.assertTrue(np.array_equal(self.app.doc.layer.mask, selection))
+
+    def test_select_and_mask_selection_and_new_layer_mask_outputs(self) -> None:
+        self.app.doc = self.app.doc.new(160, 110, (220, 225, 230, 255))
+        original = np.zeros((110, 160), dtype=np.uint8)
+        original[25:85, 45:115] = 255
+        refined = cv2.GaussianBlur(original, (9, 9), 3)
+        self.app.doc.selection_mask = original.copy()
+        original_dialog = self.app.select_and_mask_dialog
+        self.app.select_and_mask_dialog = lambda: {"mask": refined, "output": "Выделение", "decontaminate": False}
+        try:
+            self.app.select_and_mask_workspace()
+        finally:
+            self.app.select_and_mask_dialog = original_dialog
+        self.assertTrue(np.array_equal(self.app.doc.selection_mask, refined))
+        self.assertIsInstance(self.app.history.undo_stack[-1], SelectionMaskCommand)
+        self.app.undo()
+        self.assertTrue(np.array_equal(self.app.doc.selection_mask, original))
+
+        self.app.history.clear()
+        self.app.select_and_mask_dialog = lambda: {"mask": refined, "output": "Новый слой с маской", "decontaminate": False}
+        try:
+            self.app.select_and_mask_workspace()
+        finally:
+            self.app.select_and_mask_dialog = original_dialog
+        self.assertEqual(len(self.app.doc.layers), 2)
+        self.assertTrue(np.array_equal(self.app.doc.layer.mask, refined))
+        self.assertIsInstance(self.app.history.undo_stack[-1], LayerInsertCommand)
 
     def test_editor_shows_tool_names_and_explicit_options_title(self) -> None:
         move_button = self.app.tool_palette.buttons["move"]
