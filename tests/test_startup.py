@@ -357,6 +357,17 @@ class StartupTests(unittest.TestCase):
             self.app._transform_workspace_mode.set("Сетка")
             window.update()
             self.assertEqual(len(self.app._transform_workspace_points()), 16)
+            self.app._transform_workspace_topology.set("3 x 3")
+            window.update()
+            self.assertEqual(self.app._transform_workspace_grid_shape(), (3, 3))
+            self.app._transform_workspace_selected_node.set(4)
+            self.app._transform_workspace_split_grid("cross")
+            window.update()
+            self.assertEqual(self.app._transform_workspace_grid_shape(), (4, 4))
+            self.assertEqual(self.app._transform_workspace_topology.get(), "Пользовательская")
+            self.app._transform_workspace_select_grid_line("row", 2)
+            self.app._transform_workspace_delete_grid_line()
+            self.assertEqual(self.app._transform_workspace_grid_shape(), (3, 4))
             self.app._transform_workspace_selected_node.set(5)
             old_point = self.app._transform_workspace_points()[5]
             self.app._transform_workspace_node_x.set(old_point[0] + 24)
@@ -373,7 +384,9 @@ class StartupTests(unittest.TestCase):
         finally:
             tk.Toplevel.wait_window = original_wait
         self.assertEqual(data["mode"], "Сетка")
-        self.assertEqual(len(data["points"]), 16)
+        self.assertEqual(len(data["points"]), 12)
+        self.assertEqual(data["row_positions"], [0.0, 0.5, 1.0])
+        self.assertEqual(data["column_positions"], [0.0, 0.5, 0.75, 1.0])
         self.assertTrue(centered[0])
 
     def test_transform_workspace_applies_once_and_preserves_shape_editability(self) -> None:

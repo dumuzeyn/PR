@@ -217,7 +217,10 @@ class TextLayersMixin:
             self.doc.set_active_layer_advanced_transform("perspective", data["points"])
             return
         if mode == "Сетка":
-            self.doc.set_active_layer_advanced_transform("mesh", data["points"], int(data.get("rows", 4)), int(data.get("columns", 4)))
+            self.doc.set_active_layer_advanced_transform(
+                "mesh", data["points"], int(data.get("rows", 4)), int(data.get("columns", 4)),
+                data.get("row_positions"), data.get("column_positions"),
+            )
             return
         if layer.transform_data is not None:
             self.doc.reset_active_layer_advanced_transform()

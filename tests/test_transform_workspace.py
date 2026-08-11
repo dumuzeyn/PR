@@ -5,6 +5,7 @@ from pathlib import Path
 import numpy as np
 
 from photoredactor.core import Document, mesh_warp_pixels, perspective_warp_pixels, render_shape_layer, render_text_layer
+from photoredactor.warp_grid import insert_grid_line, regular_grid_points, remove_grid_line
 
 
 def sample_pixels(width: int = 96, height: int = 72) -> np.ndarray:
@@ -39,6 +40,51 @@ def test_mesh_warp_uses_all_editable_nodes() -> None:
     regular = [(x, y) for y in np.linspace(0, source.shape[0] - 1, 4) for x in np.linspace(0, source.shape[1] - 1, 4)]
     unwarped, _ = mesh_warp_pixels(source, regular, 4, 4)
     assert not np.array_equal(output, unwarped)
+
+
+def test_custom_grid_split_and_remove_preserve_deformed_surface() -> None:
+    rows = columns = 3
+    row_positions = [0.0, 0.5, 1.0]
+    column_positions = [0.0, 0.5, 1.0]
+    points = regular_grid_points((0.0, 0.0, 95.0, 71.0), row_positions, column_positions)
+    points[4][1] -= 14.0
+    points, rows, columns, row_positions, column_positions, selected = insert_grid_line(
+        points, rows, columns, row_positions, column_positions, "column", 0
+    )
+    assert (rows, columns, selected) == (3, 4, 1)
+    assert column_positions == [0.0, 0.25, 0.5, 1.0]
+    source = sample_pixels()
+    output, _ = mesh_warp_pixels(
+        source, points, rows, columns, row_positions=row_positions, column_positions=column_positions
+    )
+    assert np.count_nonzero(output[:, :, 3]) > 0
+    points, rows, columns, row_positions, column_positions, _ = remove_grid_line(
+        points, rows, columns, row_positions, column_positions, "column", 1
+    )
+    assert (rows, columns) == (3, 3)
+    assert column_positions == [0.0, 0.5, 1.0]
+
+
+def test_non_uniform_mesh_topology_roundtrips_with_smart_transform(tmp_path: Path) -> None:
+    document = Document.new(180, 130, (0, 0, 0, 0))
+    layer = document.layer
+    layer.pixels[20:110, 30:155] = sample_pixels(125, 90)
+    row_positions = [0.0, 0.2, 0.65, 1.0]
+    column_positions = [0.0, 0.35, 1.0]
+    points = regular_grid_points((30.0, 20.0, 124.0, 89.0), row_positions, column_positions)
+    points[4][0] += 11.0
+    document.set_active_layer_advanced_transform(
+        "mesh", points, 4, 3, row_positions, column_positions
+    )
+    assert layer.transform_data["row_positions"] == row_positions
+    assert layer.transform_data["column_positions"] == column_positions
+    rendered = layer.pixels.copy()
+    project = tmp_path / "custom-warp.prdx"
+    document.save_project(project)
+    restored = Document.open_project(project)
+    assert restored.layer.transform_data["row_positions"] == row_positions
+    assert restored.layer.transform_data["column_positions"] == column_positions
+    assert np.array_equal(restored.layer.pixels, rendered)
 
 
 def test_shape_stays_editable_after_perspective_and_roundtrip(tmp_path: Path) -> None:

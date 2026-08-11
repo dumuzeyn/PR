@@ -2,8 +2,7 @@ from __future__ import annotations
 
 from ..app_shared import *
 from ..preview_ops import preview_scale_for_bounds, transform_preview_pixels
-
-
+from ..warp_grid import insert_grid_line, normalized_grid_positions, regular_grid_points, remove_grid_line
 class TransformWorkspaceMixin:
     def transform_workspace_dialog(self, layer: Layer, initial_mode: str = "Свободная") -> dict[str, object] | None:
         dialog = tk.Toplevel(self)
@@ -12,9 +11,11 @@ class TransformWorkspaceMixin:
         dialog.grab_set()
         dialog.minsize(980, 650)
         result: dict[str, object] | None = None
-        rows = columns = 4
-
         stored = layer.transform_data or {}
+        rows = max(2, int(stored.get("rows", 4)))
+        columns = max(2, int(stored.get("columns", 4)))
+        row_positions = normalized_grid_positions(stored.get("row_positions"), rows)
+        column_positions = normalized_grid_positions(stored.get("column_positions"), columns)
         if layer.transform_source is not None and stored:
             source = layer.transform_source.copy()
             source_x = int(stored.get("base_x", layer.x))
@@ -43,6 +44,7 @@ class TransformWorkspaceMixin:
         node_y = tk.DoubleVar(value=float(source_y))
         preset = tk.StringVar(value="Без деформации")
         selected_node = tk.IntVar(value=0)
+        selected_line: list[tuple[str, int] | None] = [None]
         loading = [False]
         preview_transform = {"scale": 1.0, "ox": 0.0, "oy": 0.0}
         drag_state: dict[str, object] = {"kind": None, "last": None}
@@ -57,7 +59,7 @@ class TransformWorkspaceMixin:
         def regular_mesh() -> list[list[float]]:
             x, y = float(x_var.get()), float(y_var.get())
             width, height = max(1.0, float(width_var.get())), max(1.0, float(height_var.get()))
-            return [[x + width * column / (columns - 1), y + height * row / (rows - 1)] for row in range(rows) for column in range(columns)]
+            return regular_grid_points((x, y, width, height), row_positions, column_positions)
 
         stored_mode = str(stored.get("mode", ""))
         stored_points = stored.get("points")
@@ -116,6 +118,17 @@ class TransformWorkspaceMixin:
         ttk.Label(mesh_controls, text="Форма сетки", style="PanelTitle.TLabel").pack(anchor=tk.W, pady=(0, 4))
         preset_box = ttk.Combobox(mesh_controls, textvariable=preset, values=["Без деформации", "Арка", "Выпуклость", "Волна"], state="readonly")
         preset_box.pack(fill=tk.X)
+        topology = tk.StringVar(value=f"{rows} x {columns}" if rows == columns and rows in {3, 4, 5} else "Пользовательская")
+        ttk.Label(mesh_controls, text="Плотность", style="Secondary.TLabel").pack(anchor=tk.W, pady=(9, 3))
+        topology_box = ttk.Combobox(mesh_controls, textvariable=topology, values=["3 x 3", "4 x 4", "5 x 5", "Пользовательская"], state="readonly")
+        topology_box.pack(fill=tk.X)
+        split_row = ttk.Frame(mesh_controls); split_row.pack(fill=tk.X, pady=(8, 3))
+        ttk.Button(split_row, text="Разделить ↔", command=lambda: split_grid("row")).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        ttk.Button(split_row, text="Разделить ↕", command=lambda: split_grid("column")).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(4, 0))
+        ttk.Button(mesh_controls, text="Разделить крест-накрест", command=lambda: split_grid("cross")).pack(fill=tk.X, pady=3)
+        ttk.Button(mesh_controls, text="Удалить выбранную линию", command=lambda: delete_grid_line()).pack(fill=tk.X, pady=3)
+        grid_status = ttk.Label(mesh_controls, text="", style="Secondary.TLabel", wraplength=230)
+        grid_status.pack(fill=tk.X, pady=(5, 0))
 
         def current_free_values() -> tuple[float, float, float, float, float]:
             try:
@@ -159,6 +172,7 @@ class TransformWorkspaceMixin:
                 output, output_x, output_y, pixel_scale = transform_preview_pixels(
                     source, preview_sources, mode.get(), min(1.0, scale), current_free_values(), points,
                     rows, columns, flip_horizontal.get(), flip_vertical.get(),
+                    row_positions, column_positions,
                 )
             except (ValueError, cv2.error, tk.TclError):
                 return
@@ -192,14 +206,17 @@ class TransformWorkspaceMixin:
                 if show_grid.get():
                     for row in range(rows):
                         line = points[row * columns:(row + 1) * columns]
-                        canvas.create_line(*(coordinate for point in line for coordinate in doc_to_preview(point)), fill=TOKENS.ACCENT, width=1)
+                        active = selected_line[0] == ("row", row)
+                        canvas.create_line(*(coordinate for point in line for coordinate in doc_to_preview(point)), fill=TOKENS.DANGER if active else TOKENS.ACCENT, width=3 if active else 1)
                     for column in range(columns):
                         line = [points[row * columns + column] for row in range(rows)]
-                        canvas.create_line(*(coordinate for point in line for coordinate in doc_to_preview(point)), fill=TOKENS.ACCENT, width=1)
+                        active = selected_line[0] == ("column", column)
+                        canvas.create_line(*(coordinate for point in line for coordinate in doc_to_preview(point)), fill=TOKENS.DANGER if active else TOKENS.ACCENT, width=3 if active else 1)
                 for index, point in enumerate(points):
                     px, py = doc_to_preview(point)
                     canvas.create_oval(px - 5, py - 5, px + 5, py + 5, fill="#ffffff" if index != selected_node.get() else TOKENS.ACCENT, outline=TOKENS.ACCENT, width=1)
             status.configure(text=f"{layer.name}  |  {mode.get()}  |  {round(output.shape[1] / pixel_scale)} x {round(output.shape[0] / pixel_scale)} px")
+            grid_status.configure(text=f"Сетка {rows} x {columns}. Кликните внутреннюю линию, чтобы удалить её.")
 
         def schedule_redraw(*_args) -> None:
             if redraw_after_id[0] is None:
@@ -225,6 +242,7 @@ class TransformWorkspaceMixin:
 
         def change_mode(*_args) -> None:
             nonlocal points
+            selected_line[0] = None
             free_controls.pack_forget(); node_controls.pack_forget(); mesh_controls.pack_forget()
             if mode.get() == "Свободная":
                 free_controls.pack(fill=tk.X, pady=(14, 0))
@@ -248,8 +266,8 @@ class TransformWorkspaceMixin:
             selected = preset.get()
             for index, point in enumerate(points):
                 row, column = divmod(index, columns)
-                nx = column / (columns - 1)
-                ny = row / (rows - 1)
+                nx = column_positions[column]
+                ny = row_positions[row]
                 if selected == "Арка":
                     point[1] -= math.sin(nx * math.pi) * height * 0.2
                 elif selected == "Выпуклость":
@@ -261,6 +279,51 @@ class TransformWorkspaceMixin:
                     point[1] += math.sin(nx * math.tau) * height * 0.12
             load_selected_node(); schedule_redraw()
 
+        def apply_topology(*_args) -> None:
+            nonlocal points, rows, columns, row_positions, column_positions
+            value = topology.get()
+            if value == "Пользовательская":
+                return
+            size = int(value.split()[0])
+            rows = columns = size
+            row_positions = normalized_grid_positions(None, rows)
+            column_positions = normalized_grid_positions(None, columns)
+            points = regular_mesh()
+            selected_node.set(0); selected_line[0] = None
+            load_selected_node(); schedule_redraw()
+
+        def split_grid(axis: str) -> None:
+            nonlocal points, rows, columns, row_positions, column_positions
+            index = min(max(0, selected_node.get()), len(points) - 1)
+            row, column = divmod(index, columns)
+            axes = ("row", "column") if axis == "cross" else (axis,)
+            for current_axis in axes:
+                interval = min(row, rows - 2) if current_axis == "row" else min(column, columns - 2)
+                points, rows, columns, row_positions, column_positions, selected = insert_grid_line(
+                    points, rows, columns, row_positions, column_positions, current_axis, interval
+                )
+                selected_node.set(selected)
+                selected_line[0] = (current_axis, interval + 1)
+            topology.set("Пользовательская")
+            load_selected_node(); schedule_redraw()
+
+        def delete_grid_line() -> None:
+            nonlocal points, rows, columns, row_positions, column_positions
+            if selected_line[0] is None:
+                grid_status.configure(text="Сначала кликните внутреннюю линию сетки.")
+                return
+            axis, index = selected_line[0]
+            try:
+                points, rows, columns, row_positions, column_positions, selected = remove_grid_line(
+                    points, rows, columns, row_positions, column_positions, axis, index
+                )
+            except ValueError:
+                grid_status.configure(text="Крайнюю линию удалить нельзя.")
+                return
+            selected_node.set(selected); selected_line[0] = None
+            topology.set("Пользовательская")
+            load_selected_node(); schedule_redraw()
+
         def nearest_node(event) -> int | None:
             best, distance = None, 14.0
             for index, point in enumerate(points):
@@ -268,6 +331,25 @@ class TransformWorkspaceMixin:
                 current = math.hypot(event.x - px, event.y - py)
                 if current < distance:
                     best, distance = index, current
+            return best
+
+        def nearest_grid_line(event) -> tuple[str, int] | None:
+            best: tuple[str, int] | None = None
+            best_distance = 10.0
+            candidates = [
+                ("row", index, points[index * columns:(index + 1) * columns]) for index in range(1, rows - 1)
+            ] + [
+                ("column", index, [points[row * columns + index] for row in range(rows)]) for index in range(1, columns - 1)
+            ]
+            target = np.array([event.x, event.y], dtype=np.float64)
+            for axis, index, line in candidates:
+                shown = [np.array(doc_to_preview(point), dtype=np.float64) for point in line]
+                for start, end in zip(shown, shown[1:]):
+                    segment = end - start
+                    ratio = float(np.clip(np.dot(target - start, segment) / max(1e-8, np.dot(segment, segment)), 0.0, 1.0))
+                    distance = float(np.linalg.norm(target - (start + segment * ratio)))
+                    if distance < best_distance:
+                        best, best_distance = (axis, index), distance
             return best
 
         def press(event) -> None:
@@ -288,10 +370,15 @@ class TransformWorkspaceMixin:
             else:
                 index = nearest_node(event)
                 if index is not None:
+                    selected_line[0] = None
                     selected_node.set(index); load_selected_node(); schedule_redraw()
-                drag_state.update(kind=index, last=doc_point)
+                    drag_state.update(kind=index, last=doc_point)
+                elif mode.get() == "Сетка":
+                    selected_line[0] = nearest_grid_line(event)
+                    drag_state.update(kind=None, last=doc_point); schedule_redraw()
 
         def drag(event) -> None:
+            nonlocal points
             current = preview_to_doc(event.x, event.y)
             kind = drag_state.get("kind")
             last = drag_state.get("last")
@@ -302,15 +389,47 @@ class TransformWorkspaceMixin:
                 drag_state["last"] = current
                 load_selected_node(); schedule_redraw(); return
             x, y, width, height, angle = current_free_values()
+            shift = bool(event.state & 0x0001)
+            control = bool(event.state & 0x0004)
+            alt = bool(event.state & 0x0008)
             if kind == "move":
-                x_var.set(x + current[0] - last[0]); y_var.set(y + current[1] - last[1])
+                dx, dy = current[0] - last[0], current[1] - last[1]
+                if shift:
+                    dx, dy = (dx, 0.0) if abs(dx) >= abs(dy) else (0.0, dy)
+                x_var.set(x + dx); y_var.set(y + dy)
             elif kind == "rotate":
                 center_x, center_y = x + width / 2.0, y + height / 2.0
-                angle_var.set(math.degrees(math.atan2(current[1] - center_y, current[0] - center_x)) + 90.0)
+                new_angle = math.degrees(math.atan2(current[1] - center_y, current[0] - center_x)) + 90.0
+                angle_var.set(round(new_angle / 15.0) * 15.0 if shift else new_angle)
+            elif control and str(kind) in {"nw", "ne", "se", "sw"}:
+                handles = free_handle_points()
+                points = [list(handles[name]) for name in ("nw", "ne", "se", "sw")]
+                node_index = {"nw": 0, "ne": 1, "se": 2, "sw": 3}[str(kind)]
+                points[node_index] = [current[0], current[1]]
+                selected_node.set(node_index)
+                drag_state["kind"] = node_index
+                mode.set("Перспектива")
             else:
-                box = resize_box_from_handle((round(x), round(y), round(x + width), round(y + height)), str(kind), (round(current[0]), round(current[1])), keep_proportions=keep_ratio.get())
+                box = resize_box_from_handle(
+                    (round(x), round(y), round(x + width), round(y + height)), str(kind),
+                    (round(current[0]), round(current[1])),
+                    keep_proportions=bool(keep_ratio.get()) != shift, from_center=alt,
+                )
                 x_var.set(box[0]); y_var.set(box[1]); width_var.set(box[2] - box[0]); height_var.set(box[3] - box[1])
             drag_state["last"] = current
+
+        def update_cursor(event) -> None:
+            if mode.get() != "Свободная":
+                canvas.configure(cursor="crosshair")
+                return
+            best, distance = None, 13.0
+            for name, point in free_handle_points().items():
+                px, py = doc_to_preview(point)
+                current = math.hypot(event.x - px, event.y - py)
+                if current < distance:
+                    best, distance = name, current
+            cursor = "exchange" if best == "rotate" else "sizing" if best else "fleur"
+            canvas.configure(cursor=cursor)
 
         def accept() -> None:
             nonlocal result
@@ -322,13 +441,17 @@ class TransformWorkspaceMixin:
                     "angle": angle, "flip_horizontal": flip_horizontal.get(), "flip_vertical": flip_vertical.get(),
                 }
             else:
-                result = {"mode": selected_mode, "points": [list(point) for point in points], "rows": rows, "columns": columns}
+                result = {
+                    "mode": selected_mode, "points": [list(point) for point in points], "rows": rows, "columns": columns,
+                    "row_positions": list(row_positions), "column_positions": list(column_positions),
+                }
             close_dialog()
 
         def reset() -> None:
-            nonlocal points
+            nonlocal points, row_positions, column_positions
             x_var.set(source_x); y_var.set(source_y); width_var.set(source.shape[1]); height_var.set(source.shape[0]); angle_var.set(0.0)
             flip_horizontal.set(False); flip_vertical.set(False); preset.set("Без деформации")
+            row_positions = normalized_grid_positions(None, rows); column_positions = normalized_grid_positions(None, columns)
             points = rectangle_points() if mode.get() == "Перспектива" else regular_mesh()
             selected_node.set(0); load_selected_node(); schedule_redraw()
 
@@ -352,129 +475,26 @@ class TransformWorkspaceMixin:
         canvas.bind("<ButtonPress-1>", press)
         canvas.bind("<B1-Motion>", drag)
         canvas.bind("<ButtonRelease-1>", lambda _event: drag_state.update(kind=None, last=None))
+        canvas.bind("<Motion>", update_cursor)
         mode.trace_add("write", change_mode)
         show_grid.trace_add("write", schedule_redraw)
         preset.trace_add("write", apply_mesh_preset)
+        topology.trace_add("write", apply_topology)
         node_x.trace_add("write", node_fields_changed); node_y.trace_add("write", node_fields_changed)
         for variable in (x_var, y_var, width_var, height_var, angle_var, flip_horizontal, flip_vertical):
             variable.trace_add("write", schedule_redraw)
-        self._transform_workspace_canvas = canvas
-        self._transform_workspace_mode = mode
+        self._transform_workspace_canvas = canvas; self._transform_workspace_mode = mode
         self._transform_workspace_points = lambda: [list(point) for point in points]
-        self._transform_workspace_selected_node = selected_node
-        self._transform_workspace_node_x = node_x
+        self._transform_workspace_selected_node = selected_node; self._transform_workspace_node_x = node_x
         self._transform_workspace_node_y = node_y
-        self._transform_workspace_accept = accept
-        self._transform_workspace_reset = reset
+        self._transform_workspace_topology = topology; self._transform_workspace_grid_shape = lambda: (rows, columns)
+        self._transform_workspace_grid_axes = lambda: (list(row_positions), list(column_positions)); self._transform_workspace_split_grid = split_grid
+        self._transform_workspace_delete_grid_line = delete_grid_line; self._transform_workspace_select_grid_line = lambda axis, index: selected_line.__setitem__(0, (axis, index))
+        self._transform_workspace_accept = accept; self._transform_workspace_reset = reset
         dialog.protocol("WM_DELETE_WINDOW", close_dialog)
+        dialog.bind("<Return>", lambda _event: accept())
+        dialog.bind("<Escape>", lambda _event: close_dialog())
         self.center_toplevel(dialog, 1080, 720)
         change_mode()
-        dialog.wait_window()
-        return result
-
-    def transform_selected_pixels(self) -> None:
-        layer = self.doc.layer
-        if layer.locked:
-            self.status_text("Слой заблокирован")
-            return
-        selection = self.doc.layer_selection_mask(layer)
-        if selection is None or not np.any(selection):
-            messagebox.showinfo("Трансформация", "Сначала создайте выделение на активном слое.")
-            return
-        ys, xs = np.where(selection > 0)
-        lx1, ly1, lx2, ly2 = int(xs.min()), int(ys.min()), int(xs.max() + 1), int(ys.max() + 1)
-        patch = layer.pixels[ly1:ly2, lx1:lx2].copy()
-        patch[:, :, 3] = np.clip(patch[:, :, 3].astype(np.float32) * (selection[ly1:ly2, lx1:lx2].astype(np.float32) / 255.0), 0, 255).astype(np.uint8)
-        preview = Layer("Выделенные пиксели", patch, x=layer.x + lx1, y=layer.y + ly1)
-        data = self.transform_workspace_dialog(preview, "Свободная")
-        if data is None:
-            return
-        def edit() -> None:
-            if data["mode"] == "Свободная":
-                self.doc.transform_selected_pixels(
-                    int(data["x"]), int(data["y"]), int(data["width"]), int(data["height"]),
-                    float(data["angle"]), bool(data["flip_horizontal"]), bool(data["flip_vertical"]),
-                )
-            else:
-                self.doc.transform_selected_pixels_advanced(
-                    "perspective" if data["mode"] == "Перспектива" else "mesh",
-                    data["points"], int(data.get("rows", 4)), int(data.get("columns", 4)),
-                )
-        self.run_document_command("Трансформация выделенных пикселей", edit)
-        self.refresh()
-
-    def perspective_transform_layer(self) -> None:
-        layer = self.doc.layer
-        if layer.locked:
-            self.status_text("Слой заблокирован")
-            return
-        data = self.transform_workspace_dialog(layer, "Перспектива")
-        if data is None:
-            return
-        self.run_document_command("Перспективная трансформация", lambda: self.apply_transform_workspace_data(data))
-        self.refresh()
-
-    def warp_layer(self) -> None:
-        layer = self.doc.layer
-        if layer.locked:
-            self.status_text("Слой заблокирован")
-            return
-        data = self.transform_workspace_dialog(layer, "Сетка")
-        if data is None:
-            return
-        self.run_document_command("Деформация слоя", lambda: self.apply_transform_workspace_data(data))
-        self.refresh()
-
-    def warp_layer_dialog(self, layer) -> dict[str, object] | None:
-        dialog = tk.Toplevel(self)
-        dialog.title("Деформация слоя")
-        dialog.transient(self)
-        dialog.resizable(False, False)
-        dialog.grab_set()
-        result: dict[str, object] | None = None
-        mode = tk.StringVar(value="arc")
-        amount = tk.DoubleVar(value=0.35)
-        wavelength = tk.DoubleVar(value=96.0)
-        preview = ttk.Label(dialog)
-        preview.grid(row=0, column=0, rowspan=5, padx=12, pady=12)
-        ttk.Label(dialog, text="Режим").grid(row=0, column=1, sticky="w", pady=(12, 2))
-        mode_box = ttk.Combobox(dialog, textvariable=mode, values=["arc", "arc_vertical", "bulge", "pinch", "wave_x", "wave_y"], state="readonly", width=18)
-        mode_box.grid(row=0, column=2, sticky="ew", padx=(8, 12), pady=(12, 2))
-        ttk.Label(dialog, text="Сила").grid(row=1, column=1, sticky="w")
-        ttk.Scale(dialog, from_=-1.0, to=1.0, variable=amount, orient=tk.HORIZONTAL).grid(row=1, column=2, sticky="ew", padx=(8, 12))
-        ttk.Label(dialog, text="Длина волны").grid(row=2, column=1, sticky="w")
-        ttk.Scale(dialog, from_=8, to=512, variable=wavelength, orient=tk.HORIZONTAL).grid(row=2, column=2, sticky="ew", padx=(8, 12))
-        values = ttk.Label(dialog, text="")
-        values.grid(row=3, column=1, columnspan=2, sticky="w", pady=(6, 0))
-        source = rgba_array_to_pil(layer.pixels)
-        source.thumbnail((220, 220), Image.Resampling.LANCZOS)
-        source_array = np.array(source.convert("RGBA"), dtype=np.uint8)
-
-        def update_preview(*_args) -> None:
-            try:
-                shown = warp_pixels(source_array, mode.get(), float(amount.get()), float(wavelength.get()), cv2.INTER_CUBIC)
-            except (tk.TclError, ValueError):
-                return
-            canvas = Image.new("RGBA", (220, 220), (44, 46, 52, 255))
-            image = rgba_array_to_pil(shown)
-            canvas.alpha_composite(image, ((220 - image.width) // 2, (220 - image.height) // 2))
-            self._warp_preview_image = ImageTk.PhotoImage(canvas)
-            preview.configure(image=self._warp_preview_image)
-            values.configure(text=f"Сила: {amount.get():.2f}   Волна: {wavelength.get():.0f}")
-
-        buttons = ttk.Frame(dialog)
-        buttons.grid(row=4, column=1, columnspan=2, sticky="e", padx=12, pady=12)
-
-        def accept() -> None:
-            nonlocal result
-            result = {"mode": mode.get(), "amount": float(amount.get()), "wavelength": float(wavelength.get())}
-            dialog.destroy()
-
-        ttk.Button(buttons, text="ОК", command=accept).pack(side=tk.RIGHT, padx=(6, 0))
-        ttk.Button(buttons, text="Отмена", command=dialog.destroy).pack(side=tk.RIGHT)
-        mode_box.bind("<<ComboboxSelected>>", update_preview)
-        amount.trace_add("write", update_preview)
-        wavelength.trace_add("write", update_preview)
-        update_preview()
         dialog.wait_window()
         return result

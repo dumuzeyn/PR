@@ -207,7 +207,11 @@ def mesh_warp_pixels(
     rows: int = 4,
     columns: int = 4,
     interpolation: int = cv2.INTER_CUBIC,
+    row_positions: list[float] | tuple[float, ...] | None = None,
+    column_positions: list[float] | tuple[float, ...] | None = None,
 ) -> tuple[np.ndarray, tuple[int, int]]:
+    from .warp_grid import normalized_grid_positions
+
     rows, columns = max(2, int(rows)), max(2, int(columns))
     if len(points) != rows * columns:
         raise ValueError(f"Mesh transform needs {rows * columns} points")
@@ -220,8 +224,8 @@ def mesh_warp_pixels(
     output_height = max(1, max_y - min_y + 1)
     destination = destination - np.array([min_x, min_y], dtype=np.float32)
     height, width = arr.shape[:2]
-    source_x = np.linspace(0.0, max(0, width - 1), columns, dtype=np.float32)
-    source_y = np.linspace(0.0, max(0, height - 1), rows, dtype=np.float32)
+    source_x = np.asarray(normalized_grid_positions(column_positions, columns), dtype=np.float32) * max(0, width - 1)
+    source_y = np.asarray(normalized_grid_positions(row_positions, rows), dtype=np.float32) * max(0, height - 1)
     output_shape = (output_height, output_width) if arr.ndim == 2 else (output_height, output_width, arr.shape[2])
     output = np.zeros(output_shape, dtype=arr.dtype)
     coverage = np.zeros((output_height, output_width), dtype=np.uint8)
@@ -283,7 +287,10 @@ def apply_saved_layer_transform(layer: Layer, source_pixels: np.ndarray | None =
     mode = str(data.get("mode", "perspective"))
     points = data.get("points") or []
     if mode == "mesh":
-        transformed, offset = mesh_warp_pixels(pixels, points, int(data.get("rows", 4)), int(data.get("columns", 4)), cv2.INTER_CUBIC)
+        transformed, offset = mesh_warp_pixels(
+            pixels, points, int(data.get("rows", 4)), int(data.get("columns", 4)), cv2.INTER_CUBIC,
+            data.get("row_positions"), data.get("column_positions"),
+        )
     else:
         transformed, offset = perspective_warp_pixels(pixels, points, cv2.INTER_CUBIC)
     layer.pixels = transformed
@@ -294,7 +301,10 @@ def apply_saved_layer_transform(layer: Layer, source_pixels: np.ndarray | None =
     mask = source_mask if source_mask is not None else layer.transform_mask_source
     if mask is not None:
         if mode == "mesh":
-            layer.mask, _ = mesh_warp_pixels(mask, points, int(data.get("rows", 4)), int(data.get("columns", 4)), cv2.INTER_LINEAR)
+            layer.mask, _ = mesh_warp_pixels(
+                mask, points, int(data.get("rows", 4)), int(data.get("columns", 4)), cv2.INTER_LINEAR,
+                data.get("row_positions"), data.get("column_positions"),
+            )
         else:
             layer.mask, _ = perspective_warp_pixels(mask, points, cv2.INTER_LINEAR)
 

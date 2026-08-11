@@ -17,7 +17,7 @@ This repository starts with a real working editor and an architecture intended t
 - clipping masks, adjustment-layer clipping and basic layer styles: stroke, drop shadow and outer glow
 - non-destructive per-layer filter stack with a visual editor, built-in/importable/exportable presets, preview, reorder controls, per-filter enable/opacity/blend modes/masks and blur, sharpen, noise, median, edge and emboss filters
 - real selection masks with contextual select all, invert, feather, smooth, grow, shrink, border/refine, perceptual multi-layer Magic Wand, multi-sample Color Range preview, edge-aware Quick Selection, backend-based subject/object ROI/background/sky selection, and a full Select and Mask workspace with standard preview modes, Smart Radius and soft-alpha outputs
-- visual Free Transform with eight drag handles, selected-pixel transform, perspective transform and live warp preview/presets
+- visual Free Transform with eight drag handles, Shift/Alt/Ctrl modifiers, Enter/Escape, selected-pixel and perspective transforms, plus live editable 3x3/4x4/5x5/custom Warp grids with split/remove commands
 - local retouch tools and presets: blur, sharpen, dodge, burn, clone stamp, source-based healing, automatic spot healing and interactive patch tool
 - frequency separation into editable tone/texture layers with Linear Light reconstruction and a live three-panel preview
 - portrait cleanup with live before/after preview, skin-aware smoothing, texture preservation, tone evening and redness reduction

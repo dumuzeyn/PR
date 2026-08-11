@@ -175,6 +175,8 @@ class TransformsDocumentMixin:
         points: list[tuple[float, float]] | list[list[float]],
         rows: int = 4,
         columns: int = 4,
+        row_positions: list[float] | None = None,
+        column_positions: list[float] | None = None,
     ) -> bool:
         layer = self.layer
         if layer.locked:
@@ -197,7 +199,9 @@ class TransformsDocumentMixin:
                 source[y1:y2, x1:x2, 3].astype(np.float32) * (1.0 - patch_mask), 0, 255
             ).astype(np.uint8)
         if str(mode).lower() == "mesh":
-            transformed, offset = mesh_warp_pixels(patch, points, rows, columns, cv2.INTER_CUBIC)
+            transformed, offset = mesh_warp_pixels(
+                patch, points, rows, columns, cv2.INTER_CUBIC, row_positions, column_positions
+            )
         else:
             transformed, offset = perspective_warp_pixels(patch, points, cv2.INTER_CUBIC)
         destination_x, destination_y = offset
@@ -285,6 +289,8 @@ class TransformsDocumentMixin:
         points: list[tuple[float, float]] | list[list[float]],
         rows: int = 4,
         columns: int = 4,
+        row_positions: list[float] | None = None,
+        column_positions: list[float] | None = None,
     ) -> None:
         layer = self.layer
         if layer.locked:
@@ -321,11 +327,15 @@ class TransformsDocumentMixin:
             render_base_x = int(existing.get("render_base_x", base_x - crop[0]))
             render_base_y = int(existing.get("render_base_y", base_y - crop[1]))
         local_points = [[float(point[0]) - base_x, float(point[1]) - base_y] for point in points]
+        from ..warp_grid import normalized_grid_positions
+
         layer.transform_data = {
             "mode": mode,
             "points": local_points,
             "rows": max(2, int(rows)),
             "columns": max(2, int(columns)),
+            "row_positions": normalized_grid_positions(row_positions, rows),
+            "column_positions": normalized_grid_positions(column_positions, columns),
             "base_x": base_x,
             "base_y": base_y,
             "source_width": int(layer.transform_source.shape[1]),

@@ -33,6 +33,8 @@ def transform_preview_pixels(
     columns: int,
     flip_horizontal: bool = False,
     flip_vertical: bool = False,
+    row_positions: list[float] | None = None,
+    column_positions: list[float] | None = None,
 ) -> tuple[np.ndarray, float, float, float]:
     """Render a screen-resolution transform preview in document coordinates."""
     pixel_scale = round(float(np.clip(pixel_scale, 0.025, 1.0)), 4)
@@ -74,7 +76,9 @@ def transform_preview_pixels(
     if mode == "Перспектива":
         output, offset = perspective_warp_pixels(proxy, scaled_points, cv2.INTER_LINEAR)
     else:
-        output, offset = mesh_warp_pixels(proxy, scaled_points, rows, columns, cv2.INTER_LINEAR)
+        output, offset = mesh_warp_pixels(
+            proxy, scaled_points, rows, columns, cv2.INTER_LINEAR, row_positions, column_positions
+        )
     return output, offset[0] / pixel_scale, offset[1] / pixel_scale, pixel_scale
 
 
