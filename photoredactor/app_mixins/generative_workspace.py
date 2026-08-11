@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import threading
+
 from ..app_shared import *
+from ..local_generative import PERFORMANCE_LABELS, PERFORMANCE_VALUES, SAMPLERS
 
 
 STYLE_LABELS = {
@@ -16,6 +19,7 @@ STYLE_LABELS = {
     "Пиксель-арт": "pixel-art",
     "3D-модель": "3d-model",
 }
+PROVIDER_LABELS = {"Локально": "local", "Stability AI (облако)": "stability-ai"}
 
 
 class GenerativeWorkspaceMixin:
@@ -149,20 +153,29 @@ class GenerativeWorkspaceMixin:
         prompt = tk.StringVar(value=str(data.get("prompt", "")))
         negative = tk.StringVar(value=str(data.get("negative_prompt", "")))
         seed = tk.IntVar(value=int(data.get("seed", 0)))
+        provider_slug = str(data.get("provider", self.generative_settings.get("provider", "local")))
+        provider = tk.StringVar(value=next((label for label, value in PROVIDER_LABELS.items() if value == provider_slug), "Локально"))
         variants_count = tk.IntVar(value=int(self.generative_settings.get("variants", 3)))
         style_slug = str(data.get("style", self.generative_settings.get("style", "photographic")))
         style = tk.StringVar(value=next((label for label, slug in STYLE_LABELS.items() if slug == style_slug), "Без пресета"))
         creativity = tk.DoubleVar(value=float(data.get("creativity", self.generative_settings.get("creativity", 0.5))))
+        steps = tk.IntVar(value=int(data.get("steps", self.generative_settings.get("steps", 22))))
+        cfg_scale = tk.DoubleVar(value=float(data.get("cfg_scale", self.generative_settings.get("cfg_scale", 7.0))))
+        strength = tk.DoubleVar(value=float(data.get("strength", self.generative_settings.get("strength", 0.88))))
+        sampler = tk.StringVar(value=str(data.get("sampler", self.generative_settings.get("sampler", "DPM++ 2M"))))
+        profile_slug = str(data.get("performance_profile", self.generative_settings.get("performance_profile", "balanced")))
+        performance = tk.StringVar(value=next((label for label, slug in PERFORMANCE_LABELS.items() if slug == profile_slug), "Вручную"))
         default_margins = stored_margins or (max(64, source.shape[1] // 8), max(64, source.shape[0] // 8)) * 2
         margin_vars = [tk.IntVar(value=value) for value in default_margins]
         history: list[tuple[GeneratedVariant, dict[str, object]]] = []
         selected = tk.IntVar(value=-1)
         preview_photos: list[ImageTk.PhotoImage] = []
+        generation_cancel = threading.Event()
 
         header = ttk.Frame(dialog, padding=(12, 10, 12, 6))
         header.pack(fill=tk.X)
         ttk.Label(header, text=dialog.title(), style="PanelTitle.TLabel").pack(side=tk.LEFT)
-        status = ttk.Label(header, text="Stability AI", style="Secondary.TLabel")
+        status = ttk.Label(header, text="Локальная модель", style="Secondary.TLabel")
         status.pack(side=tk.RIGHT)
         body = ttk.PanedWindow(dialog, orient=tk.HORIZONTAL)
         body.pack(fill=tk.BOTH, expand=True, padx=12)
@@ -175,12 +188,14 @@ class GenerativeWorkspaceMixin:
         variants_bar = ttk.Frame(preview_panel, padding=(0, 8, 0, 0))
         variants_bar.pack(fill=tk.X)
 
+        ttk.Label(controls, text="Режим", style="Secondary.TLabel").pack(anchor=tk.W)
+        provider_box = ttk.Combobox(controls, textvariable=provider, values=list(PROVIDER_LABELS), state="readonly")
+        provider_box.pack(fill=tk.X, pady=(3, 10))
         ttk.Label(controls, text="Запрос", style="PanelTitle.TLabel").pack(anchor=tk.W)
         prompt_entry = ttk.Entry(controls, textvariable=prompt)
         prompt_entry.pack(fill=tk.X, pady=(3, 10))
-        if operation == "fill":
-            ttk.Label(controls, text="Исключить", style="Secondary.TLabel").pack(anchor=tk.W)
-            ttk.Entry(controls, textvariable=negative).pack(fill=tk.X, pady=(3, 10))
+        ttk.Label(controls, text="Исключить", style="Secondary.TLabel").pack(anchor=tk.W)
+        ttk.Entry(controls, textvariable=negative).pack(fill=tk.X, pady=(3, 10))
         ttk.Label(controls, text="Стиль", style="Secondary.TLabel").pack(anchor=tk.W)
         ttk.Combobox(controls, textvariable=style, values=list(STYLE_LABELS), state="readonly").pack(fill=tk.X, pady=(3, 10))
         seed_row = ttk.Frame(controls)
@@ -192,6 +207,57 @@ class GenerativeWorkspaceMixin:
         count_row.pack(fill=tk.X)
         ttk.Label(count_row, text="Варианты", style="Secondary.TLabel").pack(side=tk.LEFT)
         ttk.Spinbox(count_row, textvariable=variants_count, from_=1, to=4, width=6).pack(side=tk.RIGHT)
+
+        local_controls = ttk.Frame(controls)
+        local_controls.pack(fill=tk.X, pady=(14, 0))
+        model_row = ttk.Frame(local_controls)
+        model_row.pack(fill=tk.X)
+        ttk.Label(model_row, text="Локальная модель", style="Secondary.TLabel").pack(side=tk.LEFT)
+        ttk.Button(model_row, text="Выбрать...", command=self.model_manager_dialog).pack(side=tk.RIGHT)
+        profile_row = ttk.Frame(local_controls)
+        profile_row.pack(fill=tk.X, pady=(7, 0))
+        ttk.Label(profile_row, text="Скорость и качество").pack(side=tk.LEFT)
+        profile_box = ttk.Combobox(profile_row, textvariable=performance, values=list(PERFORMANCE_LABELS), state="readonly", width=14)
+        profile_box.pack(side=tk.RIGHT)
+        for label, variable, start, end in (
+            ("Шаги", steps, 4, 80), ("Точность запроса (CFG)", cfg_scale, 1.0, 20.0),
+            ("Сила изменения", strength, 0.05, 1.0),
+        ):
+            row = ttk.Frame(local_controls)
+            row.pack(fill=tk.X, pady=(7, 0))
+            ttk.Label(row, text=label).pack(side=tk.LEFT)
+            ttk.Spinbox(row, textvariable=variable, from_=start, to=end, increment=1 if variable is steps else 0.05, width=7).pack(side=tk.RIGHT)
+        ttk.Combobox(local_controls, textvariable=sampler, values=list(SAMPLERS), state="readonly").pack(fill=tk.X, pady=(7, 0))
+
+        changing_profile = [False]
+
+        def apply_performance(_event=None) -> None:
+            values = PERFORMANCE_VALUES.get(PERFORMANCE_LABELS.get(performance.get(), "custom"))
+            if values is None:
+                return
+            changing_profile[0] = True
+            steps.set(values[0])
+            cfg_scale.set(values[1])
+            sampler.set(values[2])
+            changing_profile[0] = False
+
+        def mark_manual(*_args) -> None:
+            if not changing_profile[0]:
+                performance.set("Вручную")
+
+        profile_box.bind("<<ComboboxSelected>>", apply_performance)
+        for variable in (steps, cfg_scale, sampler):
+            variable.trace_add("write", mark_manual)
+
+        def update_provider(*_args) -> None:
+            local = PROVIDER_LABELS.get(provider.get(), "local") == "local"
+            if local:
+                if not local_controls.winfo_manager():
+                    local_controls.pack(fill=tk.X, pady=(14, 0), before=action_row)
+                status.configure(text=self.active_local_model_name())
+            else:
+                local_controls.pack_forget()
+                status.configure(text="Stability AI")
 
         if operation == "expand":
             ttk.Label(controls, text="Расширение, px", style="PanelTitle.TLabel").pack(anchor=tk.W, pady=(16, 5))
@@ -209,11 +275,15 @@ class GenerativeWorkspaceMixin:
         generate_button.pack(fill=tk.X)
         repeat_button = ttk.Button(action_row, text="Повторить выбранный seed", state=tk.DISABLED)
         repeat_button.pack(fill=tk.X, pady=(6, 0))
+        cancel_button = ttk.Button(action_row, text="Отменить генерацию", state=tk.DISABLED, command=generation_cancel.set)
+        cancel_button.pack(fill=tk.X, pady=(6, 0))
+        provider.trace_add("write", update_provider)
+        update_provider()
         footer = ttk.Frame(dialog, padding=12)
         footer.pack(fill=tk.X)
         apply_button = ttk.Button(footer, text="Применить", state=tk.DISABLED, style="Primary.TButton")
         apply_button.pack(side=tk.RIGHT, padx=(6, 0))
-        ttk.Button(footer, text="Закрыть", command=dialog.destroy).pack(side=tk.RIGHT)
+        ttk.Button(footer, text="Закрыть", command=lambda: (generation_cancel.set(), dialog.destroy())).pack(side=tk.RIGHT)
 
         def current_margins() -> tuple[int, int, int, int]:
             values: list[int] = []
@@ -295,30 +365,31 @@ class GenerativeWorkspaceMixin:
                 raise GenerativeAPIError("Seed и творческая свобода должны быть числами") from exc
             return {
                 "operation": operation,
-                "provider": "stability-ai",
+                "provider": PROVIDER_LABELS.get(provider.get(), "local"),
                 "prompt": prompt.get().strip(),
-                "negative_prompt": negative.get().strip() if operation == "fill" else "",
+                "negative_prompt": negative.get().strip(),
                 "seed": current_seed,
                 "style": STYLE_LABELS.get(style.get(), ""),
                 "creativity": current_creativity,
                 "margins": list(current_margins()) if operation == "expand" else None,
+                "local_model_id": self.active_local_model_id(),
+                "local_backend": self.effective_local_backend(),
+                "performance_profile": PERFORMANCE_LABELS.get(performance.get(), "custom"),
+                "steps": int(steps.get()),
+                "cfg_scale": float(cfg_scale.get()),
+                "strength": float(strength.get()),
+                "sampler": sampler.get(),
             }
 
         def generate(forced_seed: int | None = None) -> None:
-            api_key = self.generative_key()
-            if not api_key:
-                self.generative_settings_dialog()
-                api_key = self.generative_key()
-            if not api_key:
-                return
             try:
                 settings = request_settings(forced_seed)
                 count = 1 if forced_seed is not None else max(1, min(4, int(variants_count.get())))
             except (GenerativeAPIError, tk.TclError, ValueError) as exc:
                 messagebox.showinfo("Генеративный ИИ", str(exc), parent=dialog)
                 return
-            if operation == "fill" and not settings["prompt"]:
-                messagebox.showinfo("Генеративная заливка", "Введите запрос.", parent=dialog)
+            if not settings["prompt"]:
+                messagebox.showinfo(dialog.title(), "Введите, что должно появиться в выбранной области.", parent=dialog)
                 return
             margins = tuple(settings["margins"] or ())
             if operation == "expand":
@@ -327,11 +398,29 @@ class GenerativeWorkspaceMixin:
                 except GenerativeAPIError as exc:
                     messagebox.showinfo("Генеративное расширение", str(exc), parent=dialog)
                     return
-            client = StabilityImageClient(api_key)
+            client = None
+            if settings["provider"] == "local":
+                if not self.local_generation_ready():
+                    self.model_manager_dialog()
+                    return
+            else:
+                api_key = self.generative_key()
+                if not api_key:
+                    self.generative_settings_dialog()
+                    api_key = self.generative_key()
+                if not api_key:
+                    return
+                client = StabilityImageClient(api_key)
             generate_button.configure(state=tk.DISABLED)
+            cancel_button.configure(state=tk.NORMAL if settings["provider"] == "local" else tk.DISABLED)
+            generation_cancel.clear()
             status.configure(text="Создание вариантов...")
 
             def worker():
+                if settings["provider"] == "local":
+                    return self._generative_safe_call(
+                        lambda: self.local_generation_variants(operation, source, mask, margins, settings, count, generation_cancel)
+                    )
                 if operation == "fill":
                     call = lambda value: client.inpaint(source, mask, str(settings["prompt"]), str(settings["negative_prompt"]), value, str(settings["style"]))
                 else:
@@ -340,6 +429,7 @@ class GenerativeWorkspaceMixin:
 
             def done(result) -> None:
                 generate_button.configure(state=tk.NORMAL)
+                cancel_button.configure(state=tk.DISABLED)
                 if isinstance(result, Exception):
                     status.configure(text="Ошибка генерации")
                     messagebox.showerror("Генеративный ИИ", str(result), parent=dialog)
@@ -367,11 +457,19 @@ class GenerativeWorkspaceMixin:
                 self._apply_generative_fill(variant.pixels, mask, settings, existing)
             else:
                 self._apply_generative_expand(variant.pixels, tuple(settings["margins"]), settings, existing)
-            self.generative_settings = {
+            self.generative_settings.update({
+                "provider": str(settings["provider"]),
+                "local_model_id": str(settings["local_model_id"]),
+                "local_backend": str(settings["local_backend"]),
+                "performance_profile": str(settings["performance_profile"]),
                 "variants": max(1, min(4, int(variants_count.get()))),
                 "style": str(settings["style"]),
                 "creativity": float(settings["creativity"]),
-            }
+                "steps": int(settings["steps"]),
+                "cfg_scale": float(settings["cfg_scale"]),
+                "strength": float(settings["strength"]),
+                "sampler": str(settings["sampler"]),
+            })
             self.save_settings()
             dialog.destroy()
 
@@ -389,93 +487,14 @@ class GenerativeWorkspaceMixin:
         self._generative_workspace_negative = negative
         self._generative_workspace_seed = seed
         self._generative_workspace_variants = variants_count
+        self._generative_workspace_provider = provider
+        self._generative_workspace_steps = steps
+        self._generative_workspace_cfg = cfg_scale
+        self._generative_workspace_strength = strength
+        self._generative_workspace_sampler = sampler
+        self._generative_workspace_performance = performance
+        self._generative_workspace_profile_box = profile_box
         self._generative_workspace_margins = margin_vars
         self._generative_workspace_dialog = dialog
         self.center_toplevel(dialog, 1120, 760)
         redraw()
-
-    def _generated_layer_pixels(self, result: np.ndarray, mask: np.ndarray) -> np.ndarray:
-        pixels = result.copy()
-        pixels[:, :, 3] = np.clip(pixels[:, :, 3].astype(np.float32) * (mask.astype(np.float32) / 255.0), 0, 255).astype(np.uint8)
-        pixels[mask == 0, :3] = 0
-        return pixels
-
-    def _apply_generative_fill(self, result: np.ndarray, mask: np.ndarray, settings: dict[str, object], existing: Layer | None) -> None:
-        pixels = self._generated_layer_pixels(result, mask)
-        if existing is not None:
-            before = {"pixels": existing.pixels.copy(), "generation_data": copy.deepcopy(existing.generation_data), "name": existing.name}
-            existing.pixels = pixels
-            existing.generation_data = copy.deepcopy(settings)
-            existing.name = f"Генеративная заливка · {settings['seed']}"
-            existing.touch_pixels()
-            after = {"pixels": pixels.copy(), "generation_data": copy.deepcopy(settings), "name": existing.name}
-            self.push_command(LayerFieldsCommand("Повторить генеративную заливку", existing.id, before, after))
-        else:
-            layer = Layer(f"Генеративная заливка · {settings['seed']}", pixels, generation_data=copy.deepcopy(settings))
-            index = min(len(self.doc.layers), self.doc.active_layer + 1)
-            self.doc.layers.insert(index, layer)
-            self.doc.active_layer = index
-            self.doc.dirty = True
-            self.push_command(LayerInsertCommand("Генеративная заливка", index, copy.deepcopy(layer)))
-        self.invalidate_pixels()
-        self.refresh()
-
-    def _apply_generative_expand(self, result: np.ndarray, margins: tuple[int, int, int, int], settings: dict[str, object], existing: Layer | None) -> None:
-        left, top, right, bottom = margins
-        pixels = result.copy()
-        pixels[top:top + result.shape[0] - top - bottom, left:left + result.shape[1] - left - right] = 0
-        if existing is not None:
-            before = {"pixels": existing.pixels.copy(), "generation_data": copy.deepcopy(existing.generation_data), "name": existing.name}
-            existing.pixels = pixels
-            existing.generation_data = copy.deepcopy(settings)
-            existing.name = f"Генеративное расширение · {settings['seed']}"
-            existing.touch_pixels()
-            after = {"pixels": pixels.copy(), "generation_data": copy.deepcopy(settings), "name": existing.name}
-            self.push_command(LayerFieldsCommand("Повторить генеративное расширение", existing.id, before, after))
-        else:
-            layer = Layer(f"Генеративное расширение · {settings['seed']}", pixels, generation_data=copy.deepcopy(settings))
-            command = GeneratedExpandCommand(
-                "Генеративное расширение", layer, margins, (self.doc.width, self.doc.height), self.doc.active_layer,
-                None if self.doc.selection_mask is None else self.doc.selection_mask.copy(),
-                {name: value.copy() for name, value in self.doc.saved_selections.items()},
-            )
-            command.redo(self.doc)
-            self.push_command(command)
-        self.invalidate_pixels()
-        self.refresh()
-
-    def generative_history_dialog(self) -> None:
-        layers = [layer for layer in self.doc.layers if layer.generation_data]
-        if not layers:
-            messagebox.showinfo("История генераций", "В документе ещё нет применённых генераций.")
-            return
-        dialog = tk.Toplevel(self)
-        dialog.title("История генераций")
-        dialog.transient(self)
-        dialog.grab_set()
-        tree = ttk.Treeview(dialog, columns=("type", "seed", "prompt"), show="headings", selectmode="browse")
-        for key, label, width in (("type", "Режим", 130), ("seed", "Seed", 110), ("prompt", "Запрос", 420)):
-            tree.heading(key, text=label)
-            tree.column(key, width=width)
-        tree.pack(fill=tk.BOTH, expand=True, padx=12, pady=(12, 6))
-        ordered = list(reversed(layers))
-        for index, layer in enumerate(ordered):
-            data = layer.generation_data or {}
-            tree.insert("", tk.END, iid=str(index), values=("Заливка" if data.get("operation") == "fill" else "Расширение", data.get("seed", ""), data.get("prompt", "")))
-
-        def repeat() -> None:
-            if not tree.selection():
-                return
-            layer = ordered[int(tree.selection()[0])]
-            self.doc.active_layer = self.doc.layers.index(layer)
-            dialog.destroy()
-            self._open_generative_workspace(str(layer.generation_data.get("operation", "fill")), layer)
-
-        footer = ttk.Frame(dialog, padding=(12, 6, 12, 12))
-        footer.pack(fill=tk.X)
-        ttk.Button(footer, text="Повторить", command=repeat, style="Primary.TButton").pack(side=tk.RIGHT)
-        ttk.Button(footer, text="Закрыть", command=dialog.destroy).pack(side=tk.RIGHT, padx=6)
-        tree.bind("<Double-Button-1>", lambda _event: repeat())
-        self._generative_history_tree = tree
-        self._generative_history_repeat = repeat
-        self.center_toplevel(dialog, 760, 460)

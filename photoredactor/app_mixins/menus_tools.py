@@ -267,6 +267,11 @@ class MenusToolsMixin:
         view.add_separator()
         view.add_command(label="Настроить панель инструментов...", command=self.configure_tool_palette)
 
+        models = tk.Menu(menu, tearoff=False)
+        menu.add_cascade(label="Модели", menu=models)
+        models.add_command(label="Управление локальными моделями...", command=self.model_manager_dialog)
+        models.add_command(label="Настройки Stability AI...", command=self.generative_settings_dialog)
+
     def _build_tools(self, parent: ttk.Frame) -> None:
         parent.configure(width=188)
         parent.pack_propagate(False)

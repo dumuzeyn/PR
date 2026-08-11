@@ -10,6 +10,25 @@ import subprocess
 import sys
 import tempfile
 import time
+
+
+def _configure_source_tk_runtime() -> None:
+    if os.name != "nt" or getattr(sys, "frozen", False):
+        return
+    root = Path(sys.base_prefix) / "tcl"
+    for variable, pattern, marker in (
+        ("TCL_LIBRARY", "tcl*", "init.tcl"),
+        ("TK_LIBRARY", "tk*", "tk.tcl"),
+    ):
+        if variable in os.environ:
+            continue
+        candidate = next((path for path in sorted(root.glob(pattern)) if (path / marker).is_file()), None)
+        if candidate is not None:
+            os.environ[variable] = str(candidate)
+
+
+_configure_source_tk_runtime()
+
 import tkinter as tk
 import tkinter.font as tkfont
 from tkinter import colorchooser, filedialog, messagebox, simpledialog, ttk

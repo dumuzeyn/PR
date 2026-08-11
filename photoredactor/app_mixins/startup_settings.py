@@ -41,7 +41,13 @@ class StartupSettingsMixin:
         self.custom_canvas_height = 900
         self.custom_canvas_dpi = 72
         self.custom_canvas_background = "Белый"
-        self.generative_settings = {"variants": 3, "style": "photographic", "creativity": 0.5}
+        self.generative_settings = {
+            "provider": "stability-ai" if os.environ.get("STABILITY_API_KEY") else "local",
+            "local_model_id": "realistic-vision-51-inpaint", "local_backend": "auto",
+            "variants": 3, "style": "photographic", "creativity": 0.5,
+            "performance_profile": "balanced", "steps": 6, "cfg_scale": 1.5,
+            "strength": 0.88, "sampler": "LCM",
+        }
         self.paint_target = tk.StringVar(value="pixels")
         self.selection_mode = tk.StringVar(value="replace")
         self.retouch_preset = tk.StringVar(value="Средняя ретушь")
@@ -229,6 +235,8 @@ class StartupSettingsMixin:
         self.schedule_autosave()
 
     def destroy(self) -> None:
+        from ..local_generative import shutdown_local_servers
+
         if self._selection_animation_id is not None:
             try:
                 self.after_cancel(self._selection_animation_id)
@@ -244,6 +252,7 @@ class StartupSettingsMixin:
         self.autosave_recovery()
         self.save_settings()
         self.executor.shutdown(wait=False, cancel_futures=True)
+        shutdown_local_servers()
         self.render_engine.scratch.close()
         super().destroy()
 
@@ -286,10 +295,22 @@ class StartupSettingsMixin:
                     self.custom_canvas_background = saved_background
                 generative = data.get("generative", {})
                 if isinstance(generative, dict):
+                    fallback_provider = "stability-ai" if self.generative_key() else "local"
+                    provider = str(generative.get("provider", fallback_provider))
                     self.generative_settings = {
+                        "provider": provider if provider in {"local", "stability-ai"} else "local",
+                        "local_model_id": str(generative.get("local_model_id", "realistic-vision-51-inpaint")),
+                        "local_backend": str(generative.get("local_backend", "auto")),
                         "variants": max(1, min(4, int(generative.get("variants", 3)))),
                         "style": str(generative.get("style", "photographic")),
                         "creativity": float(np.clip(generative.get("creativity", 0.5), 0.0, 1.0)),
+                        "performance_profile": str(generative.get(
+                            "performance_profile", "balanced" if generative.get("sampler") == "LCM" else "quality",
+                        )),
+                        "steps": max(4, min(80, int(generative.get("steps", 22)))),
+                        "cfg_scale": float(np.clip(generative.get("cfg_scale", 7.0), 1.0, 20.0)),
+                        "strength": float(np.clip(generative.get("strength", 0.88), 0.05, 1.0)),
+                        "sampler": str(generative.get("sampler", "DPM++ 2M")),
                     }
                 if self.tool.get() not in self.tool_order:
                     self.tool.set(self.visible_tools[0])

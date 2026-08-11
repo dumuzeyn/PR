@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+import tkinter as tk
 import unittest
 
 import numpy as np
@@ -95,6 +96,31 @@ class StartupGenerativeTests(unittest.TestCase):
         self.app.redo()
         self.assertEqual(len(self.app.doc.layers), 2)
         self.assertEqual(self.app.doc.layer.generation_data["seed"], 100)
+
+    def test_models_menu_follows_view_and_manager_lists_downloads(self) -> None:
+        labels = [self.app.editor_menu.entrycget(index, "label") for index in range(self.app.editor_menu.index(tk.END) + 1)]
+        self.assertEqual(labels[labels.index("Вид") + 1], "Модели")
+        self.app.model_manager_dialog()
+        self.app.update()
+        self.assertEqual(
+            self.app._model_manager_tree.get_children(),
+            ("realistic-vision-51-inpaint", "sd15-inpaint"),
+        )
+
+    def test_local_performance_profiles_update_generation_controls(self) -> None:
+        self.app.doc = Document.new(24, 18, (12, 22, 32, 255))
+        self.app.doc.selection_mask = np.full((18, 24), 255, dtype=np.uint8)
+        self.app.generative_fill_dialog()
+
+        self.app._generative_workspace_performance.set("Быстро")
+        self.app._generative_workspace_profile_box.event_generate("<<ComboboxSelected>>")
+        self.app.update()
+
+        self.assertEqual(self.app._generative_workspace_steps.get(), 4)
+        self.assertAlmostEqual(self.app._generative_workspace_cfg.get(), 1.2)
+        self.assertEqual(self.app._generative_workspace_sampler.get(), "LCM")
+        self.app._generative_workspace_steps.set(9)
+        self.assertEqual(self.app._generative_workspace_performance.get(), "Вручную")
 
     def test_expand_applies_new_canvas_and_has_exact_undo(self) -> None:
         self.app.doc = Document.new(20, 14, (70, 80, 90, 255))

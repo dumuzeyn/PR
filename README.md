@@ -34,7 +34,7 @@ This repository starts with a real working editor and an architecture intended t
 - native 16-bit RAW decoding; high-precision 8/16/32-bit layers, composition, filters, history and geometry; ICC assignment/conversion, soft proof, gamut warning, print preflight and profile-embedded CMYK TIFF export
 - direct tile-by-tile distant-zoom rendering without a full-size composite, scratch-disk cache eviction and measured OpenCL GPU kernels with adaptive CPU fallback
 - isolated Plugin SDK v2 with manifests, explicit permissions, filters, document actions, importers, exporters and validated external executables
-- Stability AI generative fill and outpaint workspace with masked edits, strict source-pixel preservation, prompts, negative prompts, styles, seeds, variants, history, undo/redo and encrypted key storage
+- downloadable local generative models powered by the real stable-diffusion.cpp engine, with CUDA/Vulkan/CPU selection, verified downloads, LCM speed profiles, masked fill, outpaint, prompts, negative prompts, seeds, variants, history and undo/redo; Stability AI remains an optional cloud provider
 - tested PSD/PSB compatibility import and export for ordered raster layers, offsets, opacity, visibility, locks, clipping, blend modes, masks, DPI, ICC profiles and 8/16/32-bit document depth; unsupported Photoshop-only structures are reported instead of silently advertised as editable
 - metadata/EXIF view, histogram, image statistics and eyedropper
 - non-destructive adjustment layers with importable/exportable preset libraries for brightness/contrast, saturation, vibrance, temperature/tint, hue/saturation, exposure, color balance, levels, curves, threshold, posterize, invert and grayscale
@@ -86,9 +86,11 @@ Measured results and the list of correctness fallbacks are recorded in [`PERFORM
 
 ## Generative AI
 
-Open `Правка -> Настройки генеративного ИИ` and save a Stability AI API key. On Windows the key is encrypted for the current user through DPAPI and is never written to `settings.json`. The `STABILITY_API_KEY` environment variable can be used instead.
+The EXE does not contain model weights. Open the top-level `Модели` menu after `Вид`, choose `Локальные модели...`, and download a model only when it is needed. PhotoRedactor detects NVIDIA CUDA, Vulkan or CPU, downloads the matching official stable-diffusion.cpp Windows engine, verifies the engine and model SHA-256 values, and stores them in the current user's local application data. Realistic Vision 5.1 Inpainting plus its LCM accelerator use about 2.1 GiB; engine size depends on the selected backend.
 
-`Правка -> Генеративная заливка` uses the current selection. `Изображение -> Генеративное расширение холста` adds content around the document. Both workflows run requests in the background, support one to four variants and an exact seed repeat, and apply the result as a separate undoable layer. A Stability AI account with available credits is required for real generation.
+`Правка -> Генеративная заливка` uses the current selection. `Изображение -> Генеративное расширение холста` adds content around the document. The prompt describes what must appear, while the negative prompt excludes unwanted content. `Быстро` and `Баланс` use the open LCM-LoRA accelerator at 4 or 6 steps; `Качество` uses regular DPM++ 2M sampling, and `Вручную` exposes all values. The local model stays loaded in a private `127.0.0.1` process between variants and is stopped when PhotoRedactor exits.
+
+Both workflows run in the background, support cancellation, one to four variants and exact seed repeat, preserve pixels outside the mask, and apply the result as a separate undoable layer. Stability AI remains optional under `Модели -> Настройки Stability AI...`; its key is protected through Windows DPAPI and is never written to `settings.json`.
 
 ## Download the automatic Windows build
 
