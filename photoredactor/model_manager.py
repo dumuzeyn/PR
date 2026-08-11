@@ -373,7 +373,7 @@ class ModelStore:
             )
             for archive in archives:
                 archive.unlink(missing_ok=True)
-            return executable
+            return executable.resolve()
         finally:
             if staging.exists():
                 shutil.rmtree(staging, ignore_errors=True)
