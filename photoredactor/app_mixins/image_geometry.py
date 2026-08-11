@@ -18,69 +18,6 @@ class ImageGeometryMixin:
             self.run_document_command("Resize canvas", lambda: self.doc.resize_canvas(width, height))
             self.refresh()
 
-    def generative_expand_dialog(self) -> None:
-        dialog = tk.Toplevel(self)
-        dialog.title("Генеративное расширение холста")
-        dialog.geometry("560x500")
-        dialog.transient(self)
-        dialog.grab_set()
-        values = {name: tk.IntVar(value=max(64, size // 8)) for name, size in (
-            ("Слева", self.doc.width), ("Сверху", self.doc.height), ("Справа", self.doc.width), ("Снизу", self.doc.height)
-        )}
-        method = tk.StringVar(value="content-aware")
-        controls = ttk.Frame(dialog, padding=12)
-        controls.pack(fill=tk.X)
-        for column, (name, variable) in enumerate(values.items()):
-            ttk.Label(controls, text=name).grid(row=0, column=column, padx=4, sticky="w")
-            ttk.Spinbox(controls, from_=0, to=100000, textvariable=variable, width=10).grid(row=1, column=column, padx=4)
-        ttk.Label(controls, text="Заполнение").grid(row=2, column=0, sticky="w", pady=(12, 2))
-        ttk.Combobox(
-            controls,
-            textvariable=method,
-            values=("content-aware", "mirror", "edge"),
-            state="readonly",
-        ).grid(row=3, column=0, columnspan=4, sticky="ew", padx=4)
-        preview = ttk.Label(dialog, anchor=tk.CENTER)
-        preview.pack(fill=tk.BOTH, expand=True, padx=12, pady=8)
-
-        def update_preview(*_args) -> None:
-            try:
-                source = self.render_engine.render(self.doc, False)
-                scale = min(1.0, 360 / max(source.shape[0], source.shape[1]))
-                small = cv2.resize(source, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
-                document_scale = small.shape[1] / self.doc.width
-                margins = [max(0, round(values[name].get() * document_scale)) for name in ("Слева", "Сверху", "Справа", "Снизу")]
-                result = generative_expand_pixels(small, margins[0], margins[1], margins[2], margins[3], method.get())
-                image = rgba_array_to_pil(result)
-                image.thumbnail((500, 320), Image.Resampling.LANCZOS)
-                self._generative_preview_image = ImageTk.PhotoImage(image)
-                preview.configure(image=self._generative_preview_image)
-            except (tk.TclError, ValueError):
-                pass
-
-        for variable in values.values():
-            variable.trace_add("write", update_preview)
-        method.trace_add("write", update_preview)
-
-        buttons = ttk.Frame(dialog, padding=(12, 0, 12, 12))
-        buttons.pack(fill=tk.X)
-
-        def apply() -> None:
-            margins = [values[name].get() for name in ("Слева", "Сверху", "Справа", "Снизу")]
-            if not any(value > 0 for value in margins):
-                messagebox.showinfo("Расширение", "Укажите размер расширения хотя бы с одной стороны.", parent=dialog)
-                return
-            dialog.destroy()
-            self.run_document_command(
-                "Генеративное расширение",
-                lambda: self.doc.generative_expand(*margins, method.get()),
-            )
-            self.refresh()
-
-        ttk.Button(buttons, text="Расширить", command=apply).pack(side=tk.RIGHT)
-        ttk.Button(buttons, text="Отмена", command=dialog.destroy).pack(side=tk.RIGHT, padx=6)
-        update_preview()
-
     def change_bit_depth(self, bit_depth: int) -> None:
         self.run_document_command(f"Глубина каналов {bit_depth} бит", lambda: self.doc.set_bit_depth(bit_depth))
         self.refresh()

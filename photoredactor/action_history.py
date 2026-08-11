@@ -11,6 +11,7 @@ from .core import Document, render_shape_layer, render_text_layer
 from .history import (
     DocumentFieldsCommand,
     DocumentStateCommand,
+    GeneratedExpandCommand,
     LayerBlendModeCommand,
     LayerDeleteCommand,
     LayerFieldsCommand,
@@ -69,6 +70,8 @@ def history_command_to_payload(command: Any, document: Document) -> dict[str, An
         payload["values"] = encode_value(command.after)
     elif isinstance(command, LayerInsertCommand):
         payload.update(index=command.index, layer_data=layer_to_data(command.layer))
+    elif isinstance(command, GeneratedExpandCommand):
+        payload.update(margins=list(command.margins), layer_data=layer_to_data(command.layer))
     elif isinstance(command, LayerDeleteCommand):
         payload["index"] = command.index
     elif isinstance(command, LayersDeleteCommand):
@@ -182,6 +185,19 @@ def apply_history_payload(document: Document, payload: dict[str, Any], context: 
         index = max(0, min(int(payload.get("index", len(document.layers))), len(document.layers)))
         document.layers.insert(index, inserted)
         document.active_layer = index
+        context.setdefault("layer_ids", {})[original_id] = new_id
+    elif kind == "GeneratedExpandCommand":
+        raw_layer = decode_value(payload["layer_data"])
+        original_id = str(raw_layer.get("id", ""))
+        new_id = original_id if document.get_layer(original_id) is None else uuid.uuid4().hex
+        inserted = layer_from_data(payload["layer_data"], layer_id=new_id)
+        margins = tuple(max(0, int(value)) for value in payload["margins"])
+        command = GeneratedExpandCommand(
+            "Генеративное расширение", inserted, margins, (document.width, document.height), document.active_layer,
+            None if document.selection_mask is None else document.selection_mask.copy(),
+            {name: mask.copy() for name, mask in document.saved_selections.items()},
+        )
+        command.redo(document)
         context.setdefault("layer_ids", {})[original_id] = new_id
     elif kind in {"LayerDeleteCommand", "LayersDeleteCommand"}:
         indices = payload.get("indices", [payload.get("index", document.active_layer)])

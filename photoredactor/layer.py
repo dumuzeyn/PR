@@ -26,6 +26,7 @@ class Layer:
     shape_data: dict[str, Any] | None = None
     adjustment: dict[str, Any] | None = None
     smart_data: dict[str, Any] | None = None
+    generation_data: dict[str, Any] | None = None
     smart_source: np.ndarray | None = field(default=None, repr=False, compare=False)
     transform_data: dict[str, Any] | None = None
     transform_source: np.ndarray | None = field(default=None, repr=False, compare=False)
@@ -108,6 +109,7 @@ class Layer:
             shape_data=None if self.shape_data is None else json.loads(json.dumps(self.shape_data)),
             adjustment=None if self.adjustment is None else dict(self.adjustment),
             smart_data=None if self.smart_data is None else json.loads(json.dumps(self.smart_data, ensure_ascii=False)),
+            generation_data=None if self.generation_data is None else json.loads(json.dumps(self.generation_data, ensure_ascii=False)),
             smart_source=None if self.smart_source is None else self.smart_source.copy(),
             transform_data=None if self.transform_data is None else json.loads(json.dumps(self.transform_data)),
             transform_source=None if self.transform_source is None else self.transform_source.copy(),

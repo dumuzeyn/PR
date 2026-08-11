@@ -261,6 +261,52 @@ class LayerInsertCommand:
         document.dirty = True
 
 @dataclass
+class GeneratedExpandCommand:
+    label: str
+    layer: Any
+    margins: tuple[int, int, int, int]
+    before_size: tuple[int, int]
+    before_active: int
+    before_selection: np.ndarray | None
+    before_saved_selections: dict[str, np.ndarray]
+
+    @property
+    def memory_bytes(self) -> int:
+        masks = _value_memory(self.before_selection) + _value_memory(self.before_saved_selections)
+        return int(self.layer.pixels.nbytes) + masks + 1024
+
+    def _expanded_mask(self, mask: np.ndarray) -> np.ndarray:
+        left, top, right, bottom = self.margins
+        output = np.zeros((mask.shape[0] + top + bottom, mask.shape[1] + left + right), dtype=np.uint8)
+        output[top:top + mask.shape[0], left:left + mask.shape[1]] = mask
+        return output
+
+    def undo(self, document: Document) -> None:
+        left, top, _right, _bottom = self.margins
+        document.layers = [layer for layer in document.layers if layer.id != self.layer.id]
+        for layer in document.layers:
+            layer.x -= left
+            layer.y -= top
+        document.width, document.height = self.before_size
+        document.active_layer = min(self.before_active, max(0, len(document.layers) - 1))
+        document.selection_mask = None if self.before_selection is None else self.before_selection.copy()
+        document.saved_selections = {name: mask.copy() for name, mask in self.before_saved_selections.items()}
+        document.dirty = True
+
+    def redo(self, document: Document) -> None:
+        left, top, right, bottom = self.margins
+        for layer in document.layers:
+            layer.x += left
+            layer.y += top
+        document.layers.insert(0, copy.deepcopy(self.layer))
+        document.width = self.before_size[0] + left + right
+        document.height = self.before_size[1] + top + bottom
+        document.active_layer = min(self.before_active + 1, len(document.layers) - 1)
+        document.selection_mask = None if self.before_selection is None else self._expanded_mask(self.before_selection)
+        document.saved_selections = {name: self._expanded_mask(mask) for name, mask in self.before_saved_selections.items()}
+        document.dirty = True
+
+@dataclass
 class LayerDeleteCommand:
     label: str
     index: int

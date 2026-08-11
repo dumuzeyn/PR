@@ -46,6 +46,9 @@ class MenusToolsMixin:
         edit.add_command(label="Копировать", command=self.shortcut_copy, accelerator=accelerator("copy"))
         edit.add_command(label="Вставить", command=self.shortcut_paste, accelerator=accelerator("paste"))
         edit.add_command(label="Удалить выбранные пиксели", command=self.shortcut_delete, accelerator="Delete")
+        edit.add_command(label="Генеративная заливка", command=self.generative_fill_dialog)
+        edit.add_command(label="История генераций", command=self.generative_history_dialog)
+        edit.add_command(label="Настройки генеративного ИИ", command=self.generative_settings_dialog)
         edit.add_separator()
         edit.add_command(label="Снять выделение", command=self.clear_selection, accelerator=accelerator("deselect"))
 

@@ -34,7 +34,7 @@ This repository starts with a real working editor and an architecture intended t
 - native 16-bit RAW decoding; high-precision 8/16/32-bit layers, composition, filters, history and geometry; ICC assignment/conversion, soft proof, gamut warning, print preflight and profile-embedded CMYK TIFF export
 - direct tile-by-tile distant-zoom rendering without a full-size composite, scratch-disk cache eviction and measured OpenCL GPU kernels with adaptive CPU fallback
 - isolated Plugin SDK v2 with manifests, explicit permissions, filters, document actions, importers, exporters and validated external executables
-- local algorithmic canvas expansion with a live preview; true AI generative fill/expand remains unfinished in `ROADMAP.md`
+- Stability AI generative fill and outpaint workspace with masked edits, strict source-pixel preservation, prompts, negative prompts, styles, seeds, variants, history, undo/redo and encrypted key storage
 - metadata/EXIF view, histogram, image statistics and eyedropper
 - non-destructive adjustment layers with importable/exportable preset libraries for brightness/contrast, saturation, vibrance, temperature/tint, hue/saturation, exposure, color balance, levels, curves, threshold, posterize, invert and grayscale
 - undo/redo
@@ -82,6 +82,12 @@ python benchmarks\benchmark_rendering.py --include-4k
 ```
 
 Measured results and the list of correctness fallbacks are recorded in [`PERFORMANCE.md`](PERFORMANCE.md).
+
+## Generative AI
+
+Open `Правка -> Настройки генеративного ИИ` and save a Stability AI API key. On Windows the key is encrypted for the current user through DPAPI and is never written to `settings.json`. The `STABILITY_API_KEY` environment variable can be used instead.
+
+`Правка -> Генеративная заливка` uses the current selection. `Изображение -> Генеративное расширение холста` adds content around the document. Both workflows run requests in the background, support one to four variants and an exact seed repeat, and apply the result as a separate undoable layer. A Stability AI account with available credits is required for real generation.
 
 ## Download the automatic Windows build
 

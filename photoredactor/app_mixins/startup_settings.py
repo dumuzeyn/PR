@@ -20,6 +20,7 @@ class StartupSettingsMixin:
         self.app_data_dir = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "PhotoRedactor"
         self.recovery_path = self.app_data_dir / "recovery.prdx"
         self.settings_path = self.app_data_dir / "settings.json"
+        self.generative_credential_path = self.app_data_dir / "stability-api-key.bin"
         self.recent_files: list[str] = []
         self.action_recorder = ActionRecorder()
         self.action_runner = ActionRunner()
@@ -40,6 +41,7 @@ class StartupSettingsMixin:
         self.custom_canvas_height = 900
         self.custom_canvas_dpi = 72
         self.custom_canvas_background = "Белый"
+        self.generative_settings = {"variants": 3, "style": "photographic", "creativity": 0.5}
         self.paint_target = tk.StringVar(value="pixels")
         self.selection_mode = tk.StringVar(value="replace")
         self.retouch_preset = tk.StringVar(value="Средняя ретушь")
@@ -282,6 +284,13 @@ class StartupSettingsMixin:
                 saved_background = str(custom_canvas.get("background", self.custom_canvas_background))
                 if saved_background in DOCUMENT_BACKGROUNDS:
                     self.custom_canvas_background = saved_background
+                generative = data.get("generative", {})
+                if isinstance(generative, dict):
+                    self.generative_settings = {
+                        "variants": max(1, min(4, int(generative.get("variants", 3)))),
+                        "style": str(generative.get("style", "photographic")),
+                        "creativity": float(np.clip(generative.get("creativity", 0.5), 0.0, 1.0)),
+                    }
                 if self.tool.get() not in self.tool_order:
                     self.tool.set(self.visible_tools[0])
                 self.load_active_tool_settings(self.tool.get())
@@ -323,6 +332,7 @@ class StartupSettingsMixin:
                             "dpi": self.custom_canvas_dpi,
                             "background": self.custom_canvas_background,
                         },
+                        "generative": self.generative_settings,
                     },
                     ensure_ascii=False,
                     indent=2,
