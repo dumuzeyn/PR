@@ -14,6 +14,8 @@ class MenusToolsMixin:
         self.file_menu = file_menu
         file_menu.add_command(label="Новый холст", command=self.new_document, accelerator=accelerator("new_document"))
         file_menu.add_command(label="Открыть изображение/проект", command=self.open_file, accelerator=accelerator("open"))
+        self.plugin_import_menu = tk.Menu(file_menu, tearoff=False, postcommand=self.refresh_plugin_import_menu)
+        file_menu.add_cascade(label="Импорт через плагин", menu=self.plugin_import_menu)
         self.recent_menu = tk.Menu(file_menu, tearoff=False)
         file_menu.add_cascade(label="Недавние файлы", menu=self.recent_menu)
         file_menu.add_command(label="Поместить встроенное", command=self.place_embedded)
@@ -23,6 +25,8 @@ class MenusToolsMixin:
         file_menu.add_command(label="Сохранить проект", command=self.save, accelerator=accelerator("save"))
         file_menu.add_command(label="Сохранить проект как", command=self.save_as_project, accelerator=accelerator("save_as"))
         file_menu.add_command(label="Экспорт изображения", command=self.export_image)
+        self.plugin_export_menu = tk.Menu(file_menu, tearoff=False, postcommand=self.refresh_plugin_export_menu)
+        file_menu.add_cascade(label="Экспорт через плагин", menu=self.plugin_export_menu)
         file_menu.add_command(label="Экспорт слоев", command=self.export_layers)
         file_menu.add_separator()
         file_menu.add_command(label="Открыть восстановление", command=self.open_recovery)
@@ -226,6 +230,7 @@ class MenusToolsMixin:
         actions.add_command(label="Пакетно выполнить действие...", command=self.batch_action_file)
         actions.add_command(label="Очередь пакетной обработки...", command=self.open_batch_queue)
         actions.add_separator()
+        actions.add_command(label="Управление плагинами...", command=self.plugin_manager)
         actions.add_command(label="Перезагрузить плагины", command=self.reload_plugins)
         actions.add_command(label="Ошибки плагинов", command=self.show_plugin_errors)
 

@@ -26,6 +26,7 @@ class StartupSettingsMixin:
         self.batch_queue = BatchQueue(self.action_runner)
         self.plugin_registry = PluginRegistry()
         self.plugin_registry.discover()
+        self._plugin_action_names = set(self.plugin_registry.action_commands)
         for name, callback in self.plugin_registry.action_commands.items():
             self.action_runner.register(name, callback)
         self._edit_generation = 0

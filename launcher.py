@@ -20,10 +20,15 @@ def enable_windows_hidpi() -> None:
             pass
 
 
-enable_windows_hidpi()
-
-from photoredactor.app import main
-
-
 if __name__ == "__main__":
-    main()
+    import sys
+
+    if len(sys.argv) > 1 and sys.argv[1] == "--plugin-host":
+        from photoredactor.plugin_host import main as plugin_host_main
+
+        plugin_host_main()
+    else:
+        enable_windows_hidpi()
+        from photoredactor.app import main
+
+        main()

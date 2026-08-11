@@ -4,6 +4,69 @@ from ..app_shared import *
 
 
 class PluginsViewMixin:
+    def refresh_plugin_import_menu(self) -> None:
+        self.plugin_import_menu.delete(0, tk.END)
+        if not self.plugin_registry.importers:
+            self.plugin_import_menu.add_command(label="Нет доступных импортёров", state=tk.DISABLED)
+            return
+        for name in sorted(self.plugin_registry.importers):
+            self.plugin_import_menu.add_command(label=name, command=lambda value=name: self.import_with_plugin(value))
+
+    def refresh_plugin_export_menu(self) -> None:
+        self.plugin_export_menu.delete(0, tk.END)
+        if not self.plugin_registry.exporters:
+            self.plugin_export_menu.add_command(label="Нет доступных экспортёров", state=tk.DISABLED)
+            return
+        for name in sorted(self.plugin_registry.exporters):
+            self.plugin_export_menu.add_command(label=name, command=lambda value=name: self.export_with_plugin(value))
+
+    def import_with_plugin(self, name: str) -> None:
+        extension = self.plugin_registry.importers[name]
+        pattern = " ".join(f"*{item}" for item in extension.extensions) or "*.*"
+        path = filedialog.askopenfilename(filetypes=[(name, pattern), ("Все файлы", "*.*")])
+        if not path:
+            return
+        raw = simpledialog.askstring("Импорт через плагин", "Параметры JSON:", initialvalue="{}")
+        if raw is None:
+            return
+        try:
+            params = json.loads(raw)
+            if not isinstance(params, dict):
+                raise ValueError("Параметры должны быть JSON-объектом")
+        except Exception as exc:
+            messagebox.showerror("Импорт через плагин", str(exc))
+            return
+
+        def done(document) -> None:
+            self.doc = document
+            self.history.clear()
+            self._edit_generation += 1
+            self.selection_box = self.doc.selection_bounds()
+            self.show_editor()
+            self.refresh()
+
+        self.run_background("Импорт через плагин", lambda: self.plugin_registry.import_document(name, path, params), done)
+
+    def export_with_plugin(self, name: str) -> None:
+        extension = self.plugin_registry.exporters[name]
+        default_extension = extension.extensions[0] if extension.extensions else ""
+        pattern = " ".join(f"*{item}" for item in extension.extensions) or "*.*"
+        path = filedialog.asksaveasfilename(defaultextension=default_extension, filetypes=[(name, pattern), ("Все файлы", "*.*")])
+        if not path:
+            return
+        raw = simpledialog.askstring("Экспорт через плагин", "Параметры JSON:", initialvalue="{}")
+        if raw is None:
+            return
+        try:
+            params = json.loads(raw)
+            if not isinstance(params, dict):
+                raise ValueError("Параметры должны быть JSON-объектом")
+        except Exception as exc:
+            messagebox.showerror("Экспорт через плагин", str(exc))
+            return
+        snapshot = self.document_copy()
+        self.run_background("Экспорт через плагин", lambda: self.plugin_registry.export_document(name, snapshot, path, params))
+
     def refresh_plugin_filter_menu(self) -> None:
         self.plugin_filters_menu.delete(0, tk.END)
         if not self.plugin_registry.filters:
@@ -25,10 +88,13 @@ class PluginsViewMixin:
             messagebox.showerror("Фильтр-плагин", str(exc))
 
     def reload_plugins(self) -> None:
+        for name in getattr(self, "_plugin_action_names", set()):
+            self.action_runner.commands.pop(name, None)
         count = self.plugin_registry.discover()
         for name, callback in self.plugin_registry.action_commands.items():
             if name not in self.action_runner.commands:
                 self.action_runner.register(name, callback)
+        self._plugin_action_names = set(self.plugin_registry.action_commands)
         self.status_text(f"Плагины перезагружены: {count}")
         if self.plugin_registry.errors:
             self.show_plugin_errors()
@@ -38,6 +104,66 @@ class PluginsViewMixin:
             messagebox.showinfo("Плагины", "Ошибок загрузки нет.")
             return
         self.show_text_window("Ошибки плагинов", "\n".join(self.plugin_registry.errors))
+
+    def plugin_manager(self) -> None:
+        window = tk.Toplevel(self)
+        self._plugin_manager_window = window
+        window.title("Управление плагинами")
+        window.geometry("780x430")
+        window.transient(self)
+        tree = ttk.Treeview(window, columns=("version", "api", "status", "permissions"), show="tree headings", selectmode="browse")
+        self._plugin_manager_tree = tree
+        tree.heading("#0", text="Плагин")
+        tree.heading("version", text="Версия")
+        tree.heading("api", text="API")
+        tree.heading("status", text="Состояние")
+        tree.heading("permissions", text="Разрешения")
+        tree.column("#0", width=180)
+        tree.column("version", width=80)
+        tree.column("api", width=55)
+        tree.column("status", width=160)
+        tree.column("permissions", width=280)
+        tree.pack(fill=tk.BOTH, expand=True, padx=10, pady=(10, 6))
+
+        def refresh() -> None:
+            tree.delete(*tree.get_children())
+            for info in self.plugin_registry.plugins.values():
+                status = "Нужно разрешение" if info.blocked_permissions else "Готов"
+                if info.legacy:
+                    status = "Совместимый фильтр"
+                tree.insert("", "end", iid=info.id, text=info.name, values=(info.version, info.api_version, status, ", ".join(sorted(info.requested_permissions)) or "нет"))
+
+        def configure_permissions() -> None:
+            selected = tree.selection()
+            if not selected:
+                return
+            info = self.plugin_registry.plugins[selected[0]]
+            dialog = tk.Toplevel(window)
+            dialog.title(f"Разрешения: {info.name}")
+            dialog.transient(window)
+            dialog.grab_set()
+            body = ttk.Frame(dialog, padding=12)
+            body.pack(fill=tk.BOTH, expand=True)
+            variables = {}
+            for permission in sorted(info.requested_permissions):
+                variable = tk.BooleanVar(value=permission in info.granted_permissions)
+                variables[permission] = variable
+                ttk.Checkbutton(body, text=permission, variable=variable).pack(anchor="w", pady=2)
+
+            def apply() -> None:
+                self.plugin_registry.set_permissions(info.id, {key for key, value in variables.items() if value.get()})
+                dialog.destroy()
+                self.reload_plugins()
+                refresh()
+
+            ttk.Button(body, text="Применить", command=apply).pack(anchor="e", pady=(10, 0))
+
+        controls = ttk.Frame(window)
+        controls.pack(fill=tk.X, padx=10, pady=(0, 10))
+        ttk.Button(controls, text="Настроить разрешения...", command=configure_permissions).pack(side=tk.LEFT)
+        ttk.Button(controls, text="Перезагрузить", command=lambda: (self.reload_plugins(), refresh())).pack(side=tk.LEFT, padx=4)
+        ttk.Button(controls, text="Показать ошибки", command=self.show_plugin_errors).pack(side=tk.LEFT)
+        refresh()
 
     def set_view_channel(self) -> None:
         self.invalidate_view()

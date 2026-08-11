@@ -33,7 +33,7 @@ This repository starts with a real working editor and an architecture intended t
 - Smart Objects with embedded originals, re-editable transforms and linked-file conflict status
 - native 16-bit RAW decoding; high-precision 8/16/32-bit layers, composition, filters, history and geometry; ICC assignment/conversion, soft proof, gamut warning, print preflight and profile-embedded CMYK TIFF export
 - direct tile-by-tile distant-zoom rendering without a full-size composite, scratch-disk cache eviction and measured OpenCL GPU kernels with adaptive CPU fallback
-- Python plugin API plus validated external executable filters
+- isolated Plugin SDK v2 with manifests, explicit permissions, filters, document actions, importers, exporters and validated external executables
 - local algorithmic canvas expansion with a live preview; true AI generative fill/expand remains unfinished in `ROADMAP.md`
 - metadata/EXIF view, histogram, image statistics and eyedropper
 - non-destructive adjustment layers with importable/exportable preset libraries for brightness/contrast, saturation, vibrance, temperature/tint, hue/saturation, exposure, color balance, levels, curves, threshold, posterize, invert and grayscale
@@ -110,6 +110,7 @@ Every push to `master` starts the `Build PhotoRedactor for Windows` workflow. Op
 ## Plugins and actions
 
 - Put Python plugins in `%APPDATA%\PhotoRedactor\plugins` and reload them from `Действия -> Перезагрузить плагины`.
+- API v2 plugins use a versioned `plugin.json`, stay disabled until their requested permissions are approved in `Действия -> Управление плагинами`, and execute in a guarded child process. Plugin importers and exporters appear under `Файл`.
 - The plugin contract and external filter protocol are documented in [`PLUGINS.md`](PLUGINS.md).
 - Action v3 records the editor's actual undoable operations, including paint, masks, selections, vector/text edits, layer properties and layer structure. The action editor supports ordering, conditions, stops and per-step error policies; old v2 files remain readable. A ready example is in `actions\web_thumbnail.json`.
 - The batch queue supports multiple jobs, PNG/JPEG/WebP/TIFF/BMP output, rename/overwrite/skip collision policies, continue/stop error policies, progress, cancellation, per-file results and queue save/restore.

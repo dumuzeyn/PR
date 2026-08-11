@@ -478,6 +478,12 @@ class StartupTests(unittest.TestCase):
         self.assertEqual(len(self.app._batch_queue_tree.get_children()), 1)
         self.assertEqual(self.app._batch_queue_window.title(), "Очередь пакетной обработки")
 
+    def test_plugin_manager_lists_isolated_plugins_and_permissions(self) -> None:
+        self.app.plugin_manager()
+        self.app.update()
+        self.assertEqual(self.app._plugin_manager_window.title(), "Управление плагинами")
+        self.assertGreaterEqual(len(self.app._plugin_manager_tree.get_children()), 1)
+
 
 if __name__ == "__main__":
     unittest.main()
