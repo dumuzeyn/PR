@@ -22,6 +22,10 @@ class PersistenceDocumentMixin:
 
     @classmethod
     def from_image(cls, path: str | Path) -> "Document":
+        if Path(path).suffix.lower() in {".psd", ".psb"}:
+            from ..psd_compat import load_psd
+
+            return load_psd(path, cls)
         if Path(path).suffix.lower() in RAW_EXTENSIONS:
             return cls.from_raw(path)
         image = Image.open(path)

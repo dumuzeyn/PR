@@ -16,6 +16,7 @@ from .app_mixins.select_mask import SelectMaskMixin
 from .app_mixins.automatic_selection import AutomaticSelectionMixin
 from .app_mixins.documents import DocumentsMixin
 from .app_mixins.smart_files import SmartFilesMixin
+from .app_mixins.psd_files import PSDFileMixin
 from .app_mixins.text_layers import TextLayersMixin
 from .app_mixins.free_transform import FreeTransformMixin
 from .app_mixins.transform_workspace import TransformWorkspaceMixin
@@ -35,7 +36,7 @@ from .app_mixins.content_aware import ContentAwareMixin
 from .app_mixins.plugins_view import PluginsViewMixin
 
 
-class PhotoRedactorApp(StartupSettingsMixin, StartupScreenMixin, ShortcutsMixin, MenusToolsMixin, ColorsCanvasMixin, CommandsMixin, ActionWorkflowsMixin, RenderingViewMixin, PointerSupportMixin, PointerEventsMixin, PaintingMixin, TextGradientMixin, CropOverlaysMixin, SelectMaskMixin, AutomaticSelectionMixin, DocumentsMixin, SmartFilesMixin, TextLayersMixin, FreeTransformMixin, TransformWorkspaceMixin, FilterDialogsMixin, FilterMasksMixin, LayerMasksMixin, TextVectorMixin, ShapeVectorMixin, BooleanShapesMixin, GenerativeWorkspaceMixin, ImageGeometryMixin, ColorWorkspaceMixin, AdjustmentsMixin, RetouchMixin, AdvancedRetouchMixin, ContentAwareMixin, PluginsViewMixin, tk.Tk):
+class PhotoRedactorApp(StartupSettingsMixin, StartupScreenMixin, ShortcutsMixin, MenusToolsMixin, ColorsCanvasMixin, CommandsMixin, ActionWorkflowsMixin, RenderingViewMixin, PointerSupportMixin, PointerEventsMixin, PaintingMixin, TextGradientMixin, CropOverlaysMixin, SelectMaskMixin, AutomaticSelectionMixin, DocumentsMixin, PSDFileMixin, SmartFilesMixin, TextLayersMixin, FreeTransformMixin, TransformWorkspaceMixin, FilterDialogsMixin, FilterMasksMixin, LayerMasksMixin, TextVectorMixin, ShapeVectorMixin, BooleanShapesMixin, GenerativeWorkspaceMixin, ImageGeometryMixin, ColorWorkspaceMixin, AdjustmentsMixin, RetouchMixin, AdvancedRetouchMixin, ContentAwareMixin, PluginsViewMixin, tk.Tk):
     pass
 
 

@@ -10,7 +10,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=['scipy', 'skimage', 'aggdraw'],
     noarchive=False,
     optimize=0,
 )

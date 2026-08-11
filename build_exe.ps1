@@ -6,6 +6,7 @@ if (Test-Path $runtimePython) {
   $py = "python"
 }
 & $py -m PyInstaller --noconfirm --clean --onefile --windowed --name PhotoRedactor `
+  --exclude-module scipy --exclude-module skimage --exclude-module aggdraw `
   --add-data "photoredactor/assets/tool_demos;photoredactor/assets/tool_demos" launcher.py
 if ($LASTEXITCODE -ne 0) {
   throw "PyInstaller завершился с кодом $LASTEXITCODE"

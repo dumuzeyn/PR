@@ -7,7 +7,7 @@ from ..app_shared import *
 
 class SmartFilesMixin:
     def open_file(self) -> None:
-        path = filedialog.askopenfilename(filetypes=[("Проекты, изображения и RAW", "*.prdx *.png *.jpg *.jpeg *.webp *.bmp *.tif *.tiff *.dng *.arw *.cr2 *.cr3 *.nef *.nrw *.orf *.raf *.rw2 *.pef *.raw"), ("Все файлы", "*.*")])
+        path = filedialog.askopenfilename(filetypes=[("Проекты, PSD/PSB, изображения и RAW", "*.prdx *.psd *.psb *.png *.jpg *.jpeg *.webp *.bmp *.tif *.tiff *.dng *.arw *.cr2 *.cr3 *.nef *.nrw *.orf *.raf *.rw2 *.pef *.raw"), ("Все файлы", "*.*")])
         if not path:
             return
         self.open_path(path)
@@ -30,6 +30,10 @@ class SmartFilesMixin:
             self.selection_box = self.doc.selection_bounds()
             self.add_recent_file(source_path)
             self.show_editor()
+            compatibility = document.metadata.get("psd_compatibility", {})
+            warnings = compatibility.get("warnings", []) if isinstance(compatibility, dict) else []
+            if warnings:
+                messagebox.showwarning("Совместимость PSD/PSB", "\n".join(str(item) for item in warnings[:8]))
 
         self.run_background("Открытие проекта", worker, opened)
 

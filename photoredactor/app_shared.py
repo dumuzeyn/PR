@@ -120,6 +120,7 @@ from .large_document import gpu_status
 from .interactive_performance import benchmark_interactive_paths
 from .credential_store import CredentialStoreError, EncryptedCredentialStore
 from .generative_api import GeneratedVariant, GenerativeAPIError, MAX_SEED, STABILITY_STYLES, StabilityImageClient, validate_outpaint_dimensions, variant_seeds
+from .psd_compat import PSDCompatibilityError, export_psd
 from .automation import ActionRecorder, ActionRunner, ActionStep, load_action
 from .batch_queue import BatchQueue
 from .color_management import COLOR_MODELS, BIT_DEPTHS, color_settings, display_rgba, profile_details, soft_proof_rgba, gamut_warning_mask

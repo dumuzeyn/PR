@@ -35,6 +35,7 @@ This repository starts with a real working editor and an architecture intended t
 - direct tile-by-tile distant-zoom rendering without a full-size composite, scratch-disk cache eviction and measured OpenCL GPU kernels with adaptive CPU fallback
 - isolated Plugin SDK v2 with manifests, explicit permissions, filters, document actions, importers, exporters and validated external executables
 - Stability AI generative fill and outpaint workspace with masked edits, strict source-pixel preservation, prompts, negative prompts, styles, seeds, variants, history, undo/redo and encrypted key storage
+- tested PSD/PSB compatibility import and export for ordered raster layers, offsets, opacity, visibility, locks, clipping, blend modes, masks, DPI, ICC profiles and 8/16/32-bit document depth; unsupported Photoshop-only structures are reported instead of silently advertised as editable
 - metadata/EXIF view, histogram, image statistics and eyedropper
 - non-destructive adjustment layers with importable/exportable preset libraries for brightness/contrast, saturation, vibrance, temperature/tint, hue/saturation, exposure, color balance, levels, curves, threshold, posterize, invert and grayscale
 - undo/redo
@@ -57,7 +58,7 @@ This repository starts with a real working editor and an architecture intended t
 
 ## Dependency policy
 
-PhotoRedactor does not depend on placeholder packages or simulated AI libraries. Runtime dependencies are established projects installed from their real distributions: NumPy, OpenCV, Pillow and rawpy. New dependencies must be checked for a genuine upstream project, an importable implementation and actual use in the packaged application before they are added.
+PhotoRedactor does not depend on placeholder packages or simulated AI libraries. Runtime dependencies are established projects installed from their real distributions: NumPy, OpenCV, Pillow, rawpy and psd-tools. New dependencies must be checked for a genuine upstream project, an importable implementation and actual use in the packaged application before they are added.
 
 ## Architecture
 
@@ -92,6 +93,12 @@ Open `Правка -> Настройки генеративного ИИ` and sa
 ## Download the automatic Windows build
 
 Every push to `master` starts the `Build PhotoRedactor for Windows` workflow. Open the repository's `Actions` tab, select the latest successful run and download the `PhotoRedactor-Windows` artifact. It contains the current `PhotoRedactor.exe` built and tested by GitHub.
+
+## PSD and PSB compatibility
+
+PSD and PSB files can be opened from the regular file dialog. Pixel layers retain their order, names, coordinates, opacity, visibility, locks, clipping, supported blend modes and raster masks. DPI, ICC profile and document depth are imported; 16/32-bit RGB layers retain a high-precision working buffer when the source exposes one.
+
+`Файл -> Экспорт совместимого PSD/PSB` writes a layered file and reports every complex PhotoRedactor layer that had to become a pixel layer. Imported Photoshop text remains editable in PhotoRedactor with approximate font parameters and its original visual cache. The current upstream writer cannot create editable Photoshop type, shape or Smart Object records, so the professional round-trip item remains open in `ROADMAP.md`.
 
 ## Tool panel
 

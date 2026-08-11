@@ -25,6 +25,7 @@ class MenusToolsMixin:
         file_menu.add_command(label="Сохранить проект", command=self.save, accelerator=accelerator("save"))
         file_menu.add_command(label="Сохранить проект как", command=self.save_as_project, accelerator=accelerator("save_as"))
         file_menu.add_command(label="Экспорт изображения", command=self.export_image)
+        file_menu.add_command(label="Экспорт совместимого PSD/PSB", command=self.export_psd_compatible)
         self.plugin_export_menu = tk.Menu(file_menu, tearoff=False, postcommand=self.refresh_plugin_export_menu)
         file_menu.add_cascade(label="Экспорт через плагин", menu=self.plugin_export_menu)
         file_menu.add_command(label="Экспорт слоев", command=self.export_layers)

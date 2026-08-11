@@ -5,3 +5,4 @@ rawpy
 tifffile
 pyinstaller
 pytest
+psd-tools>=1.18,<2
