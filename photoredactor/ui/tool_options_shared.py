@@ -4,6 +4,7 @@ import tkinter as tk
 from tkinter import ttk
 
 from .theme import TOKENS
+from ..brush_engine import BRUSH_BLEND_MODES
 
 
 BRUSH_TOOLS = {"brush", "eraser", "blur_tool", "sharpen_tool", "dodge", "burn", "clone", "healing", "spot_healing"}

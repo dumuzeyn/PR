@@ -236,23 +236,28 @@ class PointerSupportMixin:
         label_by_mode = {"replace": "new", "add": "+", "subtract": "-", "intersect": "x"}
         outline = color_by_mode.get(mode, "#50e3ff")
         coords = [cx - radius, cy - radius, cx + radius, cy + radius]
+        hardness_radius = max(1.0, radius * float(np.clip(self.hardness.get(), 0.0, 1.0)))
+        hardness_coords = [cx - hardness_radius, cy - hardness_radius, cx + hardness_radius, cy + hardness_radius]
         if not self._brush_preview_ids:
             fill_id = self.canvas.create_oval(*coords, outline="", fill=outline, stipple="gray25")
             ring_id = self.canvas.create_oval(*coords, outline=outline, width=2)
+            hardness_id = self.canvas.create_oval(*hardness_coords, outline=outline, dash=(2, 3), width=1)
             cross_h = self.canvas.create_line(cx - 6, cy, cx + 6, cy, fill=outline, width=1)
             cross_v = self.canvas.create_line(cx, cy - 6, cx, cy + 6, fill=outline, width=1)
             text_id = self.canvas.create_text(cx, cy + radius + 12, text=label_by_mode.get(mode, ""), fill=outline, font=("Segoe UI", 9, "bold"))
-            self._brush_preview_ids = [fill_id, ring_id, cross_h, cross_v, text_id]
+            self._brush_preview_ids = [fill_id, ring_id, hardness_id, cross_h, cross_v, text_id]
         else:
-            fill_id, ring_id, cross_h, cross_v, text_id = self._brush_preview_ids
+            fill_id, ring_id, hardness_id, cross_h, cross_v, text_id = self._brush_preview_ids
             self.canvas.coords(fill_id, *coords)
             self.canvas.coords(ring_id, *coords)
+            self.canvas.coords(hardness_id, *hardness_coords)
             self.canvas.coords(cross_h, cx - 6, cy, cx + 6, cy)
             self.canvas.coords(cross_v, cx, cy - 6, cx, cy + 6)
             self.canvas.coords(text_id, cx, cy + radius + 12)
-        fill_id, ring_id, cross_h, cross_v, text_id = self._brush_preview_ids
+        fill_id, ring_id, hardness_id, cross_h, cross_v, text_id = self._brush_preview_ids
         self.canvas.itemconfigure(fill_id, fill=outline)
         self.canvas.itemconfigure(ring_id, outline=outline)
+        self.canvas.itemconfigure(hardness_id, outline=outline, state=tk.NORMAL if tool in self.brush_preview_tools() else tk.HIDDEN)
         self.canvas.itemconfigure(cross_h, fill=outline)
         self.canvas.itemconfigure(cross_v, fill=outline)
         self.canvas.itemconfigure(text_id, text=label_by_mode.get(mode, ""), fill=outline, state=tk.NORMAL if tool == "quick_selection" else tk.HIDDEN)

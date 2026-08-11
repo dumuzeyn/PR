@@ -13,6 +13,20 @@ class ToolOptionsBaseMixin:
         brush_size: tk.IntVar,
         opacity: tk.DoubleVar,
         hardness: tk.DoubleVar,
+        brush_flow: tk.DoubleVar,
+        brush_spacing: tk.DoubleVar,
+        brush_smoothing: tk.DoubleVar,
+        brush_blend_mode: tk.StringVar,
+        pressure_size: tk.BooleanVar,
+        pressure_opacity: tk.BooleanVar,
+        pressure_flow: tk.BooleanVar,
+        brush_preset: tk.StringVar,
+        brush_preset_name: tk.StringVar,
+        brush_presets: dict,
+        apply_brush_preset,
+        save_brush_preset,
+        delete_brush_preset,
+        reset_brush_presets,
         retouch_strength: tk.DoubleVar,
         exposure: tk.DoubleVar,
         tonal_range: tk.StringVar,
@@ -77,6 +91,20 @@ class ToolOptionsBaseMixin:
         self.brush_size = brush_size
         self.opacity = opacity
         self.hardness = hardness
+        self.brush_flow = brush_flow
+        self.brush_spacing = brush_spacing
+        self.brush_smoothing = brush_smoothing
+        self.brush_blend_mode = brush_blend_mode
+        self.pressure_size = pressure_size
+        self.pressure_opacity = pressure_opacity
+        self.pressure_flow = pressure_flow
+        self.brush_preset = brush_preset
+        self.brush_preset_name = brush_preset_name
+        self.brush_presets = brush_presets
+        self.apply_brush_preset = apply_brush_preset
+        self.save_brush_preset = save_brush_preset
+        self.delete_brush_preset = delete_brush_preset
+        self.reset_brush_presets = reset_brush_presets
         self.retouch_strength = retouch_strength
         self.exposure = exposure
         self.tonal_range = tonal_range
@@ -174,12 +202,15 @@ class ToolOptionsBaseMixin:
             shown = True
         if tool in {"brush", "eraser"}:
             self._add_scale("Размер", self.brush_size, 1, 220, "px", integer=True)
+            self._add_scale("Жёсткость", self.hardness, 0.0, 1.0, "%", percent=True)
             self._add_scale("Непрозрачность", self.opacity, 0.01, 1.0, "%", percent=True)
+            self._add_brush_engine_options(tool)
             shown = True
         elif tool in {"blur_tool", "sharpen_tool"}:
             self._add_scale("Размер", self.brush_size, 1, 220, "px", integer=True)
             self._add_scale("Жёсткость", self.hardness, 0.0, 1.0, "%", percent=True)
             self._add_scale("Сила", self.retouch_strength, 0.01, 1.0, "%", percent=True)
+            self._add_brush_engine_options(tool)
             shown = True
         elif tool in {"dodge", "burn"}:
             self._add_scale("Размер", self.brush_size, 1, 220, "px", integer=True)
@@ -270,6 +301,8 @@ class ToolOptionsBaseMixin:
             self._compact_spin(primary, "Размер", self.brush_size, 1, 220, 5)
             variable = self.opacity if tool in {"brush", "eraser", "clone"} else self.exposure if tool in {"dodge", "burn"} else self.retouch_strength
             self._compact_percent(primary, "Непрозрачность" if tool in {"brush", "eraser", "clone"} else "Сила", variable)
+            if tool in {"brush", "eraser", "blur_tool", "sharpen_tool"}:
+                self._compact_percent(primary, "Поток", self.brush_flow)
             if tool in {"brush", "eraser"}:
                 self._compact_single_color(primary, self.pick_foreground, 0, "Основной цвет")
         elif tool in SHAPE_TOOLS:
@@ -308,7 +341,7 @@ class ToolOptionsBaseMixin:
             self._compact_spin(primary, "Допуск", self.tolerance, 0, 128, 4)
 
         gradient_has_stops = tool == "gradient" and (self.gradient_mode.get() == "Заливка" or self.gradient_object_fill.get() == "Градиент")
-        if tool in {"blur_tool", "sharpen_tool", "dodge", "burn", "clone", "healing", "spot_healing", "text", "crop", "quick_selection", "star_shape", "custom_shape"} or gradient_has_stops:
+        if tool in BRUSH_TOOLS or tool in {"text", "crop", "quick_selection", "star_shape", "custom_shape"} or gradient_has_stops:
             ttk.Button(primary, text="Дополнительно", command=self._toggle_compact_advanced).pack(side=tk.LEFT, padx=(8, 3))
         if self._advanced_visible:
             self._render_compact_advanced(primary, tool)
@@ -321,6 +354,12 @@ class ToolOptionsBaseMixin:
         ttk.Separator(parent, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=7, pady=4)
         if tool in BRUSH_TOOLS:
             self._compact_percent(parent, "Жёсткость", self.hardness)
+        if tool in {"brush", "eraser", "blur_tool", "sharpen_tool"}:
+            self._compact_percent(parent, "Интервал", self.brush_spacing)
+            self._compact_percent(parent, "Сглаживание", self.brush_smoothing)
+            if tool == "brush":
+                self._compact_combo(parent, "Режим", self.brush_blend_mode, list(BRUSH_BLEND_MODES), 10)
+            self._compact_brush_presets(parent)
         if tool in {"clone", "healing"}:
             ttk.Checkbutton(parent, text="Выровненный", variable=self.clone_aligned).pack(side=tk.LEFT, padx=3)
         elif tool == "gradient" and (self.gradient_mode.get() == "Заливка" or self.gradient_object_fill.get() == "Градиент"):

@@ -52,6 +52,17 @@ class ColorsCanvasMixin:
             settings["opacity"] = float(self.opacity.get())
         if "hardness" in settings:
             settings["hardness"] = float(self.hardness.get())
+        if "flow" in settings:
+            settings["flow"] = float(self.brush_flow.get())
+        if "spacing" in settings:
+            settings["spacing"] = float(self.brush_spacing.get())
+        if "smoothing" in settings:
+            settings["smoothing"] = float(self.brush_smoothing.get())
+        if "blend_mode" in settings:
+            settings["blend_mode"] = self.brush_blend_mode.get()
+        for key, variable in (("pressure_size", self.pressure_size), ("pressure_opacity", self.pressure_opacity), ("pressure_flow", self.pressure_flow)):
+            if key in settings:
+                settings[key] = bool(variable.get())
         if "strength" in settings:
             settings["strength"] = float(self.retouch_strength.get())
         if "exposure" in settings:
@@ -70,12 +81,93 @@ class ColorsCanvasMixin:
             self.opacity.set(float(settings["opacity"]))
         if "hardness" in settings:
             self.hardness.set(float(settings["hardness"]))
+        if "flow" in settings:
+            self.brush_flow.set(float(settings["flow"]))
+        if "spacing" in settings:
+            self.brush_spacing.set(float(settings["spacing"]))
+        if "smoothing" in settings:
+            self.brush_smoothing.set(float(settings["smoothing"]))
+        if "blend_mode" in settings:
+            self.brush_blend_mode.set(str(settings["blend_mode"]))
+        for key, variable in (("pressure_size", self.pressure_size), ("pressure_opacity", self.pressure_opacity), ("pressure_flow", self.pressure_flow)):
+            if key in settings:
+                variable.set(bool(settings[key]))
         if "strength" in settings:
             self.retouch_strength.set(float(settings["strength"]))
         if "exposure" in settings:
             self.exposure.set(float(settings["exposure"]))
         if "range" in settings:
             self.tonal_range.set(str(settings["range"]))
+
+    def apply_brush_preset(self) -> None:
+        values = self.brush_presets.get(self.brush_preset.get())
+        if not isinstance(values, dict):
+            return
+        mapping = {
+            "size": self.brush_size,
+            "hardness": self.hardness,
+            "opacity": self.opacity,
+            "flow": self.brush_flow,
+            "spacing": self.brush_spacing,
+            "smoothing": self.brush_smoothing,
+            "blend_mode": self.brush_blend_mode,
+            "pressure_size": self.pressure_size,
+            "pressure_opacity": self.pressure_opacity,
+            "pressure_flow": self.pressure_flow,
+        }
+        for key, variable in mapping.items():
+            if key in values:
+                variable.set(values[key])
+        self.save_active_tool_settings()
+        if hasattr(self, "tool_options_panel"):
+            self.tool_options_panel.render()
+        self.status_text(f"Пресет кисти: {self.brush_preset.get()}")
+
+    def save_brush_preset(self, automatic_name: bool = False) -> None:
+        name = self.brush_preset_name.get().strip()
+        if automatic_name:
+            index = 1
+            while f"Мой пресет {index}" in self.brush_presets:
+                index += 1
+            name = f"Мой пресет {index}"
+            self.brush_preset_name.set(name)
+        if not name:
+            self.status_text("Введите название пресета")
+            return
+        self.brush_presets[name] = {
+            "size": int(self.brush_size.get()),
+            "hardness": float(self.hardness.get()),
+            "opacity": float(self.opacity.get()),
+            "flow": float(self.brush_flow.get()),
+            "spacing": float(self.brush_spacing.get()),
+            "smoothing": float(self.brush_smoothing.get()),
+            "blend_mode": self.brush_blend_mode.get(),
+            "pressure_size": bool(self.pressure_size.get()),
+            "pressure_opacity": bool(self.pressure_opacity.get()),
+            "pressure_flow": bool(self.pressure_flow.get()),
+        }
+        self.brush_preset.set(name)
+        self.save_settings()
+        self.tool_options_panel.render()
+        self.status_text(f"Пресет «{name}» сохранён")
+
+    def delete_brush_preset(self) -> None:
+        name = self.brush_preset.get()
+        if name in BRUSH_PRESET_DEFAULTS:
+            self.status_text("Стандартный пресет нельзя удалить")
+            return
+        if self.brush_presets.pop(name, None) is None:
+            return
+        self.brush_preset.set(next(iter(self.brush_presets)))
+        self.save_settings()
+        self.tool_options_panel.render()
+
+    def reset_brush_presets(self) -> None:
+        self.brush_presets.clear()
+        self.brush_presets.update(copy.deepcopy(BRUSH_PRESET_DEFAULTS))
+        self.brush_preset.set(next(iter(self.brush_presets)))
+        self.apply_brush_preset()
+        self.save_settings()
 
     def tool_changed(self, *_args) -> None:
         new_tool = self.tool.get()

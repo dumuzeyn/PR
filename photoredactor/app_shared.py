@@ -59,6 +59,8 @@ from .core import (
     apply_gradient,
     apply_filter_stack,
     bezier_curve_points,
+    BrushPathSampler,
+    BrushSettings,
     custom_shape_points,
     blur,
     curves,
@@ -78,7 +80,10 @@ from .core import (
     levels,
     local_retouch,
     paste_mask,
+    PixelBrushStroke,
+    MaskBrushStroke,
     portrait_cleanup,
+    pointer_pressure,
     refine_selection_mask,
     refine_selection_brush,
     decontaminate_edge_colors,
@@ -319,15 +324,21 @@ RETOUCH_PRESETS = {
 }
 
 TOOL_SETTINGS_DEFAULTS = {
-    "brush": {"size": 28, "opacity": 1.0},
-    "eraser": {"size": 28, "opacity": 1.0},
-    "blur_tool": {"size": 32, "hardness": 0.5, "strength": 0.25},
-    "sharpen_tool": {"size": 28, "hardness": 0.5, "strength": 0.2},
-    "dodge": {"size": 32, "hardness": 0.45, "exposure": 0.15, "range": "Средние тона"},
-    "burn": {"size": 32, "hardness": 0.45, "exposure": 0.15, "range": "Средние тона"},
-    "clone": {"size": 28, "hardness": 0.5, "opacity": 0.8},
-    "healing": {"size": 26, "hardness": 0.45, "strength": 0.65},
-    "spot_healing": {"size": 10, "hardness": 0.4, "strength": 0.65},
+    "brush": {"size": 28, "hardness": 0.5, "opacity": 1.0, "flow": 1.0, "spacing": 0.25, "smoothing": 0.15, "blend_mode": "Normal", "pressure_size": False, "pressure_opacity": False, "pressure_flow": False},
+    "eraser": {"size": 28, "hardness": 0.5, "opacity": 1.0, "flow": 1.0, "spacing": 0.25, "smoothing": 0.15, "pressure_size": False, "pressure_opacity": False, "pressure_flow": False},
+    "blur_tool": {"size": 32, "hardness": 0.5, "strength": 0.25, "flow": 0.35, "spacing": 0.2, "smoothing": 0.15, "pressure_size": False, "pressure_opacity": False, "pressure_flow": False},
+    "sharpen_tool": {"size": 28, "hardness": 0.5, "strength": 0.2, "flow": 0.3, "spacing": 0.2, "smoothing": 0.15, "pressure_size": False, "pressure_opacity": False, "pressure_flow": False},
+    "dodge": {"size": 32, "hardness": 0.45, "flow": 1.0, "spacing": 0.25, "smoothing": 0.15, "exposure": 0.15, "range": "Средние тона"},
+    "burn": {"size": 32, "hardness": 0.45, "flow": 1.0, "spacing": 0.25, "smoothing": 0.15, "exposure": 0.15, "range": "Средние тона"},
+    "clone": {"size": 28, "hardness": 0.5, "flow": 1.0, "spacing": 0.25, "smoothing": 0.15, "opacity": 0.8},
+    "healing": {"size": 26, "hardness": 0.45, "flow": 1.0, "spacing": 0.25, "smoothing": 0.15, "strength": 0.65},
+    "spot_healing": {"size": 10, "hardness": 0.4, "flow": 1.0, "spacing": 0.45, "smoothing": 0.1, "strength": 0.65},
+}
+
+BRUSH_PRESET_DEFAULTS = {
+    "Мягкая кисть": {"size": 80, "hardness": 0.0, "opacity": 1.0, "flow": 0.25, "spacing": 0.12, "smoothing": 0.25, "blend_mode": "Normal"},
+    "Круглая кисть": {"size": 28, "hardness": 0.8, "opacity": 1.0, "flow": 1.0, "spacing": 0.25, "smoothing": 0.15, "blend_mode": "Normal"},
+    "Точная ретушь": {"size": 16, "hardness": 0.45, "opacity": 1.0, "flow": 0.2, "spacing": 0.15, "smoothing": 0.35, "blend_mode": "Normal"},
 }
 
 CUSTOM_SHAPE_PRESETS = {

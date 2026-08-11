@@ -4,6 +4,71 @@ from .tool_options_shared import *
 
 
 class ToolOptionsControlsMixin:
+    def _add_brush_engine_options(self, tool: str) -> None:
+        self._add_scale("Поток", self.brush_flow, 0.01, 1.0, "%", percent=True)
+        self._add_scale("Интервал", self.brush_spacing, 0.01, 1.0, "%", percent=True)
+        self._add_scale("Сглаживание", self.brush_smoothing, 0.0, 1.0, "%", percent=True)
+        if tool == "brush":
+            ttk.Label(self.body, text="Режим наложения").pack(anchor=tk.W, padx=8, pady=(6, 0))
+            ttk.Combobox(
+                self.body,
+                textvariable=self.brush_blend_mode,
+                values=list(BRUSH_BLEND_MODES),
+                state="readonly",
+            ).pack(fill=tk.X, padx=8)
+        pressure = ttk.LabelFrame(self.body, text="Перо")
+        pressure.pack(fill=tk.X, padx=8, pady=(8, 0))
+        ttk.Checkbutton(pressure, text="Нажим изменяет размер", variable=self.pressure_size).pack(anchor=tk.W)
+        ttk.Checkbutton(pressure, text="Нажим изменяет непрозрачность", variable=self.pressure_opacity).pack(anchor=tk.W)
+        ttk.Checkbutton(pressure, text="Нажим изменяет поток", variable=self.pressure_flow).pack(anchor=tk.W)
+        self._add_brush_presets()
+
+    def _add_brush_presets(self) -> None:
+        ttk.Label(self.body, text="Пресет кисти").pack(anchor=tk.W, padx=8, pady=(8, 0))
+        box = ttk.Combobox(self.body, textvariable=self.brush_preset, values=list(self.brush_presets), state="readonly")
+        box.pack(fill=tk.X, padx=8)
+        box.bind("<<ComboboxSelected>>", lambda _event: self.apply_brush_preset())
+        self._brush_preset_editor(self.body, compact=False)
+
+    def _compact_brush_presets(self, parent: ttk.Frame) -> None:
+        menu_button = ttk.Menubutton(parent, text="Перо и пресеты")
+        menu = tk.Menu(menu_button, tearoff=False)
+        menu.add_checkbutton(label="Нажим → размер", variable=self.pressure_size)
+        menu.add_checkbutton(label="Нажим → непрозрачность", variable=self.pressure_opacity)
+        menu.add_checkbutton(label="Нажим → поток", variable=self.pressure_flow)
+        menu.add_separator()
+        for name in self.brush_presets:
+            menu.add_radiobutton(
+                label=name,
+                value=name,
+                variable=self.brush_preset,
+                command=self.apply_brush_preset,
+            )
+        menu.add_separator()
+        menu.add_command(label="Сохранить новый пресет", command=lambda: self.save_brush_preset(True))
+        menu.add_command(label="Удалить выбранный", command=self.delete_brush_preset)
+        menu.add_command(label="Восстановить стандартные", command=self.reset_brush_presets)
+        menu_button.configure(menu=menu)
+        menu_button.pack(side=tk.LEFT, padx=(6, 2), pady=4)
+        if self.tooltip_factory is not None:
+            self.tooltip_factory(menu_button, "Настройки графического пера и управление пресетами кисти")
+
+    def _brush_preset_editor(self, parent: ttk.Frame, *, compact: bool) -> None:
+        row = parent if compact else ttk.Frame(parent)
+        if not compact:
+            row.pack(fill=tk.X, padx=8, pady=(4, 8))
+        entry = ttk.Entry(row, textvariable=self.brush_preset_name, width=12)
+        entry.pack(side=tk.LEFT, fill=tk.X, expand=not compact, padx=(3 if compact else 0, 2))
+        for text, command, hint in (
+            ("+", self.save_brush_preset, "Сохранить текущие параметры как пресет"),
+            ("−", self.delete_brush_preset, "Удалить выбранный пользовательский пресет"),
+            ("↺", self.reset_brush_presets, "Восстановить стандартные пресеты"),
+        ):
+            button = ttk.Button(row, text=text, command=command, width=2)
+            button.pack(side=tk.LEFT, padx=1)
+            if self.tooltip_factory is not None:
+                self.tooltip_factory(button, hint)
+
     @staticmethod
     def _compact_spin(parent: ttk.Frame, label: str, variable: tk.Variable, start: int, end: int, width: int) -> None:
         ttk.Label(parent, text=label, style="Topbar.TLabel").pack(side=tk.LEFT, padx=(5, 2))

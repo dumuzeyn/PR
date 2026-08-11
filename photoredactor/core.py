@@ -5,6 +5,7 @@ from .geometry_ops import *
 from .selection_ops import *
 from .filter_ops import *
 from .render_ops import *
+from .brush_engine import *
 from .retouch_ops import *
 from .text_ops import *
 from .shape_ops import *

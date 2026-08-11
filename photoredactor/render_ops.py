@@ -381,6 +381,8 @@ def retouch_effect_rgb(source: np.ndarray, mode: str, strength: float, tonal_ran
     if mode == "blur":
         sigma = 0.65 + 1.85 * strength
         alpha = source[:, :, 3].astype(np.float32) / 255.0
+        if np.all(alpha >= 1.0 - 1e-6):
+            return accelerated_gaussian_blur(rgb, (0, 0), sigma, cv2.BORDER_REFLECT_101)
         weight = accelerated_gaussian_blur(alpha, (0, 0), sigma, cv2.BORDER_REFLECT_101)
         premultiplied = accelerated_gaussian_blur(rgb * alpha[:, :, None], (0, 0), sigma, cv2.BORDER_REFLECT_101)
         return np.where(weight[:, :, None] > 1e-4, premultiplied / np.maximum(weight[:, :, None], 1e-4), rgb)

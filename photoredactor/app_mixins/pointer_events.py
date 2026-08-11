@@ -43,8 +43,9 @@ class PointerEventsMixin:
                 self._clone_anchor_source = self._source_anchor.stroke_source
                 self.prepare_clone_sample()
             kind = "mask" if tool in ["brush", "eraser"] and self.paint_target.get() == "mask" else "pixels"
-            self.begin_stroke(kind)
-            self.paint_at(point)
+            pressure = pointer_pressure(event)
+            self.begin_stroke(kind, point, pressure)
+            self.paint_at(point, pressure)
         elif tool == "fill":
             self.run_pixel_delta_command("Fill", lambda: flood_fill(self.doc.layer, point[0], point[1], self.foreground, int(self.tolerance.get()), self.doc.layer_selection_mask(self.doc.layer)))
         elif tool == "magic_wand":
@@ -118,7 +119,7 @@ class PointerEventsMixin:
         point = self.canvas_to_doc(event)
         tool = self.tool.get()
         if tool in ["brush", "eraser", "blur_tool", "sharpen_tool", "dodge", "burn", "clone", "healing", "spot_healing"]:
-            self.paint_line(self.last_point or point, point)
+            self.paint_line(self.last_point or point, point, pointer_pressure(event))
             self.last_point = point
         elif tool == "move" and self._object_resize_handle is not None:
             self.resize_selected_object_live(point, event.state)

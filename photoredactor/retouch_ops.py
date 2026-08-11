@@ -5,6 +5,7 @@ from .layer import Layer
 from .geometry_ops import *
 from .selection_ops import *
 from .render_ops import *
+from .brush_engine import BrushSettings, StrokeBuffer
 
 
 class RetouchStroke:
@@ -18,6 +19,11 @@ class RetouchStroke:
         tonal_range: str = "midtones",
         selection_mask: np.ndarray | None = None,
         tile_size: int = 128,
+        flow: float = 1.0,
+        opacity: float = 1.0,
+        pressure_size: bool = False,
+        pressure_opacity: bool = False,
+        pressure_flow: bool = False,
     ) -> None:
         self.layer = layer
         self.mode = mode
@@ -27,76 +33,28 @@ class RetouchStroke:
         self.tonal_range = tonal_range
         self.selection_mask = selection_mask
         self.tile_size = max(32, int(tile_size))
-        self.before_tiles: dict[tuple[int, int], tuple[tuple[int, int, int, int], np.ndarray]] = {}
-        self.coverage_tiles: dict[tuple[int, int], np.ndarray] = {}
-
-    def tile_keys(self, rect: tuple[int, int, int, int]):
-        x1, y1, x2, y2 = rect
-        if x1 >= x2 or y1 >= y2:
-            return
-        for ty in range(y1 // self.tile_size, (y2 - 1) // self.tile_size + 1):
-            for tx in range(x1 // self.tile_size, (x2 - 1) // self.tile_size + 1):
-                yield tx, ty
-
-    def capture_before(self, rect: tuple[int, int, int, int]) -> None:
-        height, width = self.layer.pixels.shape[:2]
-        for key in self.tile_keys(rect):
-            if key in self.before_tiles:
-                continue
-            tx, ty = key
-            x1, y1 = tx * self.tile_size, ty * self.tile_size
-            x2, y2 = min(width, x1 + self.tile_size), min(height, y1 + self.tile_size)
-            tile_rect = x1, y1, x2, y2
-            self.before_tiles[key] = tile_rect, self.layer.pixels[y1:y2, x1:x2].copy()
-
-    def original_region(self, rect: tuple[int, int, int, int]) -> np.ndarray:
-        self.capture_before(rect)
-        x1, y1, x2, y2 = rect
-        result = self.layer.pixels[y1:y2, x1:x2].copy()
-        for key in self.tile_keys(rect):
-            tile_rect, before = self.before_tiles[key]
-            tx1, ty1, tx2, ty2 = tile_rect
-            ix1, iy1 = max(x1, tx1), max(y1, ty1)
-            ix2, iy2 = min(x2, tx2), min(y2, ty2)
-            result[iy1 - y1 : iy2 - y1, ix1 - x1 : ix2 - x1] = before[iy1 - ty1 : iy2 - ty1, ix1 - tx1 : ix2 - tx1]
-        return result
-
-    def merge_coverage(self, rect: tuple[int, int, int, int], dab: np.ndarray) -> None:
-        x1, y1, x2, y2 = rect
-        for key in self.tile_keys(rect):
-            tile_rect, _before = self.before_tiles[key]
-            tx1, ty1, tx2, ty2 = tile_rect
-            coverage = self.coverage_tiles.get(key)
-            if coverage is None:
-                coverage = np.zeros((ty2 - ty1, tx2 - tx1), dtype=np.float32)
-                self.coverage_tiles[key] = coverage
-            ix1, iy1 = max(x1, tx1), max(y1, ty1)
-            ix2, iy2 = min(x2, tx2), min(y2, ty2)
-            target = coverage[iy1 - ty1 : iy2 - ty1, ix1 - tx1 : ix2 - tx1]
-            source = dab[iy1 - y1 : iy2 - y1, ix1 - x1 : ix2 - x1]
-            np.maximum(target, source, out=target)
-
-    def coverage_region(self, rect: tuple[int, int, int, int]) -> np.ndarray:
-        x1, y1, x2, y2 = rect
-        result = np.zeros((y2 - y1, x2 - x1), dtype=np.float32)
-        for key in self.tile_keys(rect):
-            coverage = self.coverage_tiles.get(key)
-            if coverage is None:
-                continue
-            tile_rect, _before = self.before_tiles[key]
-            tx1, ty1, tx2, ty2 = tile_rect
-            ix1, iy1 = max(x1, tx1), max(y1, ty1)
-            ix2, iy2 = min(x2, tx2), min(y2, ty2)
-            result[iy1 - y1 : iy2 - y1, ix1 - x1 : ix2 - x1] = coverage[iy1 - ty1 : iy2 - ty1, ix1 - tx1 : ix2 - tx1]
-        return result
+        self.flow = float(np.clip(flow, 0.0, 1.0))
+        self.opacity = float(np.clip(opacity, 0.0, 1.0))
+        self.brush_settings = BrushSettings(
+            self.radius,
+            self.hardness,
+            self.opacity,
+            self.flow,
+            pressure_size=pressure_size,
+            pressure_opacity=pressure_opacity,
+            pressure_flow=pressure_flow,
+        ).normalized()
+        self.buffer = StrokeBuffer(layer.pixels, selection_mask, tile_size)
+        self.before_tiles = self.buffer.before_tiles
+        self.coverage_tiles = self.buffer.coverage_tiles
 
     @profiled("retouch.stroke_dab")
-    def dab(self, x: int, y: int) -> tuple[int, int, int, int] | None:
+    def dab(self, x: int, y: int, pressure: float = 1.0) -> tuple[int, int, int, int] | None:
         if self.layer.locked or self.strength <= 0.0:
             return None
         lx, ly = int(x) - self.layer.x, int(y) - self.layer.y
         height, width = self.layer.pixels.shape[:2]
-        radius = self.radius
+        radius, opacity, flow = self.brush_settings.for_pressure(pressure)
         x1, y1 = max(0, lx - radius), max(0, ly - radius)
         x2, y2 = min(width, lx + radius + 1), min(height, ly + radius + 1)
         if x1 >= x2 or y1 >= y2:
@@ -110,14 +68,14 @@ class RetouchStroke:
             return None
         halo = retouch_effect_halo(self.mode, self.strength)
         source_rect = max(0, x1 - halo), max(0, y1 - halo), min(width, x2 + halo), min(height, y2 + halo)
-        self.capture_before(source_rect)
-        self.merge_coverage((x1, y1, x2, y2), dab)
-        source = self.original_region(source_rect)
+        self.buffer.capture_before(source_rect)
+        self.buffer.add_coverage((x1, y1, x2, y2), dab, opacity, flow)
+        source = self.buffer.original_region(source_rect)
         edited = retouch_effect_rgb(source, self.mode, self.strength, self.tonal_range)
         sx, sy = x1 - source_rect[0], y1 - source_rect[1]
         edited = edited[sy : sy + (y2 - y1), sx : sx + (x2 - x1)]
-        original = self.original_region((x1, y1, x2, y2))
-        mix = self.coverage_region((x1, y1, x2, y2)) * self.strength
+        original = self.buffer.original_region((x1, y1, x2, y2))
+        mix = self.buffer.coverage_region((x1, y1, x2, y2)) * self.strength
         output = original.copy()
         output[:, :, :3] = np.clip(original[:, :, :3].astype(np.float32) * (1.0 - mix[:, :, None]) + edited * mix[:, :, None], 0, 255).astype(np.uint8)
         self.layer.pixels[y1:y2, x1:x2] = output

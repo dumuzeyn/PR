@@ -4,7 +4,21 @@ from ..app_shared import *
 
 
 class PaintingMixin:
-    def begin_stroke(self, kind: str = "pixels") -> None:
+    def current_brush_settings(self, *, opacity: float | None = None) -> BrushSettings:
+        return BrushSettings(
+            radius=int(self.brush_size.get()),
+            hardness=float(self.hardness.get()),
+            opacity=float(self.opacity.get()) if opacity is None else float(opacity),
+            flow=float(self.brush_flow.get()),
+            spacing=float(self.brush_spacing.get()),
+            smoothing=float(self.brush_smoothing.get()),
+            blend_mode=self.brush_blend_mode.get(),
+            pressure_size=bool(self.pressure_size.get()),
+            pressure_opacity=bool(self.pressure_opacity.get()),
+            pressure_flow=bool(self.pressure_flow.get()),
+        ).normalized()
+
+    def begin_stroke(self, kind: str = "pixels", point: tuple[int, int] | None = None, pressure: float = 1.0) -> None:
         self._edit_generation += 1
         self._stroke_layer_id = self.doc.layer.id
         self._stroke_kind = kind
@@ -16,6 +30,11 @@ class PaintingMixin:
         self._stroke_tiles = {}
         self._stroke_selection_mask = self.doc.layer_selection_mask(self.doc.layer)
         tool = self.tool.get()
+        settings = self.current_brush_settings(opacity=1.0 if tool in {"blur_tool", "sharpen_tool", "dodge", "burn"} else None)
+        self._brush_path = BrushPathSampler(settings)
+        if point is not None:
+            self._brush_path.begin(point, pressure)
+        self._active_brush_stroke = None
         if kind == "pixels" and tool in {"blur_tool", "sharpen_tool", "dodge", "burn"}:
             mode = "blur" if tool == "blur_tool" else "sharpen" if tool == "sharpen_tool" else tool
             strength = float(self.exposure.get()) if tool in {"dodge", "burn"} else float(self.retouch_strength.get())
@@ -27,7 +46,29 @@ class PaintingMixin:
                 strength,
                 self.tonal_range.get(),
                 self._stroke_selection_mask,
+                flow=settings.flow,
+                opacity=settings.opacity,
+                pressure_size=settings.pressure_size,
+                pressure_opacity=settings.pressure_opacity,
+                pressure_flow=settings.pressure_flow,
             )
+        elif kind == "mask" and tool in {"brush", "eraser"}:
+            self._active_brush_stroke = MaskBrushStroke(
+                self.doc.layer,
+                settings,
+                0 if tool == "eraser" else 255,
+                self._stroke_selection_mask,
+            )
+            self._retouch_stroke = None
+        elif kind == "pixels" and tool in {"brush", "eraser"}:
+            self._active_brush_stroke = PixelBrushStroke(
+                self.doc.layer,
+                settings,
+                self.foreground,
+                erase=tool == "eraser",
+                selection_mask=self._stroke_selection_mask,
+            )
+            self._retouch_stroke = None
         else:
             self._retouch_stroke = None
 
@@ -49,7 +90,7 @@ class PaintingMixin:
     def capture_stroke_before(self, rect: tuple[int, int, int, int] | None) -> None:
         if rect is None:
             return
-        if self._retouch_stroke is not None:
+        if self._retouch_stroke is not None or self._active_brush_stroke is not None:
             return
         layer = self.doc.layer
         target = layer.mask if self._stroke_kind == "mask" else layer.pixels
@@ -69,7 +110,9 @@ class PaintingMixin:
                 self._stroke_tiles[key] = tile_rect, target[py1:py2, px1:px2].copy()
 
     def end_stroke(self, label: str) -> None:
-        if self._retouch_stroke is not None:
+        if self._active_brush_stroke is not None:
+            self._stroke_tiles = self._active_brush_stroke.before_tiles
+        elif self._retouch_stroke is not None:
             self._stroke_tiles = self._retouch_stroke.before_tiles
         if self._stroke_layer_id and self._stroke_tiles:
             layer = self.doc.get_layer(self._stroke_layer_id)
@@ -108,6 +151,8 @@ class PaintingMixin:
         self._stroke_tiles = {}
         self._stroke_selection_mask = None
         self._retouch_stroke = None
+        self._active_brush_stroke = None
+        self._brush_path = None
         if self._editor_active:
             self.refresh_layer_previews()
 
@@ -124,7 +169,7 @@ class PaintingMixin:
         self._move_start_mask = None
         self._move_last_bounds = None
 
-    def paint_at(self, point: tuple[int, int]) -> None:
+    def paint_at(self, point: tuple[int, int], pressure: float = 1.0) -> None:
         self.capture_stroke_before(self.brush_local_rect(point))
         tool = self.tool.get()
         selection_mask = self._stroke_selection_mask
@@ -158,10 +203,15 @@ class PaintingMixin:
                     self._clone_sample_origin,
                 )
         elif self._stroke_kind == "mask":
-            changed = draw_mask_brush(self.doc.layer, point[0], point[1], int(self.brush_size.get()), 0 if tool == "eraser" else 255, float(self.opacity.get()), selection_mask)
+            if self._active_brush_stroke is not None:
+                changed = self._active_brush_stroke.dab(point[0], point[1], pressure)
+            else:
+                changed = draw_mask_brush(self.doc.layer, point[0], point[1], int(self.brush_size.get()), 0 if tool == "eraser" else 255, float(self.opacity.get()), selection_mask)
         elif tool in ["blur_tool", "sharpen_tool", "dodge", "burn"]:
             if self._retouch_stroke is not None:
-                changed = self._retouch_stroke.dab(point[0], point[1])
+                changed = self._retouch_stroke.dab(point[0], point[1], pressure)
+        elif self._active_brush_stroke is not None:
+            changed = self._active_brush_stroke.dab(point[0], point[1], pressure)
         else:
             changed = draw_brush(
                 self.doc.layer,
@@ -180,19 +230,18 @@ class PaintingMixin:
         elif tool in {"clone", "healing"}:
             self.status_text("Источник и цель не пересекают доступные пиксели")
 
-    def paint_line(self, start: tuple[int, int], end: tuple[int, int]) -> None:
+    def paint_line(self, start: tuple[int, int], end: tuple[int, int], pressure: float = 1.0) -> None:
         radius = max(1, int(self.brush_size.get()))
-        distance = ((end[0] - start[0]) ** 2 + (end[1] - start[1]) ** 2) ** 0.5
         tool = self.tool.get()
-        spacing = radius * (0.9 if tool == "spot_healing" else 0.45)
-        steps = max(1, int(np.ceil(distance / max(1.0, spacing))))
+        if self._brush_path is None:
+            self._brush_path = BrushPathSampler(self.current_brush_settings())
+            self._brush_path.begin(start, pressure)
+        dabs = self._brush_path.extend(end, pressure)
         selection_mask = self._stroke_selection_mask
         opacity = float(self.opacity.get())
         changed_rect = None
-        for i in range(1, steps + 1):
-            t = i / steps
-            x = round(start[0] * (1 - t) + end[0] * t)
-            y = round(start[1] * (1 - t) + end[1] * t)
+        for dab in dabs:
+            x, y = dab.x, dab.y
             self.capture_stroke_before(self.brush_local_rect((x, y)))
             changed = None
             if tool == "spot_healing":
@@ -207,10 +256,15 @@ class PaintingMixin:
                         self._clone_sample_pixels, self._clone_sample_origin,
                     )
             elif self._stroke_kind == "mask":
-                changed = draw_mask_brush(self.doc.layer, x, y, radius, 0 if tool == "eraser" else 255, opacity, selection_mask)
+                if self._active_brush_stroke is not None:
+                    changed = self._active_brush_stroke.dab(x, y, dab.pressure)
+                else:
+                    changed = draw_mask_brush(self.doc.layer, x, y, radius, 0 if tool == "eraser" else 255, opacity, selection_mask)
             elif tool in ["blur_tool", "sharpen_tool", "dodge", "burn"]:
                 if self._retouch_stroke is not None:
-                    changed = self._retouch_stroke.dab(x, y)
+                    changed = self._retouch_stroke.dab(x, y, dab.pressure)
+            elif self._active_brush_stroke is not None:
+                changed = self._active_brush_stroke.dab(x, y, dab.pressure)
             else:
                 changed = draw_brush(
                     self.doc.layer,

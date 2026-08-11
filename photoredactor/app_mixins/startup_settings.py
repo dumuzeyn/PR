@@ -55,6 +55,16 @@ class StartupSettingsMixin:
         self.brush_size = tk.IntVar(value=28)
         self.opacity = tk.DoubleVar(value=1.0)
         self.hardness = tk.DoubleVar(value=0.5)
+        self.brush_flow = tk.DoubleVar(value=1.0)
+        self.brush_spacing = tk.DoubleVar(value=0.25)
+        self.brush_smoothing = tk.DoubleVar(value=0.15)
+        self.brush_blend_mode = tk.StringVar(value="Normal")
+        self.pressure_size = tk.BooleanVar(value=False)
+        self.pressure_opacity = tk.BooleanVar(value=False)
+        self.pressure_flow = tk.BooleanVar(value=False)
+        self.brush_preset = tk.StringVar(value="Круглая кисть")
+        self.brush_preset_name = tk.StringVar(value="Мой пресет")
+        self.brush_presets = copy.deepcopy(BRUSH_PRESET_DEFAULTS)
         self.retouch_strength = tk.DoubleVar(value=0.25)
         self.exposure = tk.DoubleVar(value=0.15)
         self.tonal_range = tk.StringVar(value="Средние тона")
@@ -121,6 +131,8 @@ class StartupSettingsMixin:
         self._stroke_tiles: dict[tuple[int, int], tuple[tuple[int, int, int, int], np.ndarray]] = {}
         self._stroke_selection_mask: np.ndarray | None = None
         self._retouch_stroke: RetouchStroke | None = None
+        self._active_brush_stroke: PixelBrushStroke | MaskBrushStroke | None = None
+        self._brush_path: BrushPathSampler | None = None
         self._opacity_layer_id: str | None = None
         self._opacity_before: float | None = None
         self._space_down = False
@@ -277,6 +289,11 @@ class StartupSettingsMixin:
                         saved = saved_tool_settings.get(tool_id)
                         if isinstance(saved, dict):
                             self.tool_settings[tool_id] = {**defaults, **{key: saved[key] for key in defaults if key in saved}}
+                saved_brush_presets = data.get("brush_presets", {})
+                if isinstance(saved_brush_presets, dict):
+                    for name, values in saved_brush_presets.items():
+                        if isinstance(name, str) and name.strip() and isinstance(values, dict):
+                            self.brush_presets[name.strip()] = dict(values)
                 shape_settings = data.get("shape_settings", {})
                 if isinstance(shape_settings, dict):
                     self.shape_stroke_width.set(max(0, min(100, int(shape_settings.get("stroke_width", 2)))))
@@ -340,6 +357,7 @@ class StartupSettingsMixin:
                         "gpu_mode": os.environ.get("PHOTO_REDACTOR_GPU", "auto"),
                         "tool_pane_position": self.tool_pane_position,
                         "tool_settings": self.tool_settings,
+                        "brush_presets": self.brush_presets,
                         "shape_settings": {
                             "stroke_width": int(self.shape_stroke_width.get()),
                             "polygon_sides": int(self.polygon_sides.get()),
