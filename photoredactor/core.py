@@ -6,6 +6,8 @@ from .selection_ops import *
 from .filter_ops import *
 from .render_ops import *
 from .brush_engine import *
+from .source_retouch import *
+from .patch_retouch import *
 from .retouch_ops import *
 from .text_ops import *
 from .shape_ops import *

@@ -263,11 +263,13 @@ class PointerSupportMixin:
         self.canvas.itemconfigure(text_id, text=label_by_mode.get(mode, ""), fill=outline, state=tk.NORMAL if tool == "quick_selection" else tk.HIDDEN)
         for item_id in self._brush_preview_ids:
             self.canvas.tag_raise(item_id)
+        self.update_clone_overlay(point)
 
     def clear_brush_preview(self) -> None:
         for item_id in self._brush_preview_ids:
             self.canvas.delete(item_id)
         self._brush_preview_ids.clear()
+        self.clear_clone_overlay()
 
     def update_quick_selection_preview(self, force: bool = False) -> None:
         if self.tool.get() != "quick_selection" or not self._quick_points:

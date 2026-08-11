@@ -11,6 +11,7 @@ from ..text_ops import *
 from ..shape_ops import *
 from ..content_ops import *
 from ..adjustment_ops import *
+from ..patch_retouch import build_patch_edit
 
 
 class MasksDocumentMixin:
@@ -153,6 +154,9 @@ class MasksDocumentMixin:
         heal: bool = True,
         color_adaptation: float = 0.85,
         texture_strength: float = 1.0,
+        structure: int | None = None,
+        source_pixels: np.ndarray | None = None,
+        source_origin: tuple[int, int] | None = None,
     ) -> bool:
         layer = self.layer
         if layer.locked:
@@ -160,40 +164,22 @@ class MasksDocumentMixin:
         selection = self.layer_selection_mask(layer)
         if selection is None or not np.any(selection):
             return False
-        ys, xs = np.where(selection > 0)
-        x1, y1, x2, y2 = int(xs.min()), int(ys.min()), int(xs.max() + 1), int(ys.max() + 1)
-        w, h = x2 - x1, y2 - y1
-        sx1 = int(source_x) - layer.x
-        sy1 = int(source_y) - layer.y
-        sx2, sy2 = sx1 + w, sy1 + h
-        if sx1 < 0 or sy1 < 0 or sx2 > layer.pixels.shape[1] or sy2 > layer.pixels.shape[0]:
+        resolved_structure = int(np.clip(round(texture_strength * 5), 1, 7)) if structure is None else int(structure)
+        result = build_patch_edit(
+            layer.pixels,
+            (layer.x, layer.y),
+            selection,
+            source_x,
+            source_y,
+            source_pixels=source_pixels,
+            source_origin=source_origin,
+            heal=heal,
+            structure=resolved_structure,
+            color_adaptation=color_adaptation,
+        )
+        if result is None:
             return False
-        src = layer.pixels[sy1:sy2, sx1:sx2].astype(np.float32)
-        dst = layer.pixels[y1:y2, x1:x2].astype(np.float32)
-        mask = selection[y1:y2, x1:x2].astype(np.float32) / 255.0
-        edited = src.copy()
-        active = mask > 0
-        if heal and np.any(active):
-            adaptation = float(np.clip(color_adaptation, 0.0, 1.0))
-            texture_strength = float(np.clip(texture_strength, 0.0, 2.0))
-            binary = (selection > 0).astype(np.uint8)
-            ring_radius = max(2, min(32, int(round(max(w, h) * 0.18))))
-            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (ring_radius * 2 + 1, ring_radius * 2 + 1))
-            ring = (cv2.dilate(binary, kernel) > 0) & (binary == 0)
-            ring_values = layer.pixels[ring, :3].astype(np.float32)
-            source_values = src[active, :3]
-            if ring_values.size:
-                target_mean = np.median(ring_values, axis=0)
-                target_std = np.maximum(np.std(ring_values, axis=0), 4.0)
-            else:
-                target_mean = dst[active, :3].mean(axis=0)
-                target_std = np.maximum(dst[active, :3].std(axis=0), 4.0)
-            source_mean = source_values.mean(axis=0)
-            source_std = np.maximum(source_values.std(axis=0), 4.0)
-            matched = (src[:, :, :3] - source_mean) * (target_std / source_std) * texture_strength + target_mean
-            edited[:, :, :3] = src[:, :, :3] * (1.0 - adaptation) + matched * adaptation
-            edited[:, :, 3] = dst[:, :, 3]
-        mixed = edited * mask[:, :, None] + dst * (1.0 - mask[:, :, None])
-        layer.pixels[y1:y2, x1:x2] = np.clip(mixed, 0, 255).astype(np.uint8)
+        (x1, y1, x2, y2), pixels = result
+        layer.pixels[y1:y2, x1:x2] = pixels
         self.dirty = True
         return True

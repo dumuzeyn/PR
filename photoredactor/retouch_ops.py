@@ -6,6 +6,7 @@ from .geometry_ops import *
 from .selection_ops import *
 from .render_ops import *
 from .brush_engine import BrushSettings, StrokeBuffer
+from .source_retouch import CloneHealingStroke, SourceTransform
 
 
 class RetouchStroke:
@@ -185,48 +186,21 @@ def clone_or_heal(
     hardness: float = 0.5,
     source_pixels: np.ndarray | None = None,
     source_origin: tuple[int, int] | None = None,
+    transform: SourceTransform | None = None,
+    flow: float = 1.0,
+    pressure: float = 1.0,
 ) -> tuple[int, int, int, int] | None:
-    if layer.locked:
-        return None
-    radius = max(1, int(radius))
-    source_image = layer.pixels if source_pixels is None else source_pixels
-    source_offset = (layer.x, layer.y) if source_origin is None else source_origin
-    sx, sy = int(source_x) - int(source_offset[0]), int(source_y) - int(source_offset[1])
-    tx, ty = int(target_x) - layer.x, int(target_y) - layer.y
-    target_h, target_w = layer.pixels.shape[:2]
-    source_h, source_w = source_image.shape[:2]
-    ox1 = max(-radius, -tx, -sx)
-    oy1 = max(-radius, -ty, -sy)
-    ox2 = min(radius + 1, target_w - tx, source_w - sx)
-    oy2 = min(radius + 1, target_h - ty, source_h - sy)
-    x1, y1, x2, y2 = tx + ox1, ty + oy1, tx + ox2, ty + oy2
-    if x1 >= x2 or y1 >= y2:
-        return None
-    sx1 = sx + ox1
-    sy1 = sy + oy1
-    sx2 = sx1 + (x2 - x1)
-    sy2 = sy1 + (y2 - y1)
-    full_mask = retouch_falloff_mask(radius, hardness)
-    mx1 = ox1 + radius
-    my1 = oy1 + radius
-    mask = full_mask[my1 : my1 + (y2 - y1), mx1 : mx1 + (x2 - x1)].copy()
-    if selection_mask is not None:
-        mask *= selection_mask[y1:y2, x1:x2].astype(np.float32) / 255.0
-        if not np.any(mask > 0.0):
-            return None
-    src = source_image[sy1:sy2, sx1:sx2].astype(np.float32)
-    dst = layer.pixels[y1:y2, x1:x2].astype(np.float32)
-    edited = src.copy()
-    if heal:
-        sigma = max(1.0, min(8.0, radius * 0.22))
-        source_low = cv2.GaussianBlur(src[:, :, :3], (0, 0), sigma, borderType=cv2.BORDER_REFLECT_101)
-        target_low = cv2.GaussianBlur(dst[:, :, :3], (0, 0), sigma, borderType=cv2.BORDER_REFLECT_101)
-        edited[:, :, :3] = np.clip(target_low + (src[:, :, :3] - source_low), 0, 255)
-        edited[:, :, 3] = dst[:, :, 3]
-    mix = mask * float(np.clip(opacity, 0.0, 1.0))
-    dst = dst * (1.0 - mix[:, :, None]) + edited * mix[:, :, None]
-    layer.pixels[y1:y2, x1:x2] = np.clip(dst, 0, 255).astype(np.uint8)
-    return x1, y1, x2, y2
+    settings = BrushSettings(radius, hardness, opacity, flow)
+    stroke = CloneHealingStroke(
+        layer,
+        settings,
+        layer.pixels.copy() if source_pixels is None else source_pixels,
+        (layer.x, layer.y) if source_origin is None else source_origin,
+        heal=heal,
+        selection_mask=selection_mask,
+        transform=transform,
+    )
+    return stroke.dab(target_x, target_y, source_x, source_y, pressure)
 
 @profiled("retouch.spot_heal_dab")
 def spot_heal(
@@ -237,6 +211,7 @@ def spot_heal(
     strength: float = 1.0,
     selection_mask: np.ndarray | None = None,
     hardness: float = 0.45,
+    mode: str = "content_aware",
 ) -> tuple[int, int, int, int] | None:
     if layer.locked:
         return None
@@ -267,8 +242,18 @@ def spot_heal(
         return None
 
     patch = layer.pixels[y1:y2, x1:x2].copy()
-    inpaint_radius = max(2.0, min(12.0, radius * 0.55))
-    healed_rgb = cv2.inpaint(patch[:, :, :3], target_mask, inpaint_radius, cv2.INPAINT_TELEA)
+    mode_key = str(mode).strip().lower().replace("-", "_").replace(" ", "_")
+    proximity = mode_key in {"proximity", "proximity_match", "приближение", "соответствие_окружению"}
+    inpaint_radius = max(2.0, min(12.0, radius * (0.38 if proximity else 0.72)))
+    method = cv2.INPAINT_TELEA if proximity else cv2.INPAINT_NS
+    healed_rgb = cv2.inpaint(patch[:, :, :3], target_mask, inpaint_radius, method)
+    if not proximity:
+        sigma = max(0.8, min(4.0, radius * 0.16))
+        healed_low = cv2.GaussianBlur(healed_rgb, (0, 0), sigma, borderType=cv2.BORDER_REFLECT_101)
+        source_low = cv2.GaussianBlur(patch[:, :, :3], (0, 0), sigma, borderType=cv2.BORDER_REFLECT_101)
+        detail = patch[:, :, :3].astype(np.float32) - source_low.astype(np.float32)
+        detail_mask = cv2.inpaint(np.clip(detail + 128.0, 0, 255).astype(np.uint8), target_mask, inpaint_radius, cv2.INPAINT_NS)
+        healed_rgb = np.clip(healed_low.astype(np.float32) + detail_mask.astype(np.float32) - 128.0, 0, 255).astype(np.uint8)
     feather = falloff * float(np.clip(strength, 0.0, 1.0))
     mixed = patch[:, :, :3].astype(np.float32) * (1.0 - feather[:, :, None]) + healed_rgb.astype(np.float32) * feather[:, :, None]
     layer.pixels[y1:y2, x1:x2, :3] = np.clip(mixed, 0, 255).astype(np.uint8)

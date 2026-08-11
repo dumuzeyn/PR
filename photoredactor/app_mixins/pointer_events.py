@@ -32,6 +32,10 @@ class PointerEventsMixin:
                 if event.state & 0x0008:
                     self.set_clone_source(point)
                     return
+                requested_source = (int(self.clone_source_x.get()), int(self.clone_source_y.get()))
+                if self._source_anchor.point is not None and requested_source != self._source_anchor.point:
+                    self._source_anchor.set_source(requested_source)
+                    self._clone_source = requested_source
                 if self._source_anchor.point is None:
                     self.status_text("Сначала задайте источник: Alt + левый клик")
                     self.drag_start = None

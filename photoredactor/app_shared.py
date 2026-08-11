@@ -44,6 +44,7 @@ from .core import (
     BLEND_MODES,
     GradientEngine,
     SourceAnchor,
+    SourceTransform,
     add_noise,
     adjust_brightness_contrast,
     adjust_color_balance,
@@ -61,6 +62,7 @@ from .core import (
     bezier_curve_points,
     BrushPathSampler,
     BrushSettings,
+    CloneHealingStroke,
     custom_shape_points,
     blur,
     curves,
@@ -96,6 +98,7 @@ from .core import (
     text_path_samples,
     text_path_point_at_distance,
     RetouchStroke,
+    retouch_falloff_mask,
     RAW_EXTENSIONS,
     selection_edge_confidence,
     selection_contour_points,
@@ -113,6 +116,8 @@ from .core import (
     warp_pixels,
     sharpen,
     spot_heal,
+    sample_source_patch,
+    build_patch_edit,
 )
 from .history import (
     DocumentStateCommand,
@@ -330,9 +335,9 @@ TOOL_SETTINGS_DEFAULTS = {
     "sharpen_tool": {"size": 28, "hardness": 0.5, "strength": 0.2, "flow": 0.3, "spacing": 0.2, "smoothing": 0.15, "pressure_size": False, "pressure_opacity": False, "pressure_flow": False},
     "dodge": {"size": 32, "hardness": 0.45, "flow": 1.0, "spacing": 0.25, "smoothing": 0.15, "exposure": 0.15, "range": "Средние тона"},
     "burn": {"size": 32, "hardness": 0.45, "flow": 1.0, "spacing": 0.25, "smoothing": 0.15, "exposure": 0.15, "range": "Средние тона"},
-    "clone": {"size": 28, "hardness": 0.5, "flow": 1.0, "spacing": 0.25, "smoothing": 0.15, "opacity": 0.8},
-    "healing": {"size": 26, "hardness": 0.45, "flow": 1.0, "spacing": 0.25, "smoothing": 0.15, "strength": 0.65},
-    "spot_healing": {"size": 10, "hardness": 0.4, "flow": 1.0, "spacing": 0.45, "smoothing": 0.1, "strength": 0.65},
+    "clone": {"size": 28, "hardness": 0.5, "flow": 1.0, "spacing": 0.25, "smoothing": 0.15, "opacity": 0.8, "pressure_size": False, "pressure_opacity": False, "pressure_flow": False},
+    "healing": {"size": 26, "hardness": 0.45, "flow": 1.0, "spacing": 0.25, "smoothing": 0.15, "strength": 0.65, "pressure_size": False, "pressure_opacity": False, "pressure_flow": False},
+    "spot_healing": {"size": 10, "hardness": 0.4, "flow": 1.0, "spacing": 0.45, "smoothing": 0.1, "strength": 0.65, "pressure_size": False, "pressure_opacity": False, "pressure_flow": False},
 }
 
 BRUSH_PRESET_DEFAULTS = {

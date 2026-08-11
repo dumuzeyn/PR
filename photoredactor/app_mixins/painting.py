@@ -30,11 +30,15 @@ class PaintingMixin:
         self._stroke_tiles = {}
         self._stroke_selection_mask = self.doc.layer_selection_mask(self.doc.layer)
         tool = self.tool.get()
-        settings = self.current_brush_settings(opacity=1.0 if tool in {"blur_tool", "sharpen_tool", "dodge", "burn"} else None)
+        opacity_override = 1.0 if tool in {"blur_tool", "sharpen_tool", "dodge", "burn"} else None
+        if tool == "healing":
+            opacity_override = float(self.retouch_strength.get())
+        settings = self.current_brush_settings(opacity=opacity_override)
         self._brush_path = BrushPathSampler(settings)
         if point is not None:
             self._brush_path.begin(point, pressure)
         self._active_brush_stroke = None
+        self._source_retouch_stroke = None
         if kind == "pixels" and tool in {"blur_tool", "sharpen_tool", "dodge", "burn"}:
             mode = "blur" if tool == "blur_tool" else "sharpen" if tool == "sharpen_tool" else tool
             strength = float(self.exposure.get()) if tool in {"dodge", "burn"} else float(self.retouch_strength.get())
@@ -69,6 +73,17 @@ class PaintingMixin:
                 selection_mask=self._stroke_selection_mask,
             )
             self._retouch_stroke = None
+        elif kind == "pixels" and tool in {"clone", "healing"} and self._clone_sample_pixels is not None:
+            self._source_retouch_stroke = CloneHealingStroke(
+                self.doc.layer,
+                settings,
+                self._clone_sample_pixels,
+                self._clone_sample_origin,
+                heal=tool == "healing",
+                selection_mask=self._stroke_selection_mask,
+                transform=self.current_source_transform(),
+            )
+            self._retouch_stroke = None
         else:
             self._retouch_stroke = None
 
@@ -90,7 +105,7 @@ class PaintingMixin:
     def capture_stroke_before(self, rect: tuple[int, int, int, int] | None) -> None:
         if rect is None:
             return
-        if self._retouch_stroke is not None or self._active_brush_stroke is not None:
+        if self._retouch_stroke is not None or self._active_brush_stroke is not None or self._source_retouch_stroke is not None:
             return
         layer = self.doc.layer
         target = layer.mask if self._stroke_kind == "mask" else layer.pixels
@@ -114,6 +129,8 @@ class PaintingMixin:
             self._stroke_tiles = self._active_brush_stroke.before_tiles
         elif self._retouch_stroke is not None:
             self._stroke_tiles = self._retouch_stroke.before_tiles
+        elif self._source_retouch_stroke is not None:
+            self._stroke_tiles = self._source_retouch_stroke.before_tiles
         if self._stroke_layer_id and self._stroke_tiles:
             layer = self.doc.get_layer(self._stroke_layer_id)
             if layer is not None:
@@ -152,6 +169,7 @@ class PaintingMixin:
         self._stroke_selection_mask = None
         self._retouch_stroke = None
         self._active_brush_stroke = None
+        self._source_retouch_stroke = None
         self._brush_path = None
         if self._editor_active:
             self.refresh_layer_previews()
@@ -183,25 +201,12 @@ class PaintingMixin:
                 float(self.retouch_strength.get()),
                 selection_mask,
                 float(self.hardness.get()),
+                self.spot_healing_mode.get(),
             )
         elif tool in ["clone", "healing"]:
             source = self.clone_source_for_point(point)
-            if source is not None:
-                amount = float(self.opacity.get()) if tool == "clone" else float(self.retouch_strength.get())
-                changed = clone_or_heal(
-                    self.doc.layer,
-                    source[0],
-                    source[1],
-                    point[0],
-                    point[1],
-                    int(self.brush_size.get()),
-                    amount,
-                    tool == "healing",
-                    selection_mask,
-                    float(self.hardness.get()),
-                    self._clone_sample_pixels,
-                    self._clone_sample_origin,
-                )
+            if source is not None and self._source_retouch_stroke is not None:
+                changed = self._source_retouch_stroke.dab(point[0], point[1], source[0], source[1], pressure)
         elif self._stroke_kind == "mask":
             if self._active_brush_stroke is not None:
                 changed = self._active_brush_stroke.dab(point[0], point[1], pressure)
@@ -245,16 +250,15 @@ class PaintingMixin:
             self.capture_stroke_before(self.brush_local_rect((x, y)))
             changed = None
             if tool == "spot_healing":
-                changed = spot_heal(self.doc.layer, x, y, radius, float(self.retouch_strength.get()), selection_mask, float(self.hardness.get()))
+                changed = spot_heal(
+                    self.doc.layer, x, y, radius,
+                    float(self.retouch_strength.get()) * float(self.brush_flow.get()),
+                    selection_mask, float(self.hardness.get()), self.spot_healing_mode.get(),
+                )
             elif tool in ["clone", "healing"]:
                 source = self.clone_source_for_point((x, y))
-                if source is not None:
-                    amount = opacity if tool == "clone" else float(self.retouch_strength.get())
-                    changed = clone_or_heal(
-                        self.doc.layer, source[0], source[1], x, y, radius, amount,
-                        tool == "healing", selection_mask, float(self.hardness.get()),
-                        self._clone_sample_pixels, self._clone_sample_origin,
-                    )
+                if source is not None and self._source_retouch_stroke is not None:
+                    changed = self._source_retouch_stroke.dab(x, y, source[0], source[1], dab.pressure)
             elif self._stroke_kind == "mask":
                 if self._active_brush_stroke is not None:
                     changed = self._active_brush_stroke.dab(x, y, dab.pressure)
@@ -289,7 +293,19 @@ class PaintingMixin:
         return rect[0] + layer.x, rect[1] + layer.y, rect[2] + layer.x, rect[3] + layer.y
 
     def clone_source_for_point(self, point: tuple[int, int]) -> tuple[int, int] | None:
-        return self._source_anchor.source_for(point)
+        source = self._source_anchor.source_for(point)
+        if source is None:
+            return None
+        return source[0] + int(self.clone_offset_x.get()), source[1] + int(self.clone_offset_y.get())
+
+    def current_source_transform(self) -> SourceTransform:
+        return SourceTransform(
+            float(self.clone_scale_x.get()) / 100.0,
+            float(self.clone_scale_y.get()) / 100.0,
+            float(self.clone_rotation.get()),
+            bool(self.clone_flip_horizontal.get()),
+            bool(self.clone_flip_vertical.get()),
+        )
 
     def clone_source_click(self, event) -> str:
         if self.tool.get() not in {"clone", "healing"}:
@@ -304,6 +320,8 @@ class PaintingMixin:
             return
         self._source_anchor.set_source(point)
         self._clone_source = point
+        self.clone_source_x.set(point[0])
+        self.clone_source_y.set(point[1])
         self.drag_start = None
         self.last_point = None
         self.update_clone_source_marker()
@@ -339,73 +357,6 @@ class PaintingMixin:
         ]
         for item_id in self._clone_source_marker_ids:
             self.canvas.tag_raise(item_id)
-
-    def begin_patch_drag(self, point: tuple[int, int]) -> None:
-        if self.doc.layer.locked:
-            self.status_text("Слой заблокирован")
-            self.drag_start = None
-            return
-        if self.doc.selection_mask is None or not np.any(self.doc.selection_mask):
-            self.status_text("Сначала создайте выделение для инструмента Заплатка")
-            self.drag_start = None
-            return
-        x, y = point
-        if x < 0 or y < 0 or x >= self.doc.width or y >= self.doc.height or self.doc.selection_mask[y, x] == 0:
-            self.status_text("Начните перетаскивание внутри активного выделения")
-            self.drag_start = None
-            return
-        self._patch_start_bounds = self.doc.selection_bounds()
-        self.draw_patch_preview(point)
-        self.status_text("Перетащите выделение на область-источник")
-
-    def patch_source_bounds_for_point(self, point: tuple[int, int]) -> tuple[int, int, int, int] | None:
-        if self.drag_start is None or self._patch_start_bounds is None:
-            return None
-        dx = point[0] - self.drag_start[0]
-        dy = point[1] - self.drag_start[1]
-        x1, y1, x2, y2 = self._patch_start_bounds
-        return x1 + dx, y1 + dy, x2 + dx, y2 + dy
-
-    def patch_source_in_active_layer(self, bounds: tuple[int, int, int, int]) -> bool:
-        layer = self.doc.layer
-        x1, y1, x2, y2 = bounds
-        return x1 >= layer.x and y1 >= layer.y and x2 <= layer.x + layer.pixels.shape[1] and y2 <= layer.y + layer.pixels.shape[0]
-
-    def draw_patch_preview(self, point: tuple[int, int]) -> None:
-        bounds = self.patch_source_bounds_for_point(point)
-        if bounds is None:
-            return
-        x1, y1 = self.doc_to_canvas(bounds[0], bounds[1])
-        x2, y2 = self.doc_to_canvas(bounds[2], bounds[3])
-        coords = [x1, y1, x2, y2]
-        valid = self.patch_source_in_active_layer(bounds)
-        color = "#ffb000" if valid else "#ff4a4a"
-        if self._patch_preview_id is None:
-            self._patch_preview_id = self.canvas.create_rectangle(*coords, outline=color, dash=(6, 3), width=2)
-        else:
-            self.canvas.coords(self._patch_preview_id, *coords)
-            self.canvas.itemconfigure(self._patch_preview_id, outline=color)
-        self.canvas.tag_raise(self._patch_preview_id)
-
-    def clear_patch_preview(self) -> None:
-        if self._patch_preview_id is not None:
-            self.canvas.delete(self._patch_preview_id)
-            self._patch_preview_id = None
-        self._patch_start_bounds = None
-
-    def finish_patch_drag(self, point: tuple[int, int]) -> None:
-        bounds = self.patch_source_bounds_for_point(point)
-        if bounds is None:
-            self.clear_patch_preview()
-            return
-        if not self.patch_source_in_active_layer(bounds):
-            self.status_text("Источник заплатки должен полностью попадать в активный слой")
-            self.clear_patch_preview()
-            return
-        source_x, source_y = bounds[0], bounds[1]
-        self.run_document_command("Интерактивная заплатка", lambda: self.doc.patch_active_selection(source_x, source_y, True))
-        self.clear_patch_preview()
-        self.refresh()
 
     def current_shape_options(self, tool: str) -> dict:
         custom_name = self.custom_shape_preset.get()

@@ -54,6 +54,23 @@ class ToolOptionsBaseMixin:
         magic_contiguous: tk.BooleanVar,
         clone_aligned: tk.BooleanVar,
         clone_sampling: tk.StringVar,
+        clone_source_x: tk.IntVar,
+        clone_source_y: tk.IntVar,
+        clone_offset_x: tk.IntVar,
+        clone_offset_y: tk.IntVar,
+        clone_scale_x: tk.DoubleVar,
+        clone_scale_y: tk.DoubleVar,
+        clone_rotation: tk.DoubleVar,
+        clone_flip_horizontal: tk.BooleanVar,
+        clone_flip_vertical: tk.BooleanVar,
+        clone_overlay_visible: tk.BooleanVar,
+        clone_overlay_opacity: tk.DoubleVar,
+        spot_healing_mode: tk.StringVar,
+        patch_structure: tk.IntVar,
+        patch_color_adaptation: tk.DoubleVar,
+        patch_sample_all_layers: tk.BooleanVar,
+        apply_patch_preview,
+        open_clone_source_panel,
         gradient_type: tk.StringVar,
         gradient_mode: tk.StringVar,
         gradient_shape: tk.StringVar,
@@ -132,6 +149,23 @@ class ToolOptionsBaseMixin:
         self.magic_contiguous = magic_contiguous
         self.clone_aligned = clone_aligned
         self.clone_sampling = clone_sampling
+        self.clone_source_x = clone_source_x
+        self.clone_source_y = clone_source_y
+        self.clone_offset_x = clone_offset_x
+        self.clone_offset_y = clone_offset_y
+        self.clone_scale_x = clone_scale_x
+        self.clone_scale_y = clone_scale_y
+        self.clone_rotation = clone_rotation
+        self.clone_flip_horizontal = clone_flip_horizontal
+        self.clone_flip_vertical = clone_flip_vertical
+        self.clone_overlay_visible = clone_overlay_visible
+        self.clone_overlay_opacity = clone_overlay_opacity
+        self.spot_healing_mode = spot_healing_mode
+        self.patch_structure = patch_structure
+        self.patch_color_adaptation = patch_color_adaptation
+        self.patch_sample_all_layers = patch_sample_all_layers
+        self.apply_patch_preview = apply_patch_preview
+        self.open_clone_source_panel = open_clone_source_panel
         self.gradient_type = gradient_type
         self.gradient_mode = gradient_mode
         self.gradient_shape = gradient_shape
@@ -209,7 +243,7 @@ class ToolOptionsBaseMixin:
         elif tool in {"blur_tool", "sharpen_tool"}:
             self._add_scale("Размер", self.brush_size, 1, 220, "px", integer=True)
             self._add_scale("Жёсткость", self.hardness, 0.0, 1.0, "%", percent=True)
-            self._add_scale("Сила", self.retouch_strength, 0.01, 1.0, "%", percent=True)
+            self._add_scale("Непрозрачность", self.retouch_strength, 0.01, 1.0, "%", percent=True)
             self._add_brush_engine_options(tool)
             shown = True
         elif tool in {"dodge", "burn"}:
@@ -222,13 +256,15 @@ class ToolOptionsBaseMixin:
             self._add_scale("Размер", self.brush_size, 1, 220, "px", integer=True)
             self._add_scale("Жёсткость", self.hardness, 0.0, 1.0, "%", percent=True)
             self._add_scale("Непрозрачность", self.opacity, 0.01, 1.0, "%", percent=True)
-            self._add_clone_source_options()
+            self._add_source_transform_options()
+            self._add_brush_engine_options(tool)
             shown = True
         elif tool == "healing":
             self._add_scale("Размер", self.brush_size, 1, 220, "px", integer=True)
             self._add_scale("Жёсткость", self.hardness, 0.0, 1.0, "%", percent=True)
             self._add_scale("Сила", self.retouch_strength, 0.01, 1.0, "%", percent=True)
-            self._add_clone_source_options()
+            self._add_source_transform_options()
+            self._add_brush_engine_options(tool)
             shown = True
         elif tool == "spot_healing":
             ttk.Label(
@@ -239,7 +275,18 @@ class ToolOptionsBaseMixin:
             ).pack(fill=tk.X, padx=8, pady=(0, 6))
             self._add_scale("Размер", self.brush_size, 1, 220, "px", integer=True)
             self._add_scale("Жёсткость", self.hardness, 0.0, 1.0, "%", percent=True)
-            self._add_scale("Сила", self.retouch_strength, 0.01, 1.0, "%", percent=True)
+            self._add_scale("Непрозрачность", self.retouch_strength, 0.01, 1.0, "%", percent=True)
+            ttk.Label(self.body, text="Режим").pack(anchor=tk.W, padx=8, pady=(6, 0))
+            ttk.Combobox(
+                self.body,
+                textvariable=self.spot_healing_mode,
+                values=["Соответствие окружению", "С учётом содержимого"],
+                state="readonly",
+            ).pack(fill=tk.X, padx=8)
+            self._add_brush_engine_options(tool)
+            shown = True
+        elif tool == "patch":
+            self._add_patch_options()
             shown = True
         elif tool == "gradient":
             self._add_gradient_options()
@@ -300,9 +347,11 @@ class ToolOptionsBaseMixin:
         elif tool in BRUSH_TOOLS:
             self._compact_spin(primary, "Размер", self.brush_size, 1, 220, 5)
             variable = self.opacity if tool in {"brush", "eraser", "clone"} else self.exposure if tool in {"dodge", "burn"} else self.retouch_strength
-            self._compact_percent(primary, "Непрозрачность" if tool in {"brush", "eraser", "clone"} else "Сила", variable)
-            if tool in {"brush", "eraser", "blur_tool", "sharpen_tool"}:
+            self._compact_percent(primary, "Непрозрачность" if tool in {"brush", "eraser", "clone", "healing", "spot_healing"} else "Сила", variable)
+            if tool in BRUSH_TOOLS:
                 self._compact_percent(primary, "Поток", self.brush_flow)
+            if tool == "spot_healing":
+                self._compact_combo(primary, "Режим", self.spot_healing_mode, ["Соответствие окружению", "С учётом содержимого"], 22)
             if tool in {"brush", "eraser"}:
                 self._compact_single_color(primary, self.pick_foreground, 0, "Основной цвет")
         elif tool in SHAPE_TOOLS:
@@ -339,9 +388,14 @@ class ToolOptionsBaseMixin:
         elif tool == "fill":
             self._compact_single_color(primary, self.pick_foreground, 0, "Цвет заливки")
             self._compact_spin(primary, "Допуск", self.tolerance, 0, 128, 4)
+        elif tool == "patch":
+            self._compact_spin(primary, "Структура", self.patch_structure, 1, 7, 3)
+            self._compact_spin(primary, "Цвет", self.patch_color_adaptation, 0, 10, 3)
+            ttk.Checkbutton(primary, text="Все слои", variable=self.patch_sample_all_layers).pack(side=tk.LEFT, padx=4)
+            ttk.Button(primary, text="Применить", command=self.apply_patch_preview).pack(side=tk.LEFT, padx=4)
 
         gradient_has_stops = tool == "gradient" and (self.gradient_mode.get() == "Заливка" or self.gradient_object_fill.get() == "Градиент")
-        if tool in BRUSH_TOOLS or tool in {"text", "crop", "quick_selection", "star_shape", "custom_shape"} or gradient_has_stops:
+        if tool in BRUSH_TOOLS or tool in {"text", "crop", "quick_selection", "star_shape", "custom_shape", "patch"} or gradient_has_stops:
             ttk.Button(primary, text="Дополнительно", command=self._toggle_compact_advanced).pack(side=tk.LEFT, padx=(8, 3))
         if self._advanced_visible:
             self._render_compact_advanced(primary, tool)
@@ -354,7 +408,7 @@ class ToolOptionsBaseMixin:
         ttk.Separator(parent, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=7, pady=4)
         if tool in BRUSH_TOOLS:
             self._compact_percent(parent, "Жёсткость", self.hardness)
-        if tool in {"brush", "eraser", "blur_tool", "sharpen_tool"}:
+        if tool in BRUSH_TOOLS:
             self._compact_percent(parent, "Интервал", self.brush_spacing)
             self._compact_percent(parent, "Сглаживание", self.brush_smoothing)
             if tool == "brush":
@@ -362,6 +416,7 @@ class ToolOptionsBaseMixin:
             self._compact_brush_presets(parent)
         if tool in {"clone", "healing"}:
             ttk.Checkbutton(parent, text="Выровненный", variable=self.clone_aligned).pack(side=tk.LEFT, padx=3)
+            ttk.Button(parent, text="Источник...", command=self.open_clone_source_panel).pack(side=tk.LEFT, padx=3)
         elif tool == "gradient" and (self.gradient_mode.get() == "Заливка" or self.gradient_object_fill.get() == "Градиент"):
             ttk.Checkbutton(parent, text="Средняя точка", variable=self.gradient_mid_enabled, command=lambda: self.after_idle(self.render)).pack(side=tk.LEFT, padx=3)
             if self.gradient_mid_enabled.get():

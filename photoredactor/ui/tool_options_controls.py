@@ -166,6 +166,55 @@ class ToolOptionsControlsMixin:
         ).pack(fill=tk.X, padx=8)
         ttk.Label(self.body, text="Alt + левый клик выбирает источник.", wraplength=220).pack(fill=tk.X, padx=8, pady=(4, 8))
 
+    def _add_source_transform_options(self) -> None:
+        ttk.Checkbutton(self.body, text="Выровненный источник", variable=self.clone_aligned).pack(anchor=tk.W, padx=8, pady=(6, 2))
+        ttk.Label(self.body, text="Образец").pack(anchor=tk.W, padx=8)
+        ttk.Combobox(
+            self.body,
+            textvariable=self.clone_sampling,
+            values=["Текущий слой", "Текущий и ниже", "Все видимые"],
+            state="readonly",
+        ).pack(fill=tk.X, padx=8)
+        coordinates = ttk.LabelFrame(self.body, text="Источник")
+        coordinates.pack(fill=tk.X, padx=8, pady=(8, 0))
+        self._source_pair(coordinates, "X", self.clone_source_x, "Y", self.clone_source_y, -50000, 50000)
+        self._source_pair(coordinates, "Смещение X", self.clone_offset_x, "Y", self.clone_offset_y, -50000, 50000)
+        transform = ttk.LabelFrame(self.body, text="Преобразование")
+        transform.pack(fill=tk.X, padx=8, pady=(8, 0))
+        self._source_pair(transform, "Масштаб X, %", self.clone_scale_x, "Y, %", self.clone_scale_y, 5, 2000)
+        self._source_pair(transform, "Поворот", self.clone_rotation, "", None, -180, 180)
+        flip = ttk.Frame(transform)
+        flip.pack(fill=tk.X, padx=4, pady=3)
+        ttk.Checkbutton(flip, text="Отразить X", variable=self.clone_flip_horizontal).pack(side=tk.LEFT)
+        ttk.Checkbutton(flip, text="Отразить Y", variable=self.clone_flip_vertical).pack(side=tk.LEFT, padx=(8, 0))
+        overlay = ttk.LabelFrame(self.body, text="Наложение источника")
+        overlay.pack(fill=tk.X, padx=8, pady=(8, 0))
+        ttk.Checkbutton(overlay, text="Показывать", variable=self.clone_overlay_visible).pack(anchor=tk.W, padx=4)
+        self._add_scale("Прозрачность наложения", self.clone_overlay_opacity, 0.05, 1.0, "%", percent=True)
+        ttk.Label(self.body, text="Alt + левый клик выбирает источник.", wraplength=220).pack(fill=tk.X, padx=8, pady=(4, 8))
+
+    @staticmethod
+    def _source_pair(parent, first_label, first_var, second_label, second_var, start, end) -> None:
+        row = ttk.Frame(parent)
+        row.pack(fill=tk.X, padx=4, pady=3)
+        ttk.Label(row, text=first_label).pack(side=tk.LEFT)
+        ttk.Spinbox(row, textvariable=first_var, from_=start, to=end, width=7).pack(side=tk.LEFT, padx=(4, 8))
+        if second_var is not None:
+            ttk.Label(row, text=second_label).pack(side=tk.LEFT)
+            ttk.Spinbox(row, textvariable=second_var, from_=start, to=end, width=7).pack(side=tk.LEFT, padx=4)
+
+    def _add_patch_options(self) -> None:
+        self._add_scale("Структура", self.patch_structure, 1, 7, integer=True)
+        self._add_scale("Цветовая адаптация", self.patch_color_adaptation, 0, 10, integer=True)
+        ttk.Checkbutton(self.body, text="Образец со всех слоёв", variable=self.patch_sample_all_layers).pack(anchor=tk.W, padx=8, pady=6)
+        ttk.Button(self.body, text="Применить", command=self.apply_patch_preview).pack(fill=tk.X, padx=8, pady=(2, 4))
+        ttk.Label(
+            self.body,
+            text="Перетащите выделение к источнику. Enter применяет предпросмотр, Escape отменяет.",
+            wraplength=220,
+            justify=tk.LEFT,
+        ).pack(fill=tk.X, padx=8, pady=(2, 8))
+
     def _add_gradient_options(self) -> None:
         ttk.Label(self.body, text="Режим").pack(anchor=tk.W, padx=8, pady=(6, 0))
         ttk.Combobox(self.body, textvariable=self.gradient_mode, values=["Заливка", "Объект"], state="readonly").pack(fill=tk.X, padx=8)

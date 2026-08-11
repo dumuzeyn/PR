@@ -221,6 +221,8 @@ class ShortcutsMixin:
         if self.tool.get() == "crop":
             self.apply_crop_overlay()
             return "break"
+        if self.tool.get() == "patch" and self.apply_patch_preview():
+            return "break"
         return None
 
     def shortcut_zoom_in(self, _event=None):
@@ -327,6 +329,7 @@ class ShortcutsMixin:
             self.clear_lasso_overlay()
             self.clear_quick_selection_preview()
             self.clear_gradient_preview()
+            self.clear_patch_preview()
         self.drag_start = None
         self.last_point = None
         self._shape_drag_options = None
