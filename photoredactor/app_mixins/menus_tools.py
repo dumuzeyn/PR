@@ -216,6 +216,7 @@ class MenusToolsMixin:
         analysis.add_command(label="Редактировать метаданные", command=self.edit_metadata)
         analysis.add_command(label="Состояние кэша и GPU", command=self.show_cache_status)
         analysis.add_command(label="Настройка и тест GPU", command=self.gpu_acceleration_dialog)
+        analysis.add_command(label="Тест интерактивной производительности", command=self.interactive_performance_dialog)
 
         actions = tk.Menu(menu, tearoff=False)
         menu.add_cascade(label="Действия", menu=actions)

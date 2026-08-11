@@ -55,6 +55,26 @@ class StartupTests(unittest.TestCase):
         self.assertIn("Текстура", texture_labels)
         self.assertNotIn("Тип", texture_labels)
 
+    def test_large_gradient_preview_is_limited_to_visible_canvas(self) -> None:
+        self.app.create_document_from_settings(
+            {"width": 2400, "height": 1800, "dpi": 72, "background": (255, 255, 255, 255), "include_clipboard": False}
+        )
+        self.app.tool.set("gradient")
+        self.app.gradient_mode.set("Объект")
+        self.app.zoom.set(1.0)
+        self.app.refresh()
+        self.app.update()
+        self.app.update_gradient_preview((0, 0), (2400, 1800))
+        deadline = time.monotonic() + 0.3
+        while self.app._gradient_preview_image is None and time.monotonic() < deadline:
+            self.app.update()
+            time.sleep(0.01)
+        preview = self.app._gradient_preview_image
+        self.assertIsNotNone(preview)
+        self.assertLessEqual(preview.width(), self.app.canvas.winfo_width() + 8)
+        self.assertLessEqual(preview.height(), self.app.canvas.winfo_height() + 8)
+        self.app.clear_gradient_preview()
+
     def test_colors_live_only_in_contextual_toolbar(self) -> None:
         self.app.tool.set("gradient")
         self.app.update()

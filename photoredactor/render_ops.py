@@ -249,21 +249,28 @@ def mesh_warp_pixels(
             for indices in triangle_indices:
                 src_triangle = source_quad[list(indices)]
                 dst_triangle = destination_quad[list(indices)]
-                matrix = cv2.getAffineTransform(src_triangle, dst_triangle)
+                bx, by, bw, bh = cv2.boundingRect(dst_triangle)
+                bx1, by1 = max(0, bx), max(0, by)
+                bx2, by2 = min(output_width, bx + bw), min(output_height, by + bh)
+                if bx1 >= bx2 or by1 >= by2:
+                    continue
+                local_triangle = dst_triangle - np.array([bx1, by1], dtype=np.float32)
+                matrix = cv2.getAffineTransform(src_triangle, local_triangle)
                 border = 0 if arr.ndim == 2 else tuple(0 for _ in range(arr.shape[2]))
                 warped = cv2.warpAffine(
                     arr,
                     matrix,
-                    (output_width, output_height),
+                    (bx2 - bx1, by2 - by1),
                     flags=interpolation,
                     borderMode=cv2.BORDER_CONSTANT,
                     borderValue=border,
                 )
-                triangle_mask = np.zeros_like(coverage)
-                cv2.fillConvexPoly(triangle_mask, np.round(dst_triangle).astype(np.int32), 255, lineType=cv2.LINE_AA)
+                triangle_mask = np.zeros((by2 - by1, bx2 - bx1), dtype=np.uint8)
+                cv2.fillConvexPoly(triangle_mask, np.round(local_triangle).astype(np.int32), 255, lineType=cv2.LINE_AA)
                 active = triangle_mask > 0
-                output[active] = warped[active]
-                coverage[active] = 255
+                target = output[by1:by2, bx1:bx2]
+                target[active] = warped[active]
+                coverage[by1:by2, bx1:bx2][active] = 255
     return np.ascontiguousarray(output), (min_x, min_y)
 
 def apply_saved_layer_transform(layer: Layer, source_pixels: np.ndarray | None = None, source_mask: np.ndarray | None = None) -> None:

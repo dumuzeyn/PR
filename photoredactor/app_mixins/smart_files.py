@@ -382,6 +382,41 @@ class SmartFilesMixin:
             )
         messagebox.showinfo("Большие документы", text)
 
+    def interactive_performance_dialog(self) -> None:
+        dialog = tk.Toplevel(self)
+        dialog.title("Интерактивная производительность")
+        dialog.transient(self)
+        dialog.grab_set()
+        body = ttk.Frame(dialog, padding=16)
+        body.pack(fill=tk.BOTH, expand=True)
+        ttk.Label(body, text="Проверка рабочих инструментов", style="PanelTitle.TLabel").pack(anchor=tk.W)
+        result = ttk.Label(body, text="Тест ещё не запускался.", justify=tk.LEFT)
+        result.pack(fill=tk.X, pady=(14, 18))
+        run_button = ttk.Button(body, text="Запустить тест")
+        run_button.pack(side=tk.LEFT)
+        ttk.Button(body, text="Закрыть", command=dialog.destroy).pack(side=tk.RIGHT)
+
+        def done(report: dict[str, float | bool]) -> None:
+            state = "Целевые задержки соблюдены" if report["passed"] else "Есть операции выше целевой задержки"
+            result.configure(text=(
+                f"Кисть: {report['brush_dab_ms']:.1f} мс на штрих\n"
+                f"Градиент: {report['gradient_preview_ms']:.1f} мс\n"
+                f"Трансформация: {report['transform_preview_ms']:.1f} мс\n"
+                f"Изменение среди 30 слоёв: {report['many_layers_tile_ms']:.1f} мс\n\n{state}"
+            ))
+            run_button.configure(state=tk.NORMAL)
+
+        def run() -> None:
+            run_button.configure(state=tk.DISABLED)
+            result.configure(text="Выполняется проверка...")
+            self.run_background("Тест производительности", benchmark_interactive_paths, done)
+
+        run_button.configure(command=run)
+        self._interactive_performance_result = result
+        self._interactive_performance_run = run
+        self._interactive_performance_dialog = dialog
+        self.center_toplevel(dialog, 560, 340)
+
     def gpu_acceleration_dialog(self) -> None:
         dialog = tk.Toplevel(self)
         dialog.title("Настройка GPU")

@@ -112,9 +112,8 @@ class GradientEngine:
         kind: str = "linear",
         origin: tuple[float, float] = (0.0, 0.0),
     ) -> np.ndarray:
-        yy, xx = np.mgrid[0:height, 0:width].astype(np.float32)
-        xx += float(origin[0])
-        yy += float(origin[1])
+        xx = np.arange(width, dtype=np.float32)[None, :] + float(origin[0])
+        yy = np.arange(height, dtype=np.float32)[:, None] + float(origin[1])
         sx, sy = float(start[0]), float(start[1])
         dx, dy = float(end[0]) - sx, float(end[1]) - sy
         length = max(1e-6, math.hypot(dx, dy))
@@ -152,11 +151,12 @@ class GradientEngine:
         normalized = cls.normalize_stops(stops)
         positions = np.array([item[0] for item in normalized], dtype=np.float32)
         colors = np.array([item[1] for item in normalized], dtype=np.float32)
-        output = np.empty((height, width, 4), dtype=np.float32)
-        flat = values.reshape(-1)
+        axis = np.arange(65537, dtype=np.float32) / 65536.0
+        lookup = np.empty((65537, 4), dtype=np.uint8)
         for channel in range(4):
-            output[:, :, channel] = np.interp(flat, positions, colors[:, channel]).reshape(height, width)
-        return np.clip(output, 0, 255).astype(np.uint8)
+            lookup[:, channel] = np.interp(axis, positions, colors[:, channel]).astype(np.uint8)
+        indices = np.clip(values * 65536.0, 0.0, 65536.0).astype(np.uint32)
+        return np.ascontiguousarray(lookup[indices])
 
 
 def blank_rgba(width: int, height: int, color=(255, 255, 255, 255)) -> np.ndarray:

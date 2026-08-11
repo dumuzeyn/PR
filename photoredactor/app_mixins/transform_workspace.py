@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from ..app_shared import *
+from ..preview_ops import preview_scale_for_bounds, transform_preview_pixels
 
 
 class TransformWorkspaceMixin:
@@ -45,6 +46,8 @@ class TransformWorkspaceMixin:
         loading = [False]
         preview_transform = {"scale": 1.0, "ox": 0.0, "oy": 0.0}
         drag_state: dict[str, object] = {"kind": None, "last": None}
+        preview_sources: dict[float, np.ndarray] = {}
+        redraw_after_id = [None]
 
         def rectangle_points() -> list[list[float]]:
             x, y = float(x_var.get()), float(y_var.get())
@@ -120,24 +123,6 @@ class TransformWorkspaceMixin:
             except (tk.TclError, ValueError):
                 return float(source_x), float(source_y), float(source.shape[1]), float(source.shape[0]), 0.0
 
-        def transformed_preview() -> tuple[np.ndarray, float, float]:
-            selected_mode = mode.get()
-            if selected_mode == "Свободная":
-                x, y, width, height, angle = current_free_values()
-                image = rgba_array_to_pil(source).resize((max(1, round(width)), max(1, round(height))), Image.Resampling.BICUBIC)
-                if flip_horizontal.get():
-                    image = image.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
-                if flip_vertical.get():
-                    image = image.transpose(Image.Transpose.FLIP_TOP_BOTTOM)
-                if abs(angle) > 0.001:
-                    image = image.rotate(-angle, expand=True, resample=Image.Resampling.BICUBIC)
-                return np.asarray(image, dtype=np.uint8), x + (width - image.width) / 2.0, y + (height - image.height) / 2.0
-            if selected_mode == "Перспектива":
-                output, offset = perspective_warp_pixels(source, points, cv2.INTER_CUBIC)
-            else:
-                output, offset = mesh_warp_pixels(source, points, rows, columns, cv2.INTER_CUBIC)
-            return output, float(offset[0]), float(offset[1])
-
         def doc_to_preview(point: tuple[float, float] | list[float]) -> tuple[float, float]:
             return preview_transform["ox"] + float(point[0]) * preview_transform["scale"], preview_transform["oy"] + float(point[1]) * preview_transform["scale"]
 
@@ -161,26 +146,29 @@ class TransformWorkspaceMixin:
             return rotated
 
         def redraw(*_args) -> None:
-            try:
-                output, output_x, output_y = transformed_preview()
-            except (ValueError, cv2.error, tk.TclError):
-                return
+            redraw_after_id[0] = None
             canvas_width, canvas_height = max(320, canvas.winfo_width()), max(300, canvas.winfo_height())
-            bounds_x = [0.0, float(self.doc.width), output_x, output_x + output.shape[1]]
-            bounds_y = [0.0, float(self.doc.height), output_y, output_y + output.shape[0]]
             active_points = free_handle_points().values() if mode.get() == "Свободная" else points
-            for point in active_points:
-                bounds_x.append(float(point[0])); bounds_y.append(float(point[1]))
+            bounds_x = [0.0, float(self.doc.width), *(float(point[0]) for point in active_points)]
+            bounds_y = [0.0, float(self.doc.height), *(float(point[1]) for point in active_points)]
             min_x, max_x = min(bounds_x), max(bounds_x)
             min_y, max_y = min(bounds_y), max(bounds_y)
-            scale = min((canvas_width - 48) / max(1.0, max_x - min_x), (canvas_height - 48) / max(1.0, max_y - min_y))
+            scale = preview_scale_for_bounds((canvas_width, canvas_height), (min_x, min_y, max_x, max_y))
             preview_transform.update(scale=scale, ox=24 - min_x * scale, oy=24 - min_y * scale)
+            try:
+                output, output_x, output_y, pixel_scale = transform_preview_pixels(
+                    source, preview_sources, mode.get(), min(1.0, scale), current_free_values(), points,
+                    rows, columns, flip_horizontal.get(), flip_vertical.get(),
+                )
+            except (ValueError, cv2.error, tk.TclError):
+                return
             canvas.delete("all")
             doc_a = doc_to_preview((0, 0)); doc_b = doc_to_preview((self.doc.width, self.doc.height))
             canvas.create_rectangle(*doc_a, *doc_b, fill="#2c2f35", outline="#666c76")
             photo_image = rgba_array_to_pil(output)
-            if abs(scale - 1.0) > 0.001:
-                photo_image = photo_image.resize((max(1, round(output.shape[1] * scale)), max(1, round(output.shape[0] * scale))), Image.Resampling.LANCZOS)
+            display_scale = scale / pixel_scale
+            if abs(display_scale - 1.0) > 0.001:
+                photo_image = photo_image.resize((max(1, round(output.shape[1] * display_scale)), max(1, round(output.shape[0] * display_scale))), Image.Resampling.BILINEAR)
             self._transform_workspace_photo = ImageTk.PhotoImage(photo_image)
             image_x, image_y = doc_to_preview((output_x, output_y))
             canvas.create_image(image_x, image_y, image=self._transform_workspace_photo, anchor=tk.NW)
@@ -211,7 +199,11 @@ class TransformWorkspaceMixin:
                 for index, point in enumerate(points):
                     px, py = doc_to_preview(point)
                     canvas.create_oval(px - 5, py - 5, px + 5, py + 5, fill="#ffffff" if index != selected_node.get() else TOKENS.ACCENT, outline=TOKENS.ACCENT, width=1)
-            status.configure(text=f"{layer.name}  |  {mode.get()}  |  {output.shape[1]} x {output.shape[0]} px")
+            status.configure(text=f"{layer.name}  |  {mode.get()}  |  {round(output.shape[1] / pixel_scale)} x {round(output.shape[0] / pixel_scale)} px")
+
+        def schedule_redraw(*_args) -> None:
+            if redraw_after_id[0] is None:
+                redraw_after_id[0] = dialog.after(33, redraw)
 
         def load_selected_node() -> None:
             if mode.get() == "Свободная" or not points:
@@ -229,7 +221,7 @@ class TransformWorkspaceMixin:
                 points[index] = [float(node_x.get()), float(node_y.get())]
             except (tk.TclError, ValueError):
                 return
-            redraw()
+            schedule_redraw()
 
         def change_mode(*_args) -> None:
             nonlocal points
@@ -247,7 +239,7 @@ class TransformWorkspaceMixin:
                         points = regular_mesh()
                 selected_node.set(0)
                 load_selected_node()
-            redraw()
+            schedule_redraw()
 
         def apply_mesh_preset(*_args) -> None:
             nonlocal points
@@ -267,7 +259,7 @@ class TransformWorkspaceMixin:
                     point[1] = y + height * (0.5 + dy * factor)
                 elif selected == "Волна":
                     point[1] += math.sin(nx * math.tau) * height * 0.12
-            load_selected_node(); redraw()
+            load_selected_node(); schedule_redraw()
 
         def nearest_node(event) -> int | None:
             best, distance = None, 14.0
@@ -296,7 +288,7 @@ class TransformWorkspaceMixin:
             else:
                 index = nearest_node(event)
                 if index is not None:
-                    selected_node.set(index); load_selected_node(); redraw()
+                    selected_node.set(index); load_selected_node(); schedule_redraw()
                 drag_state.update(kind=index, last=doc_point)
 
         def drag(event) -> None:
@@ -308,7 +300,7 @@ class TransformWorkspaceMixin:
             if mode.get() != "Свободная":
                 points[int(kind)] = [current[0], current[1]]
                 drag_state["last"] = current
-                load_selected_node(); redraw(); return
+                load_selected_node(); schedule_redraw(); return
             x, y, width, height, angle = current_free_values()
             if kind == "move":
                 x_var.set(x + current[0] - last[0]); y_var.set(y + current[1] - last[1])
@@ -331,35 +323,41 @@ class TransformWorkspaceMixin:
                 }
             else:
                 result = {"mode": selected_mode, "points": [list(point) for point in points], "rows": rows, "columns": columns}
-            dialog.destroy()
+            close_dialog()
 
         def reset() -> None:
             nonlocal points
             x_var.set(source_x); y_var.set(source_y); width_var.set(source.shape[1]); height_var.set(source.shape[0]); angle_var.set(0.0)
             flip_horizontal.set(False); flip_vertical.set(False); preset.set("Без деформации")
             points = rectangle_points() if mode.get() == "Перспектива" else regular_mesh()
-            selected_node.set(0); load_selected_node(); redraw()
+            selected_node.set(0); load_selected_node(); schedule_redraw()
 
         def remove_saved_transform() -> None:
             nonlocal result
             result = {"mode": "Сбросить"}
+            close_dialog()
+
+        def close_dialog() -> None:
+            if redraw_after_id[0] is not None:
+                dialog.after_cancel(redraw_after_id[0])
+                redraw_after_id[0] = None
             dialog.destroy()
 
         ttk.Button(footer, text="Исходные узлы", command=reset).pack(side=tk.LEFT)
         if stored:
             ttk.Button(footer, text="Снять трансформацию", command=remove_saved_transform).pack(side=tk.LEFT, padx=(6, 0))
         ttk.Button(footer, text="Применить", command=accept, style="Primary.TButton").pack(side=tk.RIGHT, padx=(6, 0))
-        ttk.Button(footer, text="Отмена", command=dialog.destroy).pack(side=tk.RIGHT)
-        canvas.bind("<Configure>", redraw)
+        ttk.Button(footer, text="Отмена", command=close_dialog).pack(side=tk.RIGHT)
+        canvas.bind("<Configure>", schedule_redraw)
         canvas.bind("<ButtonPress-1>", press)
         canvas.bind("<B1-Motion>", drag)
         canvas.bind("<ButtonRelease-1>", lambda _event: drag_state.update(kind=None, last=None))
         mode.trace_add("write", change_mode)
-        show_grid.trace_add("write", redraw)
+        show_grid.trace_add("write", schedule_redraw)
         preset.trace_add("write", apply_mesh_preset)
         node_x.trace_add("write", node_fields_changed); node_y.trace_add("write", node_fields_changed)
         for variable in (x_var, y_var, width_var, height_var, angle_var, flip_horizontal, flip_vertical):
-            variable.trace_add("write", redraw)
+            variable.trace_add("write", schedule_redraw)
         self._transform_workspace_canvas = canvas
         self._transform_workspace_mode = mode
         self._transform_workspace_points = lambda: [list(point) for point in points]
@@ -368,7 +366,7 @@ class TransformWorkspaceMixin:
         self._transform_workspace_node_y = node_y
         self._transform_workspace_accept = accept
         self._transform_workspace_reset = reset
-        dialog.protocol("WM_DELETE_WINDOW", dialog.destroy)
+        dialog.protocol("WM_DELETE_WINDOW", close_dialog)
         self.center_toplevel(dialog, 1080, 720)
         change_mode()
         dialog.wait_window()

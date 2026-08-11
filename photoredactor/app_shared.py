@@ -116,6 +116,7 @@ from .history import (
 from .rendering import RenderEngine
 from .gpu_acceleration import acceleration_metrics, acceleration_status, benchmark_acceleration, calibrate_acceleration, reset_acceleration_metrics
 from .large_document import gpu_status
+from .interactive_performance import benchmark_interactive_paths
 from .automation import ActionRecorder, ActionRunner, ActionStep, load_action
 from .batch_queue import BatchQueue
 from .color_management import COLOR_MODELS, BIT_DEPTHS, color_settings, display_rgba, profile_details, soft_proof_rgba, gamut_warning_mask

@@ -127,6 +127,8 @@ class StartupSettingsMixin:
         self._gradient_preview_id: int | None = None
         self._gradient_preview_image: ImageTk.PhotoImage | None = None
         self._last_gradient_preview_at = 0.0
+        self._gradient_preview_after_id: str | None = None
+        self._gradient_preview_pending: tuple[tuple[int, int], tuple[int, int]] | None = None
         self._crop_box: tuple[int, int, int, int] | None = None
         self._crop_overlay_ids: list[int] = []
         self._crop_drag_handle: str | None = None

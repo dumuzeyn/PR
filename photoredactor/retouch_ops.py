@@ -146,6 +146,12 @@ def draw_brush(layer: Layer, x: int, y: int, radius: int, color: tuple[int, int,
     target = layer.pixels[y1:y2, x1:x2]
     if erase:
         target[:, :, 3] = np.clip(target[:, :, 3].astype(np.float32) * (1.0 - float(opacity) * coverage), 0, 255).astype(np.uint8)
+    elif selection_mask is None and color[3] == 255 and np.all(target[:, :, 3] == 255):
+        # The common opaque-paint path stays entirely in optimized OpenCV code.
+        amount = float(np.clip(opacity, 0.0, 1.0))
+        blended = cv2.multiply(target, 1.0 - amount)
+        cv2.add(blended, tuple(float(value) * amount for value in color), dst=blended)
+        cv2.copyTo(blended, mask.astype(np.uint8) * 255, target)
     else:
         paint = np.array(color, dtype=np.float32)
         dst = target.astype(np.float32)

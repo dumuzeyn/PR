@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from ..app_shared import *
+from ..preview_ops import visible_document_rect
 
 
 class TextGradientMixin:
@@ -267,34 +268,54 @@ class TextGradientMixin:
     def update_gradient_preview(self, start: tuple[int, int], end: tuple[int, int]) -> None:
         if start == end:
             return
+        self._gradient_preview_pending = (start, end)
+        if self._gradient_preview_after_id is not None:
+            return
+        elapsed = time.perf_counter() - self._last_gradient_preview_at
+        delay = max(0, round((1 / 30 - elapsed) * 1000))
+        if delay:
+            self._gradient_preview_after_id = self.after(delay, self.render_pending_gradient_preview)
+        else:
+            self.render_pending_gradient_preview()
+
+    def render_pending_gradient_preview(self) -> None:
+        self._gradient_preview_after_id = None
+        pending = self._gradient_preview_pending
+        self._gradient_preview_pending = None
+        if pending is None:
+            return
+        self._last_gradient_preview_at = time.perf_counter()
+        start, end = pending
         if self.gradient_mode.get() == "Объект":
-            now = time.perf_counter()
-            if now - self._last_gradient_preview_at < 1 / 30:
-                return
-            self._last_gradient_preview_at = now
             self.update_gradient_object_preview(start, end)
             return
+        x1, y1, x2, y2 = visible_document_rect(
+            self.canvas, self._canvas_origin, self.zoom.get(), (self.doc.width, self.doc.height)
+        )
+        if x1 >= x2 or y1 >= y2:
+            self.hide_gradient_preview_image()
+            return
+        scale = max(0.01, float(self.zoom.get()))
+        width = max(1, round((x2 - x1) * scale))
+        height = max(1, round((y2 - y1) * scale))
         pixels = GradientEngine.render(
-            self.doc.width,
-            self.doc.height,
-            start,
-            end,
+            width,
+            height,
+            (start[0] * scale, start[1] * scale),
+            (end[0] * scale, end[1] * scale),
             self.current_gradient_stops(),
             self.current_gradient_kind(),
+            (x1 * scale, y1 * scale),
         )
-        alpha = np.full((self.doc.height, self.doc.width), 190, dtype=np.uint8)
+        alpha = np.full((height, width), 190, dtype=np.uint8)
         if self.doc.selection_mask is not None:
-            alpha = np.minimum(alpha, self.doc.selection_mask)
+            selection = self.doc.selection_mask[y1:y2, x1:x2]
+            selection = cv2.resize(selection, (width, height), interpolation=cv2.INTER_LINEAR)
+            alpha = np.minimum(alpha, selection)
         pixels[:, :, 3] = np.minimum(pixels[:, :, 3], alpha)
         image = Image.fromarray(pixels, "RGBA")
-        scale = float(self.zoom.get())
-        if scale != 1.0:
-            image = image.resize(
-                (max(1, round(self.doc.width * scale)), max(1, round(self.doc.height * scale))),
-                Image.Resampling.BILINEAR,
-            )
         self._gradient_preview_image = ImageTk.PhotoImage(image)
-        x, y = self.doc_to_canvas(0, 0)
+        x, y = self.doc_to_canvas(x1, y1)
         if self._gradient_preview_id is None:
             self._gradient_preview_id = self.canvas.create_image(x, y, image=self._gradient_preview_image, anchor=tk.NW)
         else:
@@ -308,12 +329,23 @@ class TextGradientMixin:
         x1, x2 = sorted((int(start[0]), int(end[0])))
         y1, y2 = sorted((int(start[1]), int(end[1])))
         scale = max(0.01, float(self.zoom.get()))
-        width = max(2, round((x2 - x1) * scale))
-        height = max(2, round((y2 - y1) * scale))
-        local_start = ((start[0] - x1) * scale, (start[1] - y1) * scale)
-        local_end = ((end[0] - x1) * scale, (end[1] - y1) * scale)
+        visible = visible_document_rect(
+            self.canvas, self._canvas_origin, scale, (self.doc.width, self.doc.height)
+        )
+        clip_x1, clip_y1 = max(x1, visible[0]), max(y1, visible[1])
+        clip_x2, clip_y2 = min(x2, visible[2]), min(y2, visible[3])
+        if clip_x1 >= clip_x2 or clip_y1 >= clip_y2:
+            self.hide_gradient_preview_image()
+            return
+        width = max(2, round((clip_x2 - clip_x1) * scale))
+        height = max(2, round((clip_y2 - clip_y1) * scale))
+        scaled_start = (start[0] * scale, start[1] * scale)
+        scaled_end = (end[0] * scale, end[1] * scale)
+        origin = (clip_x1 * scale, clip_y1 * scale)
         if self.gradient_object_fill.get() == "Текстура":
             yy, xx = np.mgrid[0:height, 0:width]
+            xx = xx + round(clip_x1 * scale)
+            yy = yy + round(clip_y1 * scale)
             size = max(2, round(18 * scale))
             texture_kind = self.gradient_texture.get()
             if texture_kind == "Точки":
@@ -326,10 +358,18 @@ class TextGradientMixin:
                 selector = np.mod(xx // size + yy // size, 2) == 0
             pixels = np.where(selector[:, :, None], np.array(self.foreground), np.array(self.background)).astype(np.uint8)
         else:
-            pixels = GradientEngine.render(width, height, local_start, local_end, self.current_gradient_stops(), self.current_gradient_kind())
+            pixels = GradientEngine.render(
+                width, height, scaled_start, scaled_end, self.current_gradient_stops(),
+                self.current_gradient_kind(), origin,
+            )
         mask_image = Image.new("L", (width, height), 0)
         draw = ImageDraw.Draw(mask_image)
-        box = (0, 0, width - 1, height - 1)
+        box = (
+            (x1 - clip_x1) * scale,
+            (y1 - clip_y1) * scale,
+            (x2 - clip_x1) * scale,
+            (y2 - clip_y1) * scale,
+        )
         shape = self.gradient_shape.get()
         if shape == "Эллипс":
             draw.ellipse(box, fill=220)
@@ -343,7 +383,7 @@ class TextGradientMixin:
             draw.rectangle(box, fill=220)
         pixels[:, :, 3] = np.minimum(pixels[:, :, 3], np.array(mask_image, dtype=np.uint8))
         self._gradient_preview_image = ImageTk.PhotoImage(Image.fromarray(pixels, "RGBA"))
-        x, y = self.doc_to_canvas(x1, y1)
+        x, y = self.doc_to_canvas(clip_x1, clip_y1)
         if self._gradient_preview_id is None:
             self._gradient_preview_id = self.canvas.create_image(x, y, image=self._gradient_preview_image, anchor=tk.NW)
         else:
@@ -353,11 +393,18 @@ class TextGradientMixin:
         for item_id in self._drag_preview_ids:
             self.canvas.tag_raise(item_id)
 
-    def clear_gradient_preview(self) -> None:
+    def hide_gradient_preview_image(self) -> None:
         if self._gradient_preview_id is not None:
             self.canvas.delete(self._gradient_preview_id)
             self._gradient_preview_id = None
         self._gradient_preview_image = None
+
+    def clear_gradient_preview(self) -> None:
+        if self._gradient_preview_after_id is not None:
+            self.after_cancel(self._gradient_preview_after_id)
+            self._gradient_preview_after_id = None
+        self._gradient_preview_pending = None
+        self.hide_gradient_preview_image()
         self._last_gradient_preview_at = 0.0
 
     def create_gradient_object(self, start: tuple[int, int], end: tuple[int, int]) -> None:

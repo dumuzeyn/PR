@@ -24,11 +24,8 @@ from .core import (
 from .performance import PerformanceProfiler, profiler
 from .large_document import MipmapPyramid, ScratchCache, gpu_status
 
-
 Rect = tuple[int, int, int, int]
 Tile = tuple[int, int]
-
-
 class RenderEngine:
     """Caches layer work and recomposites only tiles invalidated by local edits."""
 
@@ -47,6 +44,7 @@ class RenderEngine:
         self._filtered_cache: dict[str, tuple[object, ...]] = {}
         self._mask_cache: dict[str, tuple[tuple[object, ...], np.ndarray | None]] = {}
         self._effects_cache: dict[str, tuple[tuple[object, ...], list[tuple[np.ndarray, int, int, float, str]]]] = {}
+        self._active_bases: dict[bool, tuple[str, np.ndarray]] = {}
         self._filter_dirty: dict[str, Rect] = {}
         self._mask_dirty: dict[str, Rect] = {}
         self._last_changed_tiles: set[Tile] = set()
@@ -61,6 +59,7 @@ class RenderEngine:
         self._dirty_tiles = {False: set(), True: set()}
         self._reduced_dirty_tiles = {False: set(), True: set()}
         self.clear_layer_caches()
+        self._active_bases.clear()
         self._last_changed_tiles.clear()
 
     def clear_layer_caches(self) -> None:
@@ -78,6 +77,7 @@ class RenderEngine:
         self._dirty_tiles = {False: set(), True: set()}
         self._reduced_dirty_tiles = {False: set(), True: set()}
         self._last_changed_tiles.clear()
+        self._active_bases.clear()
         if clear_layer_caches:
             self.clear_layer_caches()
         self.profiler.count("render.invalidate_full")
@@ -94,6 +94,9 @@ class RenderEngine:
         if clipped is None:
             return
         if layer is not None:
+            layer_index = next((index for index, item in enumerate(document.layers) if item.id == layer.id), -1)
+            if layer_index < document.active_layer:
+                self._active_bases.clear()
             if kind == "transform":
                 pass
             elif kind == "mask":
@@ -128,9 +131,18 @@ class RenderEngine:
         self.ensure_document(document)
         cached = self._composites.get(checker)
         if cached is None or cached.shape[:2] != (document.height, document.width):
+            fits_memory = document.width * document.height * 4 <= self.scratch.memory_limit
+            base = blank_rgba(document.width, document.height, (0, 0, 0, 0)) if fits_memory else None
             with self.profiler.measure("render.composite.full"):
-                cached = self.composite_region(document, (0, 0, document.width, document.height), checker)
+                cached = self.composite_region(
+                    document,
+                    (0, 0, document.width, document.height),
+                    checker,
+                    capture_active_base=base,
+                )
             self._composites[checker] = cached
+            # Retain one base and honor the configured large-document memory limit.
+            self._active_bases = {} if base is None else {checker: (document.layer.id, base)}
             self._dirty_tiles[checker].clear()
             self._last_changed_tiles = set(self.all_tiles(document))
             self.profiler.count("render.full")
@@ -140,11 +152,33 @@ class RenderEngine:
         dirty = self._dirty_tiles[checker]
         self._last_changed_tiles = set(dirty)
         if dirty:
+            active_index = document.active_layer
+            active = document.layer
+            base_entry = self._active_bases.get(checker)
+            use_active_base = (
+                base_entry is not None
+                and base_entry[0] == active.id
+                and active.visible
+                and active.kind != "adjustment"
+                and not active.clipping
+            )
             with self.profiler.measure("render.composite.dirty_tiles"):
                 for tx, ty in sorted(dirty):
                     rect = self.tile_rect(document, tx, ty)
                     x1, y1, x2, y2 = rect
-                    cached[y1:y2, x1:x2] = self.composite_region(document, rect, checker)
+                    if use_active_base:
+                        initial = base_entry[1][y1:y2, x1:x2]
+                        cached[y1:y2, x1:x2] = self.composite_region(
+                            document,
+                            rect,
+                            checker,
+                            initial=initial,
+                            start_index=active_index,
+                        )
+                    else:
+                        cached[y1:y2, x1:x2] = self.composite_region(document, rect, checker)
+            if use_active_base:
+                self.profiler.count("render.active_base_hit", len(dirty))
             self.profiler.count("render.partial")
             self.profiler.count("render.tiles_composited", len(dirty))
             dirty.clear()
@@ -154,19 +188,31 @@ class RenderEngine:
     @property
     def last_changed_tiles(self) -> set[Tile]:
         return set(self._last_changed_tiles)
-
     @property
     def render_revision(self) -> int:
         return self._render_revision
 
-    def composite_region(self, document: Document, rect: Rect, checker: bool = False) -> np.ndarray:
+    def composite_region(
+        self,
+        document: Document,
+        rect: Rect,
+        checker: bool = False,
+        *,
+        initial: np.ndarray | None = None,
+        start_index: int = 0,
+        capture_active_base: np.ndarray | None = None,
+    ) -> np.ndarray:
         x1, y1, x2, y2 = rect
-        if checker:
+        if initial is not None:
+            out = initial.copy()
+        elif checker:
             out = checker_region(rect)
         else:
             out = blank_rgba(x2 - x1, y2 - y1, (0, 0, 0, 0))
         previous_alpha: np.ndarray | None = None
-        for layer in document.layers:
+        for index, layer in enumerate(document.layers[start_index:], start=start_index):
+            if capture_active_base is not None and index == document.active_layer:
+                capture_active_base[y1:y2, x1:x2] = out
             if not layer.visible:
                 continue
             if layer.kind == "adjustment" and layer.adjustment is not None:
@@ -187,7 +233,6 @@ class RenderEngine:
             self._blend_region(out, rect, pixels, layer.x, layer.y, layer.opacity, alpha_mask, layer.mask_density, layer.blend_mode)
             previous_alpha = self._layer_alpha_region(rect, layer, pixels, alpha_mask)
         return out
-
     def _layer_intersects_region(self, layer: Layer, rect: Rect) -> bool:
         if layer.kind == "shape" and layer.shape_data is not None:
             raw_box = layer.shape_data.get("box", [0, 0, 1, 1])

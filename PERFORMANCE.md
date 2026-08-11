@@ -1,34 +1,27 @@
-# PhotoRedactor performance report
+# Производительность PhotoRedactor
 
-Measured on 2026-08-07 with the CPU renderer and 256 px tiles. Times vary by hardware; use `benchmarks\benchmark_rendering.py` to repeat them.
+Измерено 11 августа 2026 года на рабочем компьютере с тайлами 256 px. Время зависит от оборудования; повторяемый тест доступен в меню `Анализ -> Тест интерактивной производительности`.
 
-| Document | Layers | Previous full composite | Cached initial full composite | One dirty tile |
-| --- | ---: | ---: | ---: | ---: |
-| 1920x1080 | 1 | 209 ms | 221 ms | 8 ms |
-| 1920x1080 | 10 | 2101 ms | 2177 ms | 73 ms |
-| 3840x2160 | 1 | 973 ms | 924 ms | 7 ms |
-| 3840x2160 | 10 | 8487 ms | 8657 ms | 72 ms |
+| Сценарий | До этапа | После оптимизации |
+| --- | ---: | ---: |
+| 18 отпечатков кисти, радиус 256 px, холст 3840 x 2160 | 474 мс | 31 мс |
+| Один изменённый тайл среди 60 слоёв | 675 мс | 14 мс |
+| Радиальный градиент 3840 x 2160 | 674 мс | 160 мс |
+| Деформация сеткой изображения 1600 x 1200 | 306 мс | 91 мс |
 
-Initial full composition remains close to the reference renderer because it must visit every visible pixel. Interactive edits avoid that cost: brush, eraser, mask painting, blur/sharpen/dodge/burn, clone, healing and spot healing invalidate only affected tiles.
+Экранные предпросмотры дополнительно ограничены разрешением видимой рабочей области. В контрольном тесте кисть заняла 1,2 мс на отпечаток, градиент видимой области 22 мс, сеточная трансформация 27 мс, а изменение одного тайла среди 30 слоёв 5 мс.
 
-## Implemented
+## Реализованные ускорения
 
-- 256 px dirty-region compositor with exact reference-renderer equivalence tests.
-- Separate transparent and checkerboard caches, created only when needed.
-- Cached filter stacks, feathered masks and layer effects.
-- Local halo updates for blur, median, edge and emboss filters.
-- Local feathered-mask updates.
-- Tiled PIL/ImageTk conversion and canvas items, including zoomed views.
-- 128 px sparse stroke history; each touched tile is captured once.
-- Compact field/property/list history commands for ordinary layer edits.
-- Incremental quick-selection preview and bounded proxy previews.
-- Revision guards for background filter results and saves.
-- Opt-in timings through `PHOTO_REDACTOR_DEBUG_PERF=1`.
+- Кисть по непрозрачному слою использует векторизованный путь OpenCV.
+- Градиент использует компактные координатные массивы и точную таблицу цветов вместо четырёх полноразмерных интерполяций.
+- Предпросмотр градиента строится только для видимой части холста и объединяет частые события мыши в актуальный кадр.
+- Свободная, перспективная и сеточная трансформация во время перетаскивания рассчитываются в экранном разрешении; применение остаётся полноразмерным.
+- Сеточная деформация обрабатывает ограничивающую область каждого треугольника вместо полного выходного изображения.
+- Частичный композитор хранит готовую основу под активным слоем и не обходит десятки нижних слоёв для каждого изменённого тайла.
+- Основа активного слоя ограничена настройкой памяти и не создаётся для документа, превышающего этот лимит.
+- Сохранены тайлы, mipmap-уровни, дисковый scratch-кэш, локальные фильтры и маски, компактная история штрихов и GPU-ускорение.
 
-## Correctness fallbacks
+## Проверка качества
 
-Full recomposition is retained for document resize/crop/rotation, flatten/merge, layer structure changes and operations whose result can affect the whole document. Unsupported local filter combinations also use a full filtered-layer refresh. These fallbacks preserve image quality and project compatibility.
-
-## Remaining large-document work
-
-The renderer is CPU-based and keeps active composite caches in RAM. A future stage can add a mipmap pyramid, GPU compositing and scratch-disk eviction for documents that exceed the configured memory budget.
+Оптимизированные кисти и градиенты сравниваются с прежними формулами с допуском только на округление в один уровень из 255. Частичная композиция сравнивается побайтно с полным рендером, включая обтравочные и корректирующие слои. Полноразмерная обработка сохраняется для окончательного применения операций и для изменений, способных затронуть весь документ.
