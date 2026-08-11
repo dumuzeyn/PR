@@ -7,7 +7,7 @@ class CommandsMixin:
     def push_command(self, command) -> None:
         self.history.push(command)
         self._edit_generation += 1
-        self.record_action(command.label)
+        self.record_history_action(command)
         self.status_text(command.label)
         self.refresh_history_panel()
 
@@ -18,8 +18,8 @@ class CommandsMixin:
         command = self.compact_document_command(label, before, after)
         if command is not None:
             self.history.push(command)
+            self.record_history_action(command)
         self._edit_generation += 1
-        self.record_action(label)
         self.status_text(label)
         self.refresh_history_panel()
 
@@ -76,86 +76,21 @@ class CommandsMixin:
         before = None if self.doc.selection_mask is None else self.doc.selection_mask.copy()
         fn()
         after = None if self.doc.selection_mask is None else self.doc.selection_mask.copy()
-        self.history.push(SelectionMaskCommand(label, before, after))
+        command = SelectionMaskCommand(label, before, after)
+        self.history.push(command)
         self._edit_generation += 1
-        self.record_action(label)
+        self.record_history_action(command)
         self.selection_box = self.doc.selection_bounds()
         self._selection_contour_signature = None
         self.update_selection_overlay()
         self.status_text(label)
 
-    def record_action(self, label: str) -> None:
-        if not self.action_recorder.recording:
-            return
-        normalized = label.lower()
-        command = ""
-        params: dict[str, object] = {}
-        if "resize image" in normalized or "размер изображения" in normalized:
-            command, params = "resize_image", {"width": self.doc.width, "height": self.doc.height}
-        elif "resize canvas" in normalized or "размер холста" in normalized:
-            command, params = "resize_canvas", {"width": self.doc.width, "height": self.doc.height, "anchor": "center"}
-        elif "flatten" in normalized or "свести" in normalized:
-            command = "flatten"
-        elif "rotate" in normalized or "повернуть" in normalized:
-            command, params = "rotate", {"angle": 180 if "180" in normalized else 90}
-        elif "flip" in normalized or "отразить" in normalized:
-            command, params = "flip", {"axis": "vertical" if "vertical" in normalized or "вертик" in normalized else "horizontal"}
-        elif "bit depth" in normalized or "глубина" in normalized:
-            command, params = "set_bit_depth", {"bit_depth": self.doc.bit_depth}
-        elif "color model" in normalized or "цветовая модель" in normalized:
-            command, params = "set_color_model", {"color_model": self.doc.color_model}
-        elif self.doc.layer.filters:
-            command, params = "filter_stack", {"filters": copy.deepcopy(self.doc.layer.filters)}
-        if command:
-            self.action_recorder.record(command, params, label)
-
-    def start_action_recording(self) -> None:
-        self.action_recorder.start()
-        self.status_text("Запись действия начата")
-
-    def stop_action_recording(self) -> None:
-        self.action_recorder.stop()
-        self.status_text(f"Запись остановлена: {len(self.action_recorder.steps)} шагов")
-
-    def clear_action_recording(self) -> None:
-        self.action_recorder.steps.clear()
-        self.status_text("Запись действия очищена")
-
-    def save_action_recording(self) -> None:
-        if not self.action_recorder.steps:
-            messagebox.showinfo("Действия", "Нет записанных исполняемых шагов.")
-            return
-        path = filedialog.asksaveasfilename(defaultextension=".json", filetypes=[("Action JSON", "*.json")])
-        if not path:
-            return
-        self.action_recorder.save(path)
-        self.status_text(f"Действие сохранено: {path}")
-
-    def run_action_file(self) -> None:
-        path = filedialog.askopenfilename(filetypes=[("Действие PhotoRedactor", "*.json"), ("Все файлы", "*.*")])
-        if not path:
-            return
+    def record_history_action(self, command) -> None:
         try:
-            self.run_document_command("Выполнить действие", lambda: self.action_runner.run(self.doc, path))
-            self.refresh()
-        except Exception as exc:
-            messagebox.showerror("Действия", str(exc))
-
-    def batch_action_file(self) -> None:
-        action = filedialog.askopenfilename(filetypes=[("Действие PhotoRedactor", "*.json")])
-        if not action:
-            return
-        sources = filedialog.askopenfilenames(filetypes=[("Изображения", "*.png *.jpg *.jpeg *.webp *.bmp *.tif *.tiff")])
-        if not sources:
-            return
-        destination = filedialog.askdirectory(title="Папка результата")
-        if not destination:
-            return
-        self.run_background(
-            "Пакетное действие",
-            lambda: self.action_runner.batch(action, list(sources), destination),
-            lambda results: messagebox.showinfo("Действия", f"Обработано файлов: {len(results)}"),
-        )
+            self.action_recorder.record_history_command(command, self.doc)
+        except (TypeError, ValueError) as exc:
+            self.action_recorder.stop()
+            messagebox.showerror("Запись действий", f"Запись остановлена:\n{exc}")
 
     def schedule_autosave(self) -> None:
         self.after(60000, self.autosave_tick)

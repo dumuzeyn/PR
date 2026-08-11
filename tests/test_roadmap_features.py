@@ -106,7 +106,7 @@ def test_actions_are_replayable_and_batchable(tmp_path: Path) -> None:
     action = tmp_path / "action.json"
     recorder.save(action)
     data = json.loads(action.read_text(encoding="utf-8"))
-    assert data["format"] == "PhotoRedactor action v2"
+    assert data["format"] == "PhotoRedactor action v3"
     document = Document.new(30, 20)
     assert ActionRunner().run(document, action) == 2
     assert (document.width, document.height, document.bit_depth) == (12, 10, 16)

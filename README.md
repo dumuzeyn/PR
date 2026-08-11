@@ -29,7 +29,7 @@ This repository starts with a real working editor and an architecture intended t
 - neutral light desktop panels with a dark canvas workspace, a named icon-and-text toolbar, clearly labeled contextual options across the top, tabbed Properties/Layers/History and a compact status bar
 - direct Shape/Text selection on the canvas with auto-select, synchronized layers, eight resize handles, modifier-aware resize and arrow-key nudging
 - recovery autosave and manual recovery opening
-- replayable action recording in JSON v2, action playback and batch execution
+- action recording in validated JSON v3 with backward-compatible v2 playback, conditions, stops, per-step error policies and a persistent batch queue
 - Smart Objects with embedded originals, re-editable transforms and linked-file conflict status
 - native 16-bit RAW decoding; high-precision 8/16/32-bit layers, composition, filters, history and geometry; ICC assignment/conversion, soft proof, gamut warning, print preflight and profile-embedded CMYK TIFF export
 - direct tile-by-tile distant-zoom rendering without a full-size composite, scratch-disk cache eviction and measured OpenCL GPU kernels with adaptive CPU fallback
@@ -111,7 +111,8 @@ Every push to `master` starts the `Build PhotoRedactor for Windows` workflow. Op
 
 - Put Python plugins in `%APPDATA%\PhotoRedactor\plugins` and reload them from `Действия -> Перезагрузить плагины`.
 - The plugin contract and external filter protocol are documented in [`PLUGINS.md`](PLUGINS.md).
-- Action v2 files can be replayed on the current document or a group of images. A ready example is in `actions\web_thumbnail.json`.
+- Action v3 records the editor's actual undoable operations, including paint, masks, selections, vector/text edits, layer properties and layer structure. The action editor supports ordering, conditions, stops and per-step error policies; old v2 files remain readable. A ready example is in `actions\web_thumbnail.json`.
+- The batch queue supports multiple jobs, PNG/JPEG/WebP/TIFF/BMP output, rename/overwrite/skip collision policies, continue/stop error policies, progress, cancellation, per-file results and queue save/restore.
 - `PHOTO_REDACTOR_CACHE_MB` controls the RAM budget for render caches; older arrays automatically move to the scratch folder.
 - `PHOTO_REDACTOR_GPU=auto` benchmarks OpenCL and uses it only when beneficial; `force` always selects GPU and `off` keeps all work on CPU. The same modes and a live benchmark are available under Analysis > GPU settings.
 

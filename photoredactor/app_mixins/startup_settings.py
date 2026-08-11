@@ -23,6 +23,7 @@ class StartupSettingsMixin:
         self.recent_files: list[str] = []
         self.action_recorder = ActionRecorder()
         self.action_runner = ActionRunner()
+        self.batch_queue = BatchQueue(self.action_runner)
         self.plugin_registry = PluginRegistry()
         self.plugin_registry.discover()
         for name, callback in self.plugin_registry.action_commands.items():

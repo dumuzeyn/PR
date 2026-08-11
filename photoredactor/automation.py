@@ -1,20 +1,50 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 import json
 from pathlib import Path
 from typing import Any, Callable
 
 import cv2
 
+from .action_history import apply_history_payload, history_command_to_payload
 from .core import Document, adjust_brightness_contrast, adjust_saturation, apply_filter_stack, rotate_bound
+
+
+ACTION_FORMAT = "PhotoRedactor action v3"
+ERROR_POLICIES = {"stop", "continue", "skip_file"}
+CONDITION_OPERATORS = {"eq", "ne", "gt", "gte", "lt", "lte", "contains", "in", "exists"}
 
 
 @dataclass
 class ActionStep:
     command: str
-    params: dict[str, Any]
+    params: dict[str, Any] = field(default_factory=dict)
     label: str = ""
+    condition: dict[str, Any] | list[dict[str, Any]] | None = None
+    on_error: str = "stop"
+    enabled: bool = True
+    stop_after: bool = False
+
+
+@dataclass
+class StepError:
+    index: int
+    label: str
+    message: str
+
+
+@dataclass
+class ActionReport:
+    executed: int = 0
+    skipped: int = 0
+    stopped: bool = False
+    stop_message: str = ""
+    errors: list[StepError] = field(default_factory=list)
+
+
+class SkipBatchFile(RuntimeError):
+    pass
 
 
 class ActionRecorder:
@@ -22,20 +52,84 @@ class ActionRecorder:
         self.recording = False
         self.steps: list[ActionStep] = []
 
-    def start(self) -> None:
-        self.steps.clear()
+    def start(self, *, append: bool = False) -> None:
+        if not append:
+            self.steps.clear()
         self.recording = True
 
     def stop(self) -> None:
         self.recording = False
 
-    def record(self, command: str, params: dict[str, Any] | None = None, label: str = "") -> None:
+    def record(
+        self,
+        command: str,
+        params: dict[str, Any] | None = None,
+        label: str = "",
+        **options: Any,
+    ) -> None:
         if self.recording:
-            self.steps.append(ActionStep(command, dict(params or {}), label))
+            self.steps.append(ActionStep(command, dict(params or {}), label, **options))
 
-    def save(self, path: str | Path, name: str | None = None) -> None:
-        data = {"format": "PhotoRedactor action v2", "name": name or Path(path).stem, "steps": [asdict(step) for step in self.steps]}
+    def record_history_command(self, command: Any, document: Document) -> None:
+        if not self.recording:
+            return
+        payload = history_command_to_payload(command, document)
+        self.steps.append(ActionStep("history", payload, str(getattr(command, "label", "Операция"))))
+
+    def add_stop(self, message: str = "Остановка действия", condition: dict[str, Any] | None = None) -> None:
+        self.steps.append(ActionStep("stop", {"message": message}, message, condition=condition))
+
+    def save(self, path: str | Path, name: str | None = None, on_error: str = "stop") -> None:
+        if on_error not in ERROR_POLICIES:
+            raise ValueError(f"Неизвестная политика ошибок: {on_error}")
+        data = {
+            "format": ACTION_FORMAT,
+            "name": name or Path(path).stem,
+            "on_error": on_error,
+            "steps": [asdict(step) for step in self.steps],
+        }
+        validate_action(data)
         Path(path).write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def load_action(action: str | Path | dict[str, Any]) -> dict[str, Any]:
+    data = json.loads(Path(action).read_text(encoding="utf-8")) if isinstance(action, (str, Path)) else dict(action)
+    validate_action(data)
+    return data
+
+
+def validate_action(data: dict[str, Any]) -> None:
+    if not isinstance(data, dict):
+        raise ValueError("Файл действия должен содержать JSON-объект")
+    action_format = str(data.get("format", ""))
+    if action_format not in {"PhotoRedactor action v2", ACTION_FORMAT}:
+        raise ValueError("Неподдерживаемый формат действия")
+    if data.get("on_error", "stop") not in ERROR_POLICIES:
+        raise ValueError("Некорректная общая политика ошибок")
+    steps = data.get("steps")
+    if not isinstance(steps, list):
+        raise ValueError("В действии отсутствует список шагов")
+    for index, raw in enumerate(steps):
+        if isinstance(raw, str):
+            continue
+        if not isinstance(raw, dict) or not str(raw.get("command", "")):
+            raise ValueError(f"Шаг {index + 1} не содержит команду")
+        if raw.get("on_error", "stop") not in ERROR_POLICIES:
+            raise ValueError(f"Шаг {index + 1} содержит неизвестную политику ошибок")
+        _validate_condition(raw.get("condition"), index)
+
+
+def _validate_condition(condition: Any, index: int) -> None:
+    if condition is None:
+        return
+    conditions = condition if isinstance(condition, list) else [condition]
+    if not conditions or not all(isinstance(item, dict) for item in conditions):
+        raise ValueError(f"Условие шага {index + 1} должно быть объектом или списком объектов")
+    for item in conditions:
+        if not str(item.get("field", "")):
+            raise ValueError(f"Условие шага {index + 1} не содержит поле")
+        if item.get("operator", "eq") not in CONDITION_OPERATORS:
+            raise ValueError(f"Условие шага {index + 1} содержит неизвестный оператор")
 
 
 class ActionRunner:
@@ -51,38 +145,104 @@ class ActionRunner:
             "saturation": self._saturation,
             "set_bit_depth": lambda document, params: document.set_bit_depth(int(params["bit_depth"])),
             "set_color_model": lambda document, params: document.set_color_model(str(params["color_model"])),
+            "history": self._history,
         }
 
     def register(self, name: str, callback: Callable[[Document, dict[str, Any]], None]) -> None:
         if not name or name in self.commands:
-            raise ValueError(f"Action command already exists: {name}")
+            raise ValueError(f"Команда действия уже существует: {name}")
         self.commands[name] = callback
 
     def run(self, document: Document, action: str | Path | dict[str, Any]) -> int:
-        data = json.loads(Path(action).read_text(encoding="utf-8")) if isinstance(action, (str, Path)) else action
-        count = 0
-        for raw in data.get("steps", []):
-            if isinstance(raw, str):
+        return self.run_with_report(document, action).executed
+
+    def batch(
+        self,
+        action: str | Path | dict[str, Any],
+        sources: list[str | Path],
+        destination: str | Path,
+        suffix: str = ".png",
+    ) -> list[Path]:
+        from .batch_queue import BatchQueue
+
+        queue = BatchQueue(self)
+        job = queue.enqueue(action, sources, destination, suffix=suffix)
+        queue.run_all()
+        failures = [item for item in job.items if item.state == "failed"]
+        if failures:
+            raise RuntimeError(failures[0].message)
+        return [Path(item.target) for item in job.items if item.state == "completed"]
+
+    def run_with_report(
+        self,
+        document: Document,
+        action: str | Path | dict[str, Any],
+        *,
+        context: dict[str, Any] | None = None,
+        cancelled: Callable[[], bool] | None = None,
+        progress: Callable[[int, int, str], None] | None = None,
+    ) -> ActionReport:
+        data = load_action(action)
+        report = ActionReport()
+        execution_context = dict(context or {})
+        execution_context.setdefault("layer_ids", {})
+        steps = data.get("steps", [])
+        for index, raw in enumerate(steps):
+            if cancelled and cancelled():
+                report.stopped = True
+                report.stop_message = "Выполнение отменено"
+                break
+            if isinstance(raw, str) or not bool(raw.get("enabled", True)):
+                report.skipped += 1
+                continue
+            label = str(raw.get("label") or raw.get("command") or f"Шаг {index + 1}")
+            if not self._matches(document, raw.get("condition"), execution_context):
+                report.skipped += 1
+                if progress:
+                    progress(index + 1, len(steps), f"Пропущено: {label}")
                 continue
             command = str(raw.get("command", ""))
+            if command == "stop":
+                report.stopped = True
+                report.stop_message = str((raw.get("params") or {}).get("message", label))
+                break
             callback = self.commands.get(command)
-            if callback is None:
-                raise ValueError(f"Unknown action command: {command}")
-            callback(document, dict(raw.get("params") or {}))
-            count += 1
-        return count
+            try:
+                if callback is None:
+                    raise ValueError(f"Неизвестная команда действия: {command}")
+                params = dict(raw.get("params") or {})
+                if command == "history":
+                    apply_history_payload(document, params, execution_context)
+                else:
+                    callback(document, params)
+                report.executed += 1
+            except Exception as exc:
+                report.errors.append(StepError(index, label, str(exc)))
+                policy = str(raw.get("on_error") or data.get("on_error", "stop"))
+                if policy == "skip_file":
+                    raise SkipBatchFile(str(exc)) from exc
+                if policy == "stop":
+                    report.stopped = True
+                    report.stop_message = f"Ошибка на шаге «{label}»: {exc}"
+                    break
+            if progress:
+                progress(index + 1, len(steps), label)
+            if bool(raw.get("stop_after", False)):
+                report.stopped = True
+                report.stop_message = f"Остановка после шага «{label}»"
+                break
+        return report
 
-    def batch(self, action: str | Path | dict[str, Any], sources: list[str | Path], destination: str | Path, suffix: str = ".png") -> list[Path]:
-        output = Path(destination)
-        output.mkdir(parents=True, exist_ok=True)
-        results: list[Path] = []
-        for source in sources:
-            document = Document.from_image(source)
-            self.run(document, action)
-            target = output / f"{Path(source).stem}{suffix}"
-            document.export_flat(target)
-            results.append(target)
-        return results
+    @staticmethod
+    def _matches(document: Document, condition: Any, context: dict[str, Any]) -> bool:
+        if condition is None:
+            return True
+        conditions = condition if isinstance(condition, list) else [condition]
+        return all(_evaluate_condition(document, item, context) for item in conditions)
+
+    @staticmethod
+    def _history(document: Document, params: dict[str, Any]) -> None:
+        apply_history_payload(document, params, {})
 
     @staticmethod
     def _resize_image(document: Document, params: dict[str, Any]) -> None:
@@ -120,7 +280,11 @@ class ActionRunner:
 
     @staticmethod
     def _brightness_contrast(document: Document, params: dict[str, Any]) -> None:
-        document.layer.pixels = adjust_brightness_contrast(document.layer.pixels, int(params.get("brightness", 0)), float(params.get("contrast", 1.0)))
+        document.layer.pixels = adjust_brightness_contrast(
+            document.layer.pixels,
+            int(params.get("brightness", 0)),
+            float(params.get("contrast", 1.0)),
+        )
         document.layer.touch_pixels()
         document.dirty = True
 
@@ -131,5 +295,61 @@ class ActionRunner:
         document.dirty = True
 
 
+def _condition_value(document: Document, field_name: str, context: dict[str, Any]) -> Any:
+    fields = {
+        "document.width": document.width,
+        "document.height": document.height,
+        "document.layer_count": len(document.layers),
+        "document.has_selection": document.selection_mask is not None,
+        "document.bit_depth": document.bit_depth,
+        "document.color_model": document.color_model,
+        "layer.kind": document.layer.kind,
+        "layer.name": document.layer.name,
+        "source.extension": str(context.get("source_extension", "")).lower(),
+        "source.name": str(context.get("source_name", "")),
+    }
+    if field_name not in fields:
+        raise ValueError(f"Неизвестное поле условия: {field_name}")
+    return fields[field_name]
+
+
+def _evaluate_condition(document: Document, condition: dict[str, Any], context: dict[str, Any]) -> bool:
+    actual = _condition_value(document, str(condition.get("field", "")), context)
+    expected = condition.get("value")
+    operator = str(condition.get("operator", "eq"))
+    if operator == "eq":
+        return actual == expected
+    if operator == "ne":
+        return actual != expected
+    if operator == "gt":
+        return actual > expected
+    if operator == "gte":
+        return actual >= expected
+    if operator == "lt":
+        return actual < expected
+    if operator == "lte":
+        return actual <= expected
+    if operator == "contains":
+        return expected in actual
+    if operator == "in":
+        return actual in expected
+    if operator == "exists":
+        return bool(actual) is bool(expected)
+    raise ValueError(f"Неизвестный оператор условия: {operator}")
+
+
 def action_template(name: str = "Новое действие") -> dict[str, Any]:
-    return {"format": "PhotoRedactor action v2", "name": name, "steps": []}
+    return {"format": ACTION_FORMAT, "name": name, "on_error": "stop", "steps": []}
+
+
+__all__ = [
+    "ACTION_FORMAT",
+    "ActionRecorder",
+    "ActionReport",
+    "ActionRunner",
+    "ActionStep",
+    "SkipBatchFile",
+    "action_template",
+    "load_action",
+    "validate_action",
+]

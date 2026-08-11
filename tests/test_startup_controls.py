@@ -14,6 +14,7 @@ import numpy as np
 from PIL import Image
 
 from photoredactor.app import PhotoRedactorApp
+from photoredactor.automation import ACTION_FORMAT, ActionStep
 from photoredactor.core import Layer
 from photoredactor.history import DocumentStateCommand, LayerFieldsCommand, LayerInsertCommand, LayerMoveCommand, PixelPatchCommand, SelectionMaskCommand, ShapeDataCommand, TextDataCommand
 from photoredactor.ui.shortcuts import COMMAND_SHORTCUTS
@@ -456,6 +457,26 @@ class StartupTests(unittest.TestCase):
                 os.environ.pop("PHOTO_REDACTOR_GPU", None)
             else:
                 os.environ["PHOTO_REDACTOR_GPU"] = original
+
+    def test_action_editor_and_batch_queue_expose_manageable_steps_and_jobs(self) -> None:
+        self.app.action_recorder.steps = [
+            ActionStep("set_bit_depth", {"bit_depth": 16}, "Глубина цвета")
+        ]
+        self.app.show_action_editor()
+        self.app.update()
+        self.assertEqual(len(self.app._action_editor_tree.get_children()), 1)
+        self.assertEqual(self.app._action_editor.title(), "Редактор действия")
+
+        action = {
+            "format": ACTION_FORMAT,
+            "name": "Тест",
+            "steps": [{"command": "set_bit_depth", "params": {"bit_depth": 16}}],
+        }
+        self.app.batch_queue.enqueue(action, ["sample.png"], tempfile.gettempdir())
+        self.app.open_batch_queue()
+        self.app.update()
+        self.assertEqual(len(self.app._batch_queue_tree.get_children()), 1)
+        self.assertEqual(self.app._batch_queue_window.title(), "Очередь пакетной обработки")
 
 
 if __name__ == "__main__":
