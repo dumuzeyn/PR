@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 import json
+import math
 import os
 from typing import Iterable
 
@@ -16,6 +17,7 @@ from .core import (
     apply_filter_stack,
     blank_rgba,
     checker_background,
+    checker_region,
     effective_layer_mask,
     render_layer_effects,
 )
@@ -35,7 +37,9 @@ class RenderEngine:
         self.profiler = performance or profiler
         self._document: Document | None = None
         self._composites: dict[bool, np.ndarray] = {}
+        self._reduced_composites: dict[tuple[bool, int], np.ndarray] = {}
         self._dirty_tiles: dict[bool, set[Tile]] = {False: set(), True: set()}
+        self._reduced_dirty_tiles: dict[bool, set[Tile]] = {False: set(), True: set()}
         cache_mb = max(16, int(os.environ.get("PHOTO_REDACTOR_CACHE_MB", "256")))
         self.scratch = ScratchCache(memory_limit=cache_mb * 1024 * 1024)
         self.mipmaps = MipmapPyramid(self.scratch)
@@ -53,7 +57,9 @@ class RenderEngine:
             return
         self._document = document
         self._composites.clear()
+        self._reduced_composites.clear()
         self._dirty_tiles = {False: set(), True: set()}
+        self._reduced_dirty_tiles = {False: set(), True: set()}
         self.clear_layer_caches()
         self._last_changed_tiles.clear()
 
@@ -68,7 +74,9 @@ class RenderEngine:
     def invalidate_full(self, document: Document, clear_layer_caches: bool = True) -> None:
         self.ensure_document(document)
         self._composites.clear()
+        self._reduced_composites.clear()
         self._dirty_tiles = {False: set(), True: set()}
+        self._reduced_dirty_tiles = {False: set(), True: set()}
         self._last_changed_tiles.clear()
         if clear_layer_caches:
             self.clear_layer_caches()
@@ -112,6 +120,8 @@ class RenderEngine:
         tiles = set(self.tiles_for_rect(clipped))
         self._dirty_tiles[False].update(tiles)
         self._dirty_tiles[True].update(tiles)
+        self._reduced_dirty_tiles[False].update(tiles)
+        self._reduced_dirty_tiles[True].update(tiles)
         self.profiler.count("render.invalidate_tile", len(tiles))
 
     def render(self, document: Document, checker: bool = False) -> np.ndarray:
@@ -152,7 +162,7 @@ class RenderEngine:
     def composite_region(self, document: Document, rect: Rect, checker: bool = False) -> np.ndarray:
         x1, y1, x2, y2 = rect
         if checker:
-            out = checker_background(document.width, document.height)[y1:y2, x1:x2].copy()
+            out = checker_region(rect)
         else:
             out = blank_rgba(x2 - x1, y2 - y1, (0, 0, 0, 0))
         previous_alpha: np.ndarray | None = None
@@ -194,6 +204,8 @@ class RenderEngine:
         return bounds[0] < rect[2] and bounds[2] > rect[0] and bounds[1] < rect[3] and bounds[3] > rect[1]
 
     def filtered_pixels(self, layer: Layer) -> np.ndarray:
+        if not layer.filters:
+            return layer.pixels
         signature = (layer.pixels_revision, self._json_signature(layer.filters))
         cached_signature = self._filtered_cache.get(layer.id)
         cache_key = ("filtered", layer.id, signature)
@@ -223,10 +235,40 @@ class RenderEngine:
         return pixels
 
     def render_for_zoom(self, document: Document, zoom: float, checker: bool = True) -> tuple[np.ndarray, int]:
-        """Return an appropriately sized mipmap for zoomed-out canvas display."""
-        composite = self.render(document, checker)
-        key = (id(document), checker, document.width, document.height, self._render_revision)
-        return self.mipmaps.for_zoom(key, composite, zoom)
+        """Composite a zoomed-out document tile by tile without a full-size canvas."""
+        self.ensure_document(document)
+        level = self.mipmaps.level_for_zoom(zoom)
+        if level == 0:
+            return self.render(document, checker), 0
+        factor = 2 ** level
+        target_width = max(1, math.ceil(document.width / factor))
+        target_height = max(1, math.ceil(document.height / factor))
+        key = checker, level
+        reduced = self._reduced_composites.get(key)
+        if reduced is None or reduced.shape[:2] != (target_height, target_width):
+            reduced = blank_rgba(target_width, target_height, (0, 0, 0, 0))
+            self._reduced_composites[key] = reduced
+            tiles = set(self.all_tiles(document))
+        else:
+            tiles = set(self._reduced_dirty_tiles[checker])
+        self._last_changed_tiles = set(tiles)
+        if tiles:
+            with self.profiler.measure("render.composite.reduced_tiles"):
+                for tx, ty in sorted(tiles):
+                    source_rect = self.tile_rect(document, tx, ty)
+                    x1, y1, x2, y2 = source_rect
+                    dx1, dy1 = x1 // factor, y1 // factor
+                    dx2, dy2 = math.ceil(x2 / factor), math.ceil(y2 / factor)
+                    source = self.composite_region(document, source_rect, checker)
+                    reduced[dy1:dy2, dx1:dx2] = cv2.resize(
+                        source,
+                        (dx2 - dx1, dy2 - dy1),
+                        interpolation=cv2.INTER_AREA,
+                    )
+            self._reduced_dirty_tiles[checker].difference_update(tiles)
+            self.profiler.count("render.reduced_tiles", len(tiles))
+            self._render_revision += 1
+        return reduced, level
 
     def cache_status(self) -> dict[str, object]:
         return {**self.scratch.stats, "gpu": dict(self.gpu)}

@@ -12,13 +12,19 @@ from ..shape_ops import *
 from ..content_ops import *
 from ..adjustment_ops import *
 from ..precision_pipeline import composite_precision
+from ..project_tiles import PROJECT_FORMAT_VERSION, PROJECT_TILE_SIZE, is_tiled_array, read_tiled_array, temporary_project_path, tiled_payload_stats, write_tiled_array
 
 import tifffile
 
 
 class ProjectIoDocumentMixin:
     def save_project(self, path: str | Path) -> None:
+        target = Path(path)
+        temporary = temporary_project_path(target)
         manifest = {
+            "format": "PhotoRedactor project",
+            "format_version": PROJECT_FORMAT_VERSION,
+            "storage": {"format": "tiles-v1", "tile_size": PROJECT_TILE_SIZE},
             "width": self.width,
             "height": self.height,
             "dpi": self.dpi,
@@ -26,86 +32,63 @@ class ProjectIoDocumentMixin:
             "bit_depth": self.bit_depth,
             "background": list(self.background),
             "active_layer": self.active_layer,
-            "selection": "selection.png" if self.selection_mask is not None else None,
+            "selection": None,
             "saved_selections": {},
             "metadata": self.metadata,
             "layers": [],
         }
-        with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-            if self.selection_mask is not None:
-                buf = io.BytesIO()
-                rgba_array_to_pil(np.dstack([self.selection_mask] * 4)).save(buf, "PNG")
-                zf.writestr("selection.png", buf.getvalue())
-            for i, (name, mask) in enumerate(self.saved_selections.items()):
-                selection_path = f"selections/{i:04d}.png"
-                mask_buf = io.BytesIO()
-                rgba_array_to_pil(np.dstack([mask] * 4)).save(mask_buf, "PNG")
-                zf.writestr(selection_path, mask_buf.getvalue())
-                manifest["saved_selections"][name] = selection_path
-            for i, layer in enumerate(self.layers):
-                layer_path = f"layers/{i:04d}.png"
-                manifest["layers"].append(
-                    {
-                        "id": layer.id,
-                        "name": layer.name,
-                        "x": layer.x,
-                        "y": layer.y,
-                        "opacity": layer.opacity,
-                        "visible": layer.visible,
-                        "locked": layer.locked,
-                        "mask": f"masks/{i:04d}.png" if layer.mask is not None else None,
-                        "mask_enabled": layer.mask_enabled,
-                        "mask_linked": layer.mask_linked,
-                        "mask_density": layer.mask_density,
-                        "mask_feather": layer.mask_feather,
-                        "blend_mode": layer.blend_mode,
-                        "clipping": layer.clipping,
-                        "effects": layer.effects,
-                        "filters": layer.filters,
-                        "kind": layer.kind,
-                        "text_data": layer.text_data,
-                        "shape_data": layer.shape_data,
-                        "adjustment": layer.adjustment,
-                        "smart_data": layer.smart_data,
-                        "smart_source": f"smart/{i:04d}.png" if layer.smart_source is not None else None,
-                        "transform_data": layer.transform_data,
-                        "transform_source": f"transforms/{i:04d}.png" if layer.transform_source is not None else None,
-                        "transform_mask_source": f"transform_masks/{i:04d}.png" if layer.transform_mask_source is not None else None,
-                        "working_pixels": f"working/{i:04d}.npy" if layer.working_pixels is not None else None,
-                        "working_model": layer.working_model,
-                        "working_depth": layer.working_depth,
-                        "pixels": layer_path,
-                    }
-                )
-                buf = io.BytesIO()
-                rgba_array_to_pil(layer.pixels).save(buf, "PNG")
-                zf.writestr(layer_path, buf.getvalue())
-                if layer.smart_source is not None:
-                    smart_buf = io.BytesIO()
-                    rgba_array_to_pil(layer.smart_source).save(smart_buf, "PNG")
-                    zf.writestr(f"smart/{i:04d}.png", smart_buf.getvalue())
-                if layer.transform_source is not None:
-                    transform_buf = io.BytesIO()
-                    rgba_array_to_pil(layer.transform_source).save(transform_buf, "PNG")
-                    zf.writestr(f"transforms/{i:04d}.png", transform_buf.getvalue())
-                if layer.transform_mask_source is not None:
-                    transform_mask_buf = io.BytesIO()
-                    rgba_array_to_pil(np.dstack([layer.transform_mask_source] * 4)).save(transform_mask_buf, "PNG")
-                    zf.writestr(f"transform_masks/{i:04d}.png", transform_mask_buf.getvalue())
-                if layer.working_pixels is not None:
-                    working_buf = io.BytesIO()
-                    np.save(working_buf, layer.working_pixels, allow_pickle=False)
-                    zf.writestr(f"working/{i:04d}.npy", working_buf.getvalue())
-                if layer.mask is not None:
-                    mask_buf = io.BytesIO()
-                    rgba_array_to_pil(np.dstack([layer.mask] * 4)).save(mask_buf, "PNG")
-                    zf.writestr(f"masks/{i:04d}.png", mask_buf.getvalue())
-            zf.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False).encode("utf-8"))
-        self.path = str(path)
+        temporary.unlink(missing_ok=True)
+        try:
+            with zipfile.ZipFile(temporary, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=3) as zf:
+                if self.selection_mask is not None:
+                    manifest["selection"] = write_tiled_array(zf, "document/selection", self.selection_mask)
+                for i, (name, mask) in enumerate(self.saved_selections.items()):
+                    manifest["saved_selections"][name] = write_tiled_array(zf, f"document/selections/{i:04d}", mask)
+                for i, layer in enumerate(self.layers):
+                    prefix = f"layers/{i:04d}"
+                    manifest["layers"].append(
+                        {
+                            "id": layer.id,
+                            "name": layer.name,
+                            "x": layer.x,
+                            "y": layer.y,
+                            "opacity": layer.opacity,
+                            "visible": layer.visible,
+                            "locked": layer.locked,
+                            "mask": None if layer.mask is None else write_tiled_array(zf, f"{prefix}/mask", layer.mask),
+                            "mask_enabled": layer.mask_enabled,
+                            "mask_linked": layer.mask_linked,
+                            "mask_density": layer.mask_density,
+                            "mask_feather": layer.mask_feather,
+                            "blend_mode": layer.blend_mode,
+                            "clipping": layer.clipping,
+                            "effects": layer.effects,
+                            "filters": layer.filters,
+                            "kind": layer.kind,
+                            "text_data": layer.text_data,
+                            "shape_data": layer.shape_data,
+                            "adjustment": layer.adjustment,
+                            "smart_data": layer.smart_data,
+                            "smart_source": None if layer.smart_source is None else write_tiled_array(zf, f"{prefix}/smart", layer.smart_source),
+                            "transform_data": layer.transform_data,
+                            "transform_source": None if layer.transform_source is None else write_tiled_array(zf, f"{prefix}/transform", layer.transform_source),
+                            "transform_mask_source": None if layer.transform_mask_source is None else write_tiled_array(zf, f"{prefix}/transform_mask", layer.transform_mask_source),
+                            "working_pixels": None if layer.working_pixels is None else write_tiled_array(zf, f"{prefix}/working", layer.working_pixels),
+                            "working_model": layer.working_model,
+                            "working_depth": layer.working_depth,
+                            "pixels": write_tiled_array(zf, f"{prefix}/pixels", layer.pixels),
+                        }
+                    )
+                zf.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False).encode("utf-8"))
+            temporary.replace(target)
+        except Exception:
+            temporary.unlink(missing_ok=True)
+            raise
+        self.path = str(target)
         self.dirty = False
 
     @classmethod
-    def open_project(cls, path: str | Path) -> "Document":
+    def open_project(cls, path: str | Path, progress=None) -> "Document":
         with zipfile.ZipFile(path, "r") as zf:
             names = set(zf.namelist())
             if "manifest.json" not in names and "document.json" in names:
@@ -124,8 +107,18 @@ class ProjectIoDocumentMixin:
                 metadata=manifest.get("metadata", {}),
             )
             doc.layers = []
-            for raw in manifest["layers"]:
-                pixels = pil_to_rgba_array(Image.open(io.BytesIO(zf.read(raw["pixels"]))))
+            total_layers = len(manifest["layers"])
+
+            def payload(value, mask: bool = False):
+                if not value:
+                    return None
+                if is_tiled_array(value):
+                    return read_tiled_array(zf, value)
+                decoded = pil_to_rgba_array(Image.open(io.BytesIO(zf.read(value))))
+                return decoded[:, :, 0] if mask else decoded
+
+            for layer_index, raw in enumerate(manifest["layers"], 1):
+                pixels = payload(raw["pixels"])
                 doc.layers.append(
                     Layer(
                         name=raw["name"],
@@ -135,7 +128,7 @@ class ProjectIoDocumentMixin:
                         opacity=float(raw.get("opacity", 1.0)),
                         visible=bool(raw.get("visible", True)),
                         locked=bool(raw.get("locked", False)),
-                        mask=None if raw.get("mask") is None else pil_to_rgba_array(Image.open(io.BytesIO(zf.read(raw["mask"]))))[:, :, 0],
+                        mask=payload(raw.get("mask"), True),
                         mask_enabled=bool(raw.get("mask_enabled", True)),
                         mask_linked=bool(raw.get("mask_linked", True)),
                         mask_density=float(raw.get("mask_density", 1.0)),
@@ -149,24 +142,56 @@ class ProjectIoDocumentMixin:
                         shape_data=raw.get("shape_data"),
                         adjustment=raw.get("adjustment"),
                         smart_data=raw.get("smart_data"),
-                        smart_source=None if not raw.get("smart_source") else pil_to_rgba_array(Image.open(io.BytesIO(zf.read(raw["smart_source"])))),
+                        smart_source=payload(raw.get("smart_source")),
                         transform_data=raw.get("transform_data"),
-                        transform_source=None if not raw.get("transform_source") else pil_to_rgba_array(Image.open(io.BytesIO(zf.read(raw["transform_source"])))),
-                        transform_mask_source=None if not raw.get("transform_mask_source") else pil_to_rgba_array(Image.open(io.BytesIO(zf.read(raw["transform_mask_source"]))))[:, :, 0],
-                        working_pixels=None if not raw.get("working_pixels") else np.load(io.BytesIO(zf.read(raw["working_pixels"])), allow_pickle=False),
+                        transform_source=payload(raw.get("transform_source")),
+                        transform_mask_source=payload(raw.get("transform_mask_source"), True),
+                        working_pixels=None if not raw.get("working_pixels") else (
+                            read_tiled_array(zf, raw["working_pixels"])
+                            if is_tiled_array(raw["working_pixels"])
+                            else np.load(io.BytesIO(zf.read(raw["working_pixels"])), allow_pickle=False)
+                        ),
                         working_model=raw.get("working_model", "RGBA"),
                         working_depth=int(raw.get("working_depth", manifest.get("bit_depth", 8))),
                         id=raw.get("id", uuid.uuid4().hex),
                     )
                 )
+                if progress is not None:
+                    progress(layer_index, total_layers, raw["name"])
             doc.active_layer = min(int(manifest.get("active_layer", 0)), max(0, len(doc.layers) - 1))
             if manifest.get("selection"):
-                doc.selection_mask = pil_to_rgba_array(Image.open(io.BytesIO(zf.read(manifest["selection"]))))[:, :, 0]
+                doc.selection_mask = payload(manifest["selection"], True)
             doc.saved_selections = {}
             for name, selection_path in manifest.get("saved_selections", {}).items():
-                doc.saved_selections[name] = pil_to_rgba_array(Image.open(io.BytesIO(zf.read(selection_path))))[:, :, 0]
+                doc.saved_selections[name] = payload(selection_path, True)
         doc.path = str(path)
         return doc
+
+    @staticmethod
+    def project_storage_info(path: str | Path) -> dict[str, int | str]:
+        with zipfile.ZipFile(path, "r") as zf:
+            manifest = json.loads(zf.read("manifest.json").decode("utf-8"))
+        totals = {"tiles": 0, "bytes": 0}
+
+        def visit(value) -> None:
+            if is_tiled_array(value):
+                stats = tiled_payload_stats(value)
+                totals["tiles"] += stats["tiles"]
+                totals["bytes"] += stats["bytes"]
+                return
+            if isinstance(value, dict):
+                for child in value.values():
+                    visit(child)
+            elif isinstance(value, list):
+                for child in value:
+                    visit(child)
+
+        visit(manifest)
+        return {
+            "format": str(manifest.get("storage", {}).get("format", "legacy")),
+            "version": int(manifest.get("format_version", 1)),
+            **totals,
+        }
 
     def composite(self, checker: bool = False) -> np.ndarray:
         with profiler.measure("render.composite.reference"):

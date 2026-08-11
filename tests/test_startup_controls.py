@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 from pathlib import Path
+import tempfile
 import tkinter as tk
 import time
 from types import SimpleNamespace
@@ -12,6 +13,7 @@ import numpy as np
 from PIL import Image
 
 from photoredactor.app import PhotoRedactorApp
+from photoredactor.core import Layer
 from photoredactor.history import DocumentStateCommand, LayerFieldsCommand, LayerInsertCommand, LayerMoveCommand, PixelPatchCommand, SelectionMaskCommand, ShapeDataCommand, TextDataCommand
 from photoredactor.ui.shortcuts import COMMAND_SHORTCUTS
 
@@ -392,6 +394,48 @@ class StartupTests(unittest.TestCase):
         proofed = self.app.apply_soft_proof_display(source)
         self.assertEqual(proofed.shape, source.shape)
         self.assertFalse(np.array_equal(proofed[:, :, :3], source[:, :, :3]))
+
+    def test_open_path_loads_complete_project_through_background_worker(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "background-open.prdx"
+            document = self.app.doc.new(96, 64, (30, 40, 50, 255))
+            document.layers.append(Layer("Верхний", np.full((64, 96, 4), (210, 60, 40, 120), dtype=np.uint8)))
+            document.save_project(path)
+            captured: dict[str, object] = {}
+            original_background = self.app.run_background
+
+            def capture(label, worker, done, *_args):
+                captured.update(label=label, worker=worker, done=done)
+
+            self.app.run_background = capture
+            try:
+                self.app.open_path(str(path))
+                self.assertEqual(captured["label"], "Открытие проекта")
+                self.assertNotEqual(self.app.doc.path, str(path))
+                loaded = captured["worker"]()
+                captured["done"](loaded)
+            finally:
+                self.app.run_background = original_background
+            self.assertEqual(self.app.doc.path, str(path.resolve()))
+            self.assertEqual([layer.name for layer in self.app.doc.layers], ["Background", "Верхний"])
+
+    def test_zoomed_out_large_document_uses_reduced_canvas_without_full_composite(self) -> None:
+        self.app.doc = self.app.doc.new(2048, 1536, (28, 36, 48, 255))
+        self.app.doc.layers.append(Layer("Overlay", np.full((1536, 2048, 4), (220, 70, 45, 96), dtype=np.uint8)))
+        self.app.doc.active_layer = 1
+        self.app.zoom.set(0.2)
+        self.app._composite_cache = None
+        self.app.invalidate_pixels()
+        self.app.refresh_canvas()
+        self.app.update()
+        self.assertIsNone(self.app._composite_cache)
+        self.assertIsNotNone(self.app._preview_image)
+        self.assertLess(self.app._preview_image.width() * self.app._preview_image.height(), 500_000)
+        self.assertTrue(self.app._composite_dirty)
+        self.app.zoom.set(0.6)
+        self.app.refresh_canvas()
+        self.assertIsNotNone(self.app._composite_cache)
+        self.assertFalse(self.app._composite_dirty)
 
 
 if __name__ == "__main__":

@@ -32,7 +32,7 @@ This repository starts with a real working editor and an architecture intended t
 - replayable action recording in JSON v2, action playback and batch execution
 - Smart Objects with embedded originals, re-editable transforms and linked-file conflict status
 - native 16-bit RAW decoding; high-precision 8/16/32-bit layers, composition, filters, history and geometry; ICC assignment/conversion, soft proof, gamut warning, print preflight and profile-embedded CMYK TIFF export
-- mipmap rendering for distant zoom, scratch-disk cache eviction and optional CUDA detection with CPU fallback
+- direct tile-by-tile distant-zoom rendering without a full-size composite, scratch-disk cache eviction and optional CUDA detection with CPU fallback
 - Python plugin API plus validated external executable filters
 - local algorithmic canvas expansion with a live preview; true AI generative fill/expand remains unfinished in `ROADMAP.md`
 - metadata/EXIF view, histogram, image statistics and eyedropper
@@ -43,7 +43,7 @@ This repository starts with a real working editor and an architecture intended t
 - cached filter stacks, masks and layer effects; opacity and blend changes reuse filtered pixels
 - sparse 128 px stroke history, so long diagonal strokes do not store one huge bounding rectangle
 - revision-safe background filters that discard stale results after newer document edits
-- `.prdx` projects with `manifest.json` and separate layer PNG files, without Base64-packed layers
+- atomic tiled `.prdx` projects with per-tile SHA-256 integrity, high-precision payloads, backward compatibility and background loading of complete documents
 - resize, canvas resize, trim transparent pixels, reveal all layers, rotate, flip
 - brightness, contrast, saturation, hue/saturation, exposure, color balance, levels, curves, threshold, posterize, blur, sharpen, noise, median, edge detect, emboss, grayscale, invert
 - batch processing for folders

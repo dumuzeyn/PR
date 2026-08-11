@@ -13,14 +13,24 @@ class RenderingViewMixin:
         self._view_dirty = True
 
     def refresh_canvas(self) -> None:
+        scale = self.zoom.get()
+        reduced_view = (
+            scale < 0.5
+            and self.view_channel.get() == "RGB"
+            and self.mask_preview.get() == MASK_PREVIEW_NORMAL
+            and not color_settings(self.doc.metadata).get("soft_proof_enabled", False)
+        )
         composite_changed = self._composite_dirty or self._composite_cache is None
-        if self._composite_dirty or self._composite_cache is None:
+        level = 0
+        if reduced_view:
+            display, level = self.render_engine.render_for_zoom(self.doc, scale, checker=True)
+        elif self._composite_dirty or self._composite_cache is None:
             self._composite_cache = self.render_engine.render(self.doc, checker=True)
             self._composite_dirty = False
-        display = self.apply_soft_proof_display(self._composite_cache)
-        display = self._channel_display(display)
-        display = self._mask_preview_display(display)
-        scale = self.zoom.get()
+        if not reduced_view:
+            display = self.apply_soft_proof_display(self._composite_cache)
+            display = self._channel_display(display)
+            display = self._mask_preview_display(display)
         pad_x = max(40, self.canvas.winfo_width() // 2)
         pad_y = max(40, self.canvas.winfo_height() // 2)
         self._canvas_origin = (pad_x, pad_y)
@@ -36,7 +46,7 @@ class RenderingViewMixin:
         )
         full_view = self._canvas_view_signature != view_signature or not self._canvas_tile_ids
         if scale < 0.5:
-            self._update_canvas_mipmap(display, scale, pad_x, pad_y)
+            self._update_canvas_mipmap(display, scale, pad_x, pad_y, level)
         else:
             changed_tiles = self.render_engine.last_changed_tiles if composite_changed and not full_view else set(self.render_engine.all_tiles(self.doc))
             self._update_canvas_tiles(display, changed_tiles, scale, pad_x, pad_y, full_view)
@@ -60,18 +70,16 @@ class RenderingViewMixin:
         if self._crop_box is not None and self.tool.get() == "crop":
             self.draw_crop_overlay(self._crop_box)
 
-    def _update_canvas_mipmap(self, display: np.ndarray, scale: float, pad_x: int, pad_y: int) -> None:
+    def _update_canvas_mipmap(self, display: np.ndarray, scale: float, pad_x: int, pad_y: int, level: int = 0) -> None:
         for item_id in self._canvas_tile_ids.values():
             self.canvas.delete(item_id)
         self._canvas_tile_ids.clear()
         self._canvas_tile_images.clear()
-        key = (
-            id(self.doc),
-            self.render_engine.render_revision,
-            self.view_channel.get(),
-            self.mask_preview.get(),
-        )
-        reduced, level = self.render_engine.mipmaps.for_zoom(key, display, scale)
+        if level == 0:
+            key = (id(self.doc), self.render_engine.render_revision, self.view_channel.get(), self.mask_preview.get())
+            reduced, level = self.render_engine.mipmaps.for_zoom(key, display, scale)
+        else:
+            reduced = display
         target = max(1, round(self.doc.width * scale)), max(1, round(self.doc.height * scale))
         image = rgba_array_to_pil(reduced)
         if image.size != target:

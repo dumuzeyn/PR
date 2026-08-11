@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import zipfile
+
 from ..app_shared import *
 
 
@@ -16,17 +18,20 @@ class SmartFilesMixin:
             self.recent_files = [item for item in self.recent_files if item.lower() != path.lower()]
             self.refresh_recent_menu()
             return
-        try:
-            document = Document.open_project(path) if path.lower().endswith(".prdx") else Document.from_image(path)
-        except Exception as exc:
-            messagebox.showerror("Открытие", f"Не удалось открыть файл:\n{exc}")
-            return
-        self.doc = document
-        self._edit_generation += 1
-        self.history.clear()
-        self.selection_box = self.doc.selection_bounds()
-        self.add_recent_file(path)
-        self.show_editor()
+        source_path = str(Path(path).resolve())
+
+        def worker() -> Document:
+            return Document.open_project(source_path) if source_path.lower().endswith(".prdx") else Document.from_image(source_path)
+
+        def opened(document: Document) -> None:
+            self.doc = document
+            self._edit_generation += 1
+            self.history.clear()
+            self.selection_box = self.doc.selection_bounds()
+            self.add_recent_file(source_path)
+            self.show_editor()
+
+        self.run_background("Открытие проекта", worker, opened)
 
     def place_embedded(self) -> None:
         path = filedialog.askopenfilename(filetypes=[("Изображения и проекты", "*.png *.jpg *.jpeg *.webp *.bmp *.tif *.tiff *.prdx"), ("Все файлы", "*.*")])
@@ -350,6 +355,12 @@ class SmartFilesMixin:
     def show_cache_status(self) -> None:
         status = self.render_engine.cache_status()
         gpu = status["gpu"]
+        project_info = None
+        if self.doc.path and self.doc.path.lower().endswith(".prdx") and Path(self.doc.path).exists():
+            try:
+                project_info = self.doc.project_storage_info(self.doc.path)
+            except (OSError, ValueError, zipfile.BadZipFile, KeyError):
+                project_info = None
         text = (
             f"Кэш в памяти: {status['memory_bytes'] / 1024 / 1024:.1f} МБ\n"
             f"Объектов в памяти: {status['memory_items']}\n"
@@ -358,4 +369,10 @@ class SmartFilesMixin:
             f"GPU включен: {'да' if gpu['enabled'] else 'нет'}\n"
             f"Устройств: {gpu['devices']}"
         )
+        if project_info is not None:
+            text += (
+                f"\n\nФормат проекта: {project_info['format']} v{project_info['version']}\n"
+                f"Тайлов в проекте: {project_info['tiles']}\n"
+                f"Несжатые данные: {project_info['bytes'] / 1024 / 1024:.1f} МБ"
+            )
         messagebox.showinfo("Большие документы", text)

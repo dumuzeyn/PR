@@ -191,6 +191,17 @@ def checker_background(width: int, height: int, tile: int = 16) -> np.ndarray:
     _checker_cache[key] = bg
     return bg
 
+
+def checker_region(rect: tuple[int, int, int, int], tile: int = 16) -> np.ndarray:
+    x1, y1, x2, y2 = (int(value) for value in rect)
+    width, height = max(0, x2 - x1), max(0, y2 - y1)
+    yy, xx = np.indices((height, width), dtype=np.int32)
+    light = (((xx + x1) // tile + (yy + y1) // tile) & 1) == 0
+    result = np.empty((height, width, 4), dtype=np.uint8)
+    result[:, :, :3] = np.where(light[:, :, None], 224, 192)
+    result[:, :, 3] = 255
+    return result
+
 def bezier_curve_points(raw_points: Any, box: tuple[int, int, int, int], steps: int = 64) -> list[tuple[float, float]]:
     if isinstance(raw_points, list) and len(raw_points) == 4:
         try:
