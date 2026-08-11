@@ -228,6 +228,9 @@ class RenderingViewMixin:
                     indicators.append("?" if linked_status == "missing" else "!")
             if layer.effects or layer.filters:
                 indicators.append("fx")
+            spot = assigned_spot_color(self.doc, layer.id)
+            if spot is not None:
+                indicators.append(f"Spot: {spot.name}")
             suffix = f"  [{' '.join(indicators)}]" if indicators else ""
             rows.append(f"{marker}   {layer.name}{suffix}")
         existing = list(self.layer_list.get(0, tk.END))

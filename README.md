@@ -100,6 +100,14 @@ PSD and PSB files can be opened from the regular file dialog. Pixel layers retai
 
 `Файл -> Экспорт совместимого PSD/PSB` writes a layered file and reports every complex PhotoRedactor layer that had to become a pixel layer. Imported Photoshop text remains editable in PhotoRedactor with approximate font parameters and its original visual cache. The current upstream writer cannot create editable Photoshop type, shape or Smart Object records, so the professional round-trip item remains open in `ROADMAP.md`.
 
+## Printing and spot colors
+
+`Файл -> Печать` opens the native Windows printer dialog and sends the document through the selected printer driver. The image is centered and fitted inside the driver's printable area while preserving its aspect ratio.
+
+`Изображение -> Управление цветом -> Плашечные краски` manages document spot inks and assigns them to layers. Libraries can be exchanged as Adobe Swatch Exchange (`.ase`) or PhotoRedactor (`.prswatches`) files. Licensed Pantone ASE libraries can be imported by their owner; PhotoRedactor does not bundle or fabricate proprietary Pantone color data.
+
+The print preparation window can export four process plates and one grayscale TIFF plate for every assigned spot ink. `separations.json` records the profile, dimensions, Lab alternate values, sources and plate filenames.
+
 ## Tool panel
 
 - The left side is a scrollable icon-and-name toolbar, so tools remain understandable without memorizing symbols. Hovering any tool shows its shortcut, explanation and a looping visual demonstration below the text.

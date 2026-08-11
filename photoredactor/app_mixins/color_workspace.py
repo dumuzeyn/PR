@@ -192,11 +192,13 @@ class ColorWorkspaceMixin:
                 self._color_workspace_images.append(preview_photo(proof_preview))
                 proof_label.configure(image=self._color_workspace_images[1])
                 issue_text = "; ".join(preflight["issues"]) if preflight["issues"] else "критических замечаний нет"
+                spot_names = ", ".join(item["name"] for item in preflight["spot_colors"]) or "нет"
                 report.configure(
                     text=(
                         f"{preflight['profile']['name']}  |  {self.doc.dpi} DPI  |  "
                         f"Макс. краска: {preflight['maximum_ink']:.1f}%  |  "
-                        f"Вне охвата: {np.count_nonzero(warning) / warning.size:.1%} предпросмотра\n{issue_text}"
+                        f"Вне охвата: {np.count_nonzero(warning) / warning.size:.1%} предпросмотра\n"
+                        f"Плашечные краски: {spot_names}\n{issue_text}"
                     )
                 )
                 self._color_workspace_preflight = preflight
@@ -254,6 +256,13 @@ class ColorWorkspaceMixin:
         footer.pack(fill=tk.X)
         ttk.Button(footer, text="Включить цветопробу", command=enable_proof, style="Primary.TButton").pack(side=tk.RIGHT, padx=(6, 0))
         ttk.Button(footer, text="Экспорт CMYK TIFF...", command=export_tiff).pack(side=tk.RIGHT, padx=(6, 0))
+        ttk.Button(
+            footer,
+            text="Экспорт цветоделений...",
+            command=lambda: self.export_separations_dialog(
+                profile_path.get(), INTENT_LABELS[intent.get()], black_point.get(), dialog
+            ),
+        ).pack(side=tk.RIGHT, padx=(6, 0))
         ttk.Button(footer, text="Закрыть", command=dialog.destroy).pack(side=tk.RIGHT)
         self._color_workspace_profile = profile_path
         self._color_workspace_intent = intent

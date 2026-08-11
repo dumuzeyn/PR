@@ -124,7 +124,9 @@ from .psd_compat import PSDCompatibilityError, export_psd
 from .automation import ActionRecorder, ActionRunner, ActionStep, load_action
 from .batch_queue import BatchQueue
 from .color_management import COLOR_MODELS, BIT_DEPTHS, color_settings, display_rgba, profile_details, soft_proof_rgba, gamut_warning_mask
-from .print_pipeline import document_source_profile, proof_document, print_preflight, export_cmyk_tiff
+from .print_pipeline import document_source_profile, proof_document, print_preflight, export_cmyk_tiff, export_color_separations
+from .spot_colors import SpotColor, assign_spot_color, assigned_spot_color, document_spot_colors, lab_to_srgb, load_library, replace_document_spot_colors, save_library
+from .windows_print import print_document
 from .plugins import PluginRegistry
 from .ui.tool_options import ToolOptionsPanel
 from .ui.tool_palette import ToolPalette, ToolPaletteDialog, normalize_tool_order, normalize_visible_tools

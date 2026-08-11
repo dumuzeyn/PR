@@ -56,6 +56,8 @@ class ShortcutsMixin:
         self.bind_all("<KeyPress>", self.shortcut_plain_key)
 
     def shortcut_control_key(self, event):
+        if event_key(event) == "p" and not (int(getattr(event, "state", 0)) & 0x0001):
+            return self.shortcut_print(event)
         callbacks = {
             "undo": self.shortcut_undo, "redo": self.shortcut_redo, "save": self.shortcut_save,
             "save_as": self.shortcut_save_as, "open": self.shortcut_open, "new_document": self.shortcut_new,
@@ -146,6 +148,11 @@ class ShortcutsMixin:
 
     def shortcut_new(self, _event=None):
         self.new_document()
+        return "break"
+
+    def shortcut_print(self, _event=None):
+        if self._editor_active:
+            self.system_print_document()
         return "break"
 
     def shortcut_select_all(self, _event=None):

@@ -29,6 +29,7 @@ class MenusToolsMixin:
         self.plugin_export_menu = tk.Menu(file_menu, tearoff=False, postcommand=self.refresh_plugin_export_menu)
         file_menu.add_cascade(label="Экспорт через плагин", menu=self.plugin_export_menu)
         file_menu.add_command(label="Экспорт слоев", command=self.export_layers)
+        file_menu.add_command(label="Печать...", command=self.system_print_document, accelerator="Ctrl+P")
         file_menu.add_separator()
         file_menu.add_command(label="Открыть восстановление", command=self.open_recovery)
         file_menu.add_command(label="Очистить восстановление", command=self.clear_recovery)
@@ -108,6 +109,7 @@ class MenusToolsMixin:
         color_menu.add_separator()
         color_menu.add_command(label="Цветопроба и подготовка к печати", command=self.color_proof_workspace)
         color_menu.add_command(label="Включить / выключить цветопробу", command=self.toggle_soft_proof)
+        color_menu.add_command(label="Плашечные краски...", command=self.spot_colors_workspace)
         model_menu = tk.Menu(color_menu, tearoff=False)
         color_menu.add_cascade(label="Цветовая модель", menu=model_menu)
         for model in COLOR_MODELS:
