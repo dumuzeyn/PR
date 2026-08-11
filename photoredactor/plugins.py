@@ -269,8 +269,10 @@ class PluginRegistry:
             command,
             input=json.dumps(request, ensure_ascii=False),
             text=True,
+            encoding="utf-8",
             capture_output=True,
             timeout=180,
+            env={**os.environ, "PYTHONIOENCODING": "utf-8"},
             creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
         )
         if completed.returncode != 0:
