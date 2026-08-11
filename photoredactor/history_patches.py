@@ -10,32 +10,41 @@ class PixelPatchCommand:
     rect: tuple[int, int, int, int]
     before: np.ndarray
     after: np.ndarray
+    precision_before: np.ndarray | None = None
+    precision_after: np.ndarray | None = None
 
     @property
     def memory_bytes(self) -> int:
-        return int(self.before.nbytes + self.after.nbytes)
+        precision = 0
+        if self.precision_before is not None:
+            precision += int(self.precision_before.nbytes)
+        if self.precision_after is not None:
+            precision += int(self.precision_after.nbytes)
+        return int(self.before.nbytes + self.after.nbytes + precision)
+
+    def _apply(self, document: Document, display: np.ndarray, precise: np.ndarray | None) -> None:
+        layer = document.get_layer(self.layer_id)
+        if layer is None:
+            return
+        x1, y1, x2, y2 = self.rect
+        if precise is not None and layer.working_pixels is not None:
+            working = layer.working_rgba()
+            working[y1:y2, x1:x2] = precise
+            layer.set_working_rgba(working, layer.working_depth, layer.working_model)
+        else:
+            layer.pixels[y1:y2, x1:x2] = display
+            layer.touch_pixels()
+        document.dirty = True
 
     @property
     def dirty_rects(self) -> list[tuple[int, int, int, int]]:
         return [self.rect]
 
     def undo(self, document: Document) -> None:
-        layer = document.get_layer(self.layer_id)
-        if layer is None:
-            return
-        x1, y1, x2, y2 = self.rect
-        layer.pixels[y1:y2, x1:x2] = self.before
-        layer.touch_pixels()
-        document.dirty = True
+        self._apply(document, self.before, self.precision_before)
 
     def redo(self, document: Document) -> None:
-        layer = document.get_layer(self.layer_id)
-        if layer is None:
-            return
-        x1, y1, x2, y2 = self.rect
-        layer.pixels[y1:y2, x1:x2] = self.after
-        layer.touch_pixels()
-        document.dirty = True
+        self._apply(document, self.after, self.precision_after)
 
 @dataclass
 class MaskPatchCommand:

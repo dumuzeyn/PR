@@ -193,6 +193,7 @@ class CommandsMixin:
             return None
         layer_id = layer.id
         before = layer.pixels.copy()
+        before_working = layer.working_rgba().copy() if layer.working_pixels is not None else None
         fn()
         target = self.doc.get_layer(layer_id)
         if target is None or target.pixels.shape != before.shape:
@@ -203,7 +204,17 @@ class CommandsMixin:
         ys, xs = np.where(changed)
         rect = int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1
         x1, y1, x2, y2 = rect
-        self.push_command(PixelPatchCommand(label, layer_id, rect, before[y1:y2, x1:x2].copy(), target.pixels[y1:y2, x1:x2].copy()))
+        target.touch_pixels()
+        after_working = target.working_rgba() if before_working is not None else None
+        self.push_command(PixelPatchCommand(
+            label,
+            layer_id,
+            rect,
+            before[y1:y2, x1:x2].copy(),
+            target.pixels[y1:y2, x1:x2].copy(),
+            None if before_working is None else before_working[y1:y2, x1:x2].copy(),
+            None if after_working is None else after_working[y1:y2, x1:x2].copy(),
+        ))
         self.doc.dirty = True
         self.request_canvas_refresh(self.local_to_document_rect(rect, target), target, "pixels")
         self.refresh_layers()

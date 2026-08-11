@@ -16,7 +16,7 @@ import numpy as np
 from PIL import ExifTags, Image, ImageDraw, ImageFont
 
 from .performance import profiled, profiler
-from .color_management import BIT_DEPTHS, COLOR_MODELS, color_settings, convert_icc, display_rgba, normalize_rgba, profile_bytes, profile_name, quantize_rgba, rgb_to_cmyk, rgb_to_lab
+from .color_management import BIT_DEPTHS, COLOR_MODELS, color_settings, convert_icc, display_rgba, normalize_rgba, profile_bytes, profile_name, quantize_rgba, rgb_to_cmyk, rgb_to_lab, rgba_to_working, working_to_rgba
 
 
 _checker_cache: dict[tuple[int, int, int], np.ndarray] = {}

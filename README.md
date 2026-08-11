@@ -31,7 +31,7 @@ This repository starts with a real working editor and an architecture intended t
 - recovery autosave and manual recovery opening
 - replayable action recording in JSON v2, action playback and batch execution
 - Smart Objects with embedded originals, re-editable transforms and linked-file conflict status
-- RAW decoding, ICC profile assignment/conversion, RGB/Lab/CMYK workflows and 8/16/32-bit working channels
+- native 16-bit RAW decoding; high-precision 8/16/32-bit layers, composition, filters, history and geometry; ICC assignment/conversion, soft proof, gamut warning, print preflight and profile-embedded CMYK TIFF export
 - mipmap rendering for distant zoom, scratch-disk cache eviction and optional CUDA detection with CPU fallback
 - Python plugin API plus validated external executable filters
 - local algorithmic canvas expansion with a live preview; true AI generative fill/expand remains unfinished in `ROADMAP.md`

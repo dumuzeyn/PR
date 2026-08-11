@@ -54,7 +54,7 @@ class PersistenceDocumentMixin:
                 "white_balance": [] if white_balance is None else [float(value) for value in white_balance],
             }
         h, w = rgba16.shape[:2]
-        layer = Layer(Path(path).stem, display_rgba(rgba16), working_pixels=rgba16)
+        layer = Layer(Path(path).stem, display_rgba(rgba16), working_pixels=rgba16, working_depth=16)
         doc = cls(
             width=w,
             height=h,
@@ -119,6 +119,7 @@ class PersistenceDocumentMixin:
                     "transform_mask_source": None if layer.transform_mask_source is None else layer.transform_mask_source.copy(),
                     "working_pixels": None if layer.working_pixels is None else layer.working_pixels.copy(),
                     "working_model": layer.working_model,
+                    "working_depth": layer.working_depth,
                     "pixels": layer.pixels.copy(),
                 }
                 for layer in self.layers
@@ -169,6 +170,7 @@ class PersistenceDocumentMixin:
                     transform_mask_source=None if raw.get("transform_mask_source") is None else raw["transform_mask_source"].copy(),
                     working_pixels=None if raw.get("working_pixels") is None else raw["working_pixels"].copy(),
                     working_model=raw.get("working_model", "RGBA"),
+                    working_depth=int(raw.get("working_depth", self.bit_depth)),
                     id=raw.get("id", uuid.uuid4().hex),
                 )
             )
@@ -215,6 +217,7 @@ class PersistenceDocumentMixin:
                     "transform_mask_source": None if layer.transform_mask_source is None else encode_png(np.dstack([layer.transform_mask_source] * 4)),
                     "working_pixels": None if layer.working_pixels is None else encode_array(layer.working_pixels),
                     "working_model": layer.working_model,
+                    "working_depth": layer.working_depth,
                     "pixels": encode_png(layer.pixels),
                 }
                 for layer in self.layers
@@ -262,6 +265,7 @@ class PersistenceDocumentMixin:
                     transform_mask_source=None if raw.get("transform_mask_source") is None else decode_png(raw["transform_mask_source"])[:, :, 0],
                     working_pixels=None if raw.get("working_pixels") is None else decode_array(raw["working_pixels"]),
                     working_model=raw.get("working_model", "RGBA"),
+                    working_depth=int(raw.get("working_depth", data.get("bit_depth", 8))),
                     id=raw.get("id", uuid.uuid4().hex),
                 )
             )

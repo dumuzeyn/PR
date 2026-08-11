@@ -37,10 +37,13 @@ class PixelTilePatchCommand:
     label: str
     layer_id: str
     patches: list[TilePatch]
+    precision_patches: list[TilePatch] | None = None
 
     @property
     def memory_bytes(self) -> int:
-        return sum(patch.memory_bytes for patch in self.patches)
+        return sum(patch.memory_bytes for patch in self.patches) + sum(
+            patch.memory_bytes for patch in (self.precision_patches or [])
+        )
 
     @property
     def dirty_rects(self) -> list[tuple[int, int, int, int]]:
@@ -50,10 +53,17 @@ class PixelTilePatchCommand:
         layer = document.get_layer(self.layer_id)
         if layer is None:
             return
-        for patch in self.patches:
-            x1, y1, x2, y2 = patch.rect
-            layer.pixels[y1:y2, x1:x2] = patch.after if use_after else patch.before
-        layer.touch_pixels()
+        if self.precision_patches and layer.working_pixels is not None:
+            working = layer.working_rgba()
+            for patch in self.precision_patches:
+                x1, y1, x2, y2 = patch.rect
+                working[y1:y2, x1:x2] = patch.after if use_after else patch.before
+            layer.set_working_rgba(working, layer.working_depth, layer.working_model)
+        else:
+            for patch in self.patches:
+                x1, y1, x2, y2 = patch.rect
+                layer.pixels[y1:y2, x1:x2] = patch.after if use_after else patch.before
+            layer.touch_pixels()
         document.dirty = True
 
     def undo(self, document: Document) -> None:

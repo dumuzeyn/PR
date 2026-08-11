@@ -97,6 +97,9 @@ class MenusToolsMixin:
         image.add_cascade(label="Управление цветом", menu=color_menu)
         color_menu.add_command(label="Назначить ICC-профиль", command=self.assign_icc_profile)
         color_menu.add_command(label="Преобразовать в ICC-профиль", command=self.convert_icc_profile)
+        color_menu.add_separator()
+        color_menu.add_command(label="Цветопроба и подготовка к печати", command=self.color_proof_workspace)
+        color_menu.add_command(label="Включить / выключить цветопробу", command=self.toggle_soft_proof)
         model_menu = tk.Menu(color_menu, tearoff=False)
         color_menu.add_cascade(label="Цветовая модель", menu=model_menu)
         for model in COLOR_MODELS:

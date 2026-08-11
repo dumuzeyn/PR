@@ -11,6 +11,9 @@ from ..text_ops import *
 from ..shape_ops import *
 from ..content_ops import *
 from ..adjustment_ops import *
+from ..precision_pipeline import composite_precision
+
+import tifffile
 
 
 class ProjectIoDocumentMixin:
@@ -70,6 +73,7 @@ class ProjectIoDocumentMixin:
                         "transform_mask_source": f"transform_masks/{i:04d}.png" if layer.transform_mask_source is not None else None,
                         "working_pixels": f"working/{i:04d}.npy" if layer.working_pixels is not None else None,
                         "working_model": layer.working_model,
+                        "working_depth": layer.working_depth,
                         "pixels": layer_path,
                     }
                 )
@@ -151,6 +155,7 @@ class ProjectIoDocumentMixin:
                         transform_mask_source=None if not raw.get("transform_mask_source") else pil_to_rgba_array(Image.open(io.BytesIO(zf.read(raw["transform_mask_source"]))))[:, :, 0],
                         working_pixels=None if not raw.get("working_pixels") else np.load(io.BytesIO(zf.read(raw["working_pixels"])), allow_pickle=False),
                         working_model=raw.get("working_model", "RGBA"),
+                        working_depth=int(raw.get("working_depth", manifest.get("bit_depth", 8))),
                         id=raw.get("id", uuid.uuid4().hex),
                     )
                 )
@@ -165,39 +170,64 @@ class ProjectIoDocumentMixin:
 
     def composite(self, checker: bool = False) -> np.ndarray:
         with profiler.measure("render.composite.reference"):
+            if self.bit_depth != 8 or any(layer.working_pixels is not None for layer in self.layers):
+                return display_rgba(self.composite_precision(checker))
             out = checker_background(self.width, self.height).copy() if checker else blank_rgba(self.width, self.height, (0, 0, 0, 0))
             previous_alpha: np.ndarray | None = None
             for layer in self.layers:
-                if layer.visible:
-                    if layer.kind == "adjustment" and layer.adjustment is not None:
-                        clipping_mask = previous_alpha if layer.clipping and previous_alpha is not None else None
-                        apply_adjustment_layer(out, layer, clipping_mask)
-                    else:
-                        layer_pixels = render_layer_pixels(layer)
-                        alpha_mask = effective_layer_mask(layer) if layer.mask_enabled else None
-                        if layer.clipping and previous_alpha is not None:
-                            clipping_mask = document_alpha_to_layer_mask(previous_alpha, layer)
-                            alpha_mask = clipping_mask if alpha_mask is None else np.minimum(alpha_mask, clipping_mask)
-                        for pixels, x, y, opacity, blend_mode in render_layer_effects(layer, layer_pixels):
-                            alpha_blend_inplace(out, pixels, x, y, opacity, None, 1.0, blend_mode)
-                        alpha_blend_inplace(out, layer_pixels, layer.x, layer.y, layer.opacity, alpha_mask, layer.mask_density, layer.blend_mode)
-                        previous_alpha = layer_alpha_canvas(self, layer, layer_pixels)
+                if not layer.visible:
+                    continue
+                if layer.kind == "adjustment" and layer.adjustment is not None:
+                    clipping_mask = previous_alpha if layer.clipping and previous_alpha is not None else None
+                    apply_adjustment_layer(out, layer, clipping_mask)
+                    continue
+                layer_pixels = render_layer_pixels(layer)
+                alpha_mask = effective_layer_mask(layer) if layer.mask_enabled else None
+                if layer.clipping and previous_alpha is not None:
+                    clipping_mask = document_alpha_to_layer_mask(previous_alpha, layer)
+                    alpha_mask = clipping_mask if alpha_mask is None else np.minimum(alpha_mask, clipping_mask)
+                for pixels, x, y, opacity, blend_mode in render_layer_effects(layer, layer_pixels):
+                    alpha_blend_inplace(out, pixels, x, y, opacity, None, 1.0, blend_mode)
+                alpha_blend_inplace(out, layer_pixels, layer.x, layer.y, layer.opacity, alpha_mask, layer.mask_density, layer.blend_mode)
+                previous_alpha = layer_alpha_canvas(self, layer, layer_pixels)
             return out
 
+    def composite_precision(self, checker: bool = False) -> np.ndarray:
+        return composite_precision(self, checker)
+
     def export_flat(self, path: str | Path, quality: int = 95) -> None:
-        composite = self.composite(checker=False)
+        precise = self.composite_precision(checker=False)
+        composite = display_rgba(precise)
         img = rgba_array_to_pil(composite)
         suffix = Path(path).suffix.lower()
         if suffix in [".jpg", ".jpeg"]:
             img.convert("RGB").save(path, quality=max(1, min(100, int(quality))), subsampling=0)
         elif suffix == ".webp":
             img.save(path, quality=max(1, min(100, int(quality))))
-        elif suffix in {".tif", ".tiff"} and self.bit_depth == 16:
-            bgra = cv2.cvtColor(composite.astype(np.uint16) * 257, cv2.COLOR_RGBA2BGRA)
+        elif suffix in {".tif", ".tiff"} and self.bit_depth in {16, 32}:
+            pixels = quantize_rgba(precise, self.bit_depth)
+            settings = color_settings(self.metadata)
+            encoded = settings.get("icc_base64")
+            icc = base64.b64decode(encoded) if encoded else None
+            tifffile.imwrite(
+                path,
+                pixels,
+                photometric="rgb",
+                extrasamples=["unassalpha"],
+                resolution=(float(self.dpi), float(self.dpi)),
+                resolutionunit="INCH",
+                iccprofile=icc,
+                metadata=None,
+            )
+        elif suffix == ".png" and self.bit_depth == 16:
+            bgra = cv2.cvtColor(quantize_rgba(precise, 16), cv2.COLOR_RGBA2BGRA)
             if not cv2.imwrite(str(path), bgra):
-                raise OSError(f"Could not write TIFF: {path}")
+                raise OSError(f"Could not write PNG: {path}")
         else:
-            img.save(path)
+            settings = color_settings(self.metadata)
+            encoded = settings.get("icc_base64")
+            save_options = {"icc_profile": base64.b64decode(encoded)} if encoded else {}
+            img.save(path, **save_options)
         self.dirty = False
 
     def set_bit_depth(self, bit_depth: int) -> None:
@@ -205,11 +235,8 @@ class ProjectIoDocumentMixin:
         if bit_depth not in BIT_DEPTHS:
             raise ValueError("Bit depth must be 8, 16 or 32")
         for layer in self.layers:
-            if layer.working_model == "RGBA":
-                source = layer.working_pixels if layer.working_pixels is not None else layer.pixels
-                layer.working_pixels = None if bit_depth == 8 else quantize_rgba(source, bit_depth)
-                layer.pixels = display_rgba(source)
-            layer.pixels_revision += 1
+            if layer.kind != "adjustment" and layer.pixels.size:
+                layer.set_working_rgba(layer.working_rgba(), bit_depth, layer.working_model)
         self.bit_depth = bit_depth
         self.metadata["bit_depth"] = bit_depth
         self.dirty = True
@@ -220,15 +247,7 @@ class ProjectIoDocumentMixin:
         for layer in self.layers:
             if layer.kind == "adjustment" or layer.pixels.size == 0:
                 continue
-            if color_model == "Lab":
-                layer.working_pixels = rgb_to_lab(layer.pixels)
-            elif color_model == "CMYK":
-                alpha = layer.pixels[:, :, 3].astype(np.float32) / 255.0
-                layer.working_pixels = np.dstack((rgb_to_cmyk(layer.pixels), alpha))
-            else:
-                layer.working_pixels = None if self.bit_depth == 8 else quantize_rgba(layer.pixels, self.bit_depth)
-            layer.working_model = color_model
-            layer.pixels_revision += 1
+            layer.set_working_rgba(layer.working_rgba(), self.bit_depth, color_model)
         self.color_model = color_model
         self.metadata["color_model"] = color_model
         self.dirty = True
@@ -250,7 +269,13 @@ class ProjectIoDocumentMixin:
         for layer in self.layers:
             if layer.kind == "adjustment" or layer.pixels.size == 0:
                 continue
-            layer.pixels = convert_icc(layer.pixels, source, destination)
-            layer.touch_pixels()
+            converted = convert_icc(
+                layer.working_rgba(),
+                source,
+                destination,
+                settings.get("rendering_intent", "perceptual"),
+                bool(settings.get("black_point_compensation", True)),
+            )
+            layer.set_working_rgba(converted, self.bit_depth, layer.working_model)
         self.assign_color_profile(destination)
         self.dirty = True

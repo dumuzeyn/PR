@@ -17,7 +17,8 @@ class RenderingViewMixin:
         if self._composite_dirty or self._composite_cache is None:
             self._composite_cache = self.render_engine.render(self.doc, checker=True)
             self._composite_dirty = False
-        display = self._channel_display(self._composite_cache)
+        display = self.apply_soft_proof_display(self._composite_cache)
+        display = self._channel_display(display)
         display = self._mask_preview_display(display)
         scale = self.zoom.get()
         pad_x = max(40, self.canvas.winfo_width() // 2)
@@ -29,6 +30,8 @@ class RenderingViewMixin:
             self.doc.height,
             self.view_channel.get(),
             self.mask_preview.get(),
+            color_settings(self.doc.metadata).get("soft_proof_enabled", False),
+            color_settings(self.doc.metadata).get("proof_profile_name", ""),
             self.doc.layer.id if self.doc.layers else None,
         )
         full_view = self._canvas_view_signature != view_signature or not self._canvas_tile_ids

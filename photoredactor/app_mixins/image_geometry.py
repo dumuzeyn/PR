@@ -144,18 +144,21 @@ class ImageGeometryMixin:
                     transform["angle"] = float(transform.get("angle", 0.0)) + angle
                     layer.smart_data = {**layer.smart_data, "transform": transform}
                 if angle == 90:
-                    layer.pixels = cv2.rotate(layer.pixels, cv2.ROTATE_90_CLOCKWISE)
+                    pixels = layer.working_rgba() if layer.working_pixels is not None else layer.pixels
+                    layer.replace_pixels(cv2.rotate(pixels, cv2.ROTATE_90_CLOCKWISE))
                     if layer.mask is not None:
                         layer.mask = cv2.rotate(layer.mask, cv2.ROTATE_90_CLOCKWISE)
                     layer.x = old_h - (ly + lh)
                     layer.y = lx
                 elif angle == 180:
-                    layer.pixels = cv2.rotate(layer.pixels, cv2.ROTATE_180)
+                    pixels = layer.working_rgba() if layer.working_pixels is not None else layer.pixels
+                    layer.replace_pixels(cv2.rotate(pixels, cv2.ROTATE_180))
                     if layer.mask is not None:
                         layer.mask = cv2.rotate(layer.mask, cv2.ROTATE_180)
                     layer.x = old_w - (lx + lw)
                     layer.y = old_h - (ly + lh)
-                layer.touch_pixels()
+                if angle not in {90, 180}:
+                    layer.touch_pixels()
             if self.doc.selection_mask is not None:
                 if angle == 90:
                     self.doc.selection_mask = cv2.rotate(self.doc.selection_mask, cv2.ROTATE_90_CLOCKWISE)
@@ -177,7 +180,8 @@ class ImageGeometryMixin:
         def edit():
             code = 1 if horizontal else 0
             for layer in self.doc.layers:
-                layer.pixels = cv2.flip(layer.pixels, code)
+                pixels = layer.working_rgba() if layer.working_pixels is not None else layer.pixels
+                layer.replace_pixels(cv2.flip(pixels, code))
                 if layer.kind in {"linked", "embedded"} and layer.smart_data is not None:
                     transform = dict(layer.smart_data.get("transform") or {})
                     key = "flip_horizontal" if horizontal else "flip_vertical"
@@ -189,7 +193,6 @@ class ImageGeometryMixin:
                     layer.x = self.doc.width - (layer.x + layer.pixels.shape[1])
                 else:
                     layer.y = self.doc.height - (layer.y + layer.pixels.shape[0])
-                layer.touch_pixels()
             if self.doc.selection_mask is not None:
                 self.doc.selection_mask = cv2.flip(self.doc.selection_mask, code)
             for name, mask in list(self.doc.saved_selections.items()):
@@ -208,24 +211,42 @@ class ImageGeometryMixin:
         generation = self._edit_generation
         pixels_revision = layer.pixels_revision
         before = layer.pixels.copy()
+        before_working = layer.working_rgba().copy() if layer.working_pixels is not None else None
         selection_mask = self.doc.layer_selection_mask(layer)
         rect = (0, 0, before.shape[1], before.shape[0])
 
         def worker():
-            after = fn(before.copy())
+            source = before.copy() if before_working is None else before_working.copy()
+            after = fn(source)
             if selection_mask is not None:
                 alpha = (selection_mask.astype(np.float32) / 255.0)[:, :, None]
-                after = (after.astype(np.float32) * alpha + before.astype(np.float32) * (1.0 - alpha)).astype(np.uint8)
+                if before_working is None:
+                    after = (after.astype(np.float32) * alpha + before.astype(np.float32) * (1.0 - alpha)).astype(np.uint8)
+                else:
+                    after = normalize_rgba(after) * alpha + before_working * (1.0 - alpha)
             return after
 
         def done(after):
             target = self.doc.get_layer(layer_id)
             if target is None:
                 return
-            target.pixels = after
-            target.touch_pixels()
+            if before_working is None:
+                target.pixels = display_rgba(after)
+                target.touch_pixels()
+                after_working = None
+            else:
+                after_working = normalize_rgba(after)
+                target.set_working_rgba(after_working, self.doc.bit_depth, target.working_model)
             self.doc.dirty = True
-            self.push_command(PixelPatchCommand(label, layer_id, rect, before, after.copy()))
+            self.push_command(PixelPatchCommand(
+                label,
+                layer_id,
+                rect,
+                before,
+                target.pixels.copy(),
+                before_working,
+                None if before_working is None else after_working.copy(),
+            ))
             self.invalidate_pixels()
             self.refresh()
 

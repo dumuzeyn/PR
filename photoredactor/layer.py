@@ -32,6 +32,7 @@ class Layer:
     transform_mask_source: np.ndarray | None = field(default=None, repr=False, compare=False)
     working_pixels: np.ndarray | None = field(default=None, repr=False, compare=False)
     working_model: str = "RGBA"
+    working_depth: int = 8
     id: str = field(default_factory=lambda: uuid.uuid4().hex)
     pixels_revision: int = field(default=0, repr=False, compare=False)
     mask_revision: int = field(default=0, repr=False, compare=False)
@@ -39,15 +40,47 @@ class Layer:
     def touch_pixels(self) -> None:
         self.pixels_revision += 1
         if self.working_pixels is not None:
-            if self.working_model == "Lab":
-                self.working_pixels = rgb_to_lab(self.pixels)
-            elif self.working_model == "CMYK":
-                alpha = self.pixels[:, :, 3].astype(np.float32) / 255.0
-                self.working_pixels = np.dstack((rgb_to_cmyk(self.pixels), alpha))
-            elif self.working_pixels.dtype == np.uint16:
-                self.working_pixels = self.pixels.astype(np.uint16) * 257
-            elif self.working_pixels.dtype == np.float32:
-                self.working_pixels = self.pixels.astype(np.float32) / 255.0
+            precise = working_to_rgba(self.working_pixels, self.working_model)
+            previous_display = display_rgba(precise)
+            if previous_display.shape != self.pixels.shape:
+                self.working_pixels = rgba_to_working(self.pixels, self.working_model, self.working_depth)
+                return
+            changed = np.any(previous_display != self.pixels, axis=2)
+            if np.any(changed):
+                edited = normalize_rgba(self.pixels)
+                precise[changed] = edited[changed]
+                self.working_pixels = rgba_to_working(precise, self.working_model, self.working_depth)
+
+    def working_rgba(self) -> np.ndarray:
+        source = self.pixels if self.working_pixels is None else working_to_rgba(self.working_pixels, self.working_model)
+        return normalize_rgba(source)
+
+    def set_working_rgba(self, pixels: np.ndarray, bit_depth: int | None = None, color_model: str | None = None) -> None:
+        if bit_depth is not None:
+            self.working_depth = int(bit_depth)
+        if color_model is not None:
+            self.working_model = str(color_model)
+        normalized = normalize_rgba(pixels)
+        self.working_pixels = None if self.working_depth == 8 and self.working_model == "RGBA" else rgba_to_working(
+            normalized,
+            self.working_model,
+            self.working_depth,
+        )
+        self.pixels = display_rgba(normalized)
+        self.pixels_revision += 1
+
+    def replace_pixels(self, pixels: np.ndarray) -> None:
+        """Replace a raster result without collapsing an existing high-precision layer."""
+        if self.working_pixels is None:
+            self.pixels = display_rgba(pixels)
+            self.pixels_revision += 1
+            return
+        self.set_working_rgba(pixels, self.working_depth, self.working_model)
+
+    def sync_display_from_working(self) -> None:
+        if self.working_pixels is not None:
+            self.pixels = display_rgba(working_to_rgba(self.working_pixels, self.working_model))
+        self.pixels_revision += 1
 
     def touch_mask(self) -> None:
         self.mask_revision += 1
@@ -81,6 +114,7 @@ class Layer:
             transform_mask_source=None if self.transform_mask_source is None else self.transform_mask_source.copy(),
             working_pixels=None if self.working_pixels is None else self.working_pixels.copy(),
             working_model=self.working_model,
+            working_depth=self.working_depth,
         )
 
 __all__ = [name for name in globals() if not name.startswith("__")]

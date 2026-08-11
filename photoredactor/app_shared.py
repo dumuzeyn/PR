@@ -115,7 +115,8 @@ from .history import (
 )
 from .rendering import RenderEngine
 from .automation import ActionRecorder, ActionRunner
-from .color_management import COLOR_MODELS, BIT_DEPTHS, color_settings
+from .color_management import COLOR_MODELS, BIT_DEPTHS, color_settings, display_rgba, profile_details, soft_proof_rgba, gamut_warning_mask
+from .print_pipeline import document_source_profile, proof_document, print_preflight, export_cmyk_tiff
 from .plugins import PluginRegistry
 from .ui.tool_options import ToolOptionsPanel
 from .ui.tool_palette import ToolPalette, ToolPaletteDialog, normalize_tool_order, normalize_visible_tools

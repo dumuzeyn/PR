@@ -76,6 +76,13 @@ class PaintingMixin:
             if layer is not None:
                 target = layer.mask if self._stroke_kind == "mask" else layer.pixels
                 patches: list[TilePatch] = []
+                precision_before: list[tuple[tuple[int, int, int, int], np.ndarray]] = []
+                if self._stroke_kind == "pixels" and layer.working_pixels is not None:
+                    original_working = layer.working_rgba()
+                    precision_before = [
+                        (rect, original_working[rect[1]:rect[3], rect[0]:rect[2]].copy())
+                        for rect, _before in self._stroke_tiles.values()
+                    ]
                 if target is not None:
                     for rect, before in self._stroke_tiles.values():
                         x1, y1, x2, y2 = rect
@@ -85,7 +92,15 @@ class PaintingMixin:
                 if self._stroke_kind == "mask" and layer.mask is not None:
                     self.push_command(MaskTilePatchCommand(label, self._stroke_layer_id, patches))
                 elif self._stroke_kind == "pixels":
-                    self.push_command(PixelTilePatchCommand(label, self._stroke_layer_id, patches))
+                    layer.touch_pixels()
+                    precision_patches = None
+                    if precision_before:
+                        edited_working = layer.working_rgba()
+                        precision_patches = [
+                            TilePatch(rect, before, edited_working[rect[1]:rect[3], rect[0]:rect[2]].copy())
+                            for rect, before in precision_before
+                        ]
+                    self.push_command(PixelTilePatchCommand(label, self._stroke_layer_id, patches, precision_patches))
         self._stroke_layer_id = None
         self._stroke_kind = "pixels"
         self._stroke_rect = None

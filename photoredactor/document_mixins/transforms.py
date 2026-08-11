@@ -11,6 +11,7 @@ from ..text_ops import *
 from ..shape_ops import *
 from ..content_ops import *
 from ..adjustment_ops import *
+from ..precision_pipeline import alpha_blend_precision
 
 
 class TransformsDocumentMixin:
@@ -63,26 +64,28 @@ class TransformsDocumentMixin:
             return
         target_w = max(1, int(width or layer.pixels.shape[1]))
         target_h = max(1, int(height or layer.pixels.shape[0]))
+        pixels = layer.working_rgba() if layer.working_pixels is not None else layer.pixels
         if (target_w, target_h) != (layer.pixels.shape[1], layer.pixels.shape[0]):
-            layer.pixels = cv2.resize(layer.pixels, (target_w, target_h), interpolation=cv2.INTER_CUBIC)
+            pixels = cv2.resize(pixels, (target_w, target_h), interpolation=cv2.INTER_CUBIC)
             if layer.mask is not None:
                 layer.mask = cv2.resize(layer.mask, (target_w, target_h), interpolation=cv2.INTER_NEAREST)
         if flip_horizontal:
-            layer.pixels = cv2.flip(layer.pixels, 1)
+            pixels = cv2.flip(pixels, 1)
             if layer.mask is not None:
                 layer.mask = cv2.flip(layer.mask, 1)
         if flip_vertical:
-            layer.pixels = cv2.flip(layer.pixels, 0)
+            pixels = cv2.flip(pixels, 0)
             if layer.mask is not None:
                 layer.mask = cv2.flip(layer.mask, 0)
         if abs(float(angle)) > 0.001:
-            center_x = layer.x + layer.pixels.shape[1] / 2.0
-            center_y = layer.y + layer.pixels.shape[0] / 2.0
-            layer.pixels = rotate_bound(layer.pixels, float(angle), cv2.INTER_CUBIC)
+            center_x = layer.x + pixels.shape[1] / 2.0
+            center_y = layer.y + pixels.shape[0] / 2.0
+            pixels = rotate_bound(pixels, float(angle), cv2.INTER_CUBIC)
             if layer.mask is not None:
                 layer.mask = rotate_bound(layer.mask, float(angle), cv2.INTER_LINEAR)
-            layer.x = round(center_x - layer.pixels.shape[1] / 2.0)
-            layer.y = round(center_y - layer.pixels.shape[0] / 2.0)
+            layer.x = round(center_x - pixels.shape[1] / 2.0)
+            layer.y = round(center_y - pixels.shape[0] / 2.0)
+        layer.replace_pixels(pixels)
         self.dirty = True
 
     def transform_selected_pixels(
@@ -103,13 +106,19 @@ class TransformsDocumentMixin:
             return False
         ys, xs = np.where(selection > 0)
         lx1, ly1, lx2, ly2 = int(xs.min()), int(ys.min()), int(xs.max() + 1), int(ys.max() + 1)
-        patch = layer.pixels[ly1:ly2, lx1:lx2].copy()
+        precise = layer.working_pixels is not None
+        source = layer.working_rgba() if precise else layer.pixels.copy()
+        patch = source[ly1:ly2, lx1:lx2].copy()
         patch_mask = selection[ly1:ly2, lx1:lx2].astype(np.float32) / 255.0
-        patch[:, :, 3] = np.clip(patch[:, :, 3].astype(np.float32) * patch_mask, 0, 255).astype(np.uint8)
-
-        original_region = layer.pixels[ly1:ly2, lx1:lx2]
         keep_alpha = 1.0 - patch_mask
-        original_region[:, :, 3] = np.clip(original_region[:, :, 3].astype(np.float32) * keep_alpha, 0, 255).astype(np.uint8)
+        if precise:
+            patch[:, :, 3] *= patch_mask
+            source[ly1:ly2, lx1:lx2, 3] *= keep_alpha
+        else:
+            patch[:, :, 3] = np.clip(patch[:, :, 3].astype(np.float32) * patch_mask, 0, 255).astype(np.uint8)
+            source[ly1:ly2, lx1:lx2, 3] = np.clip(
+                source[ly1:ly2, lx1:lx2, 3].astype(np.float32) * keep_alpha, 0, 255
+            ).astype(np.uint8)
 
         dest_x = int(x if x is not None else layer.x + lx1)
         dest_y = int(y if y is not None else layer.y + ly1)
@@ -129,14 +138,21 @@ class TransformsDocumentMixin:
             dest_y = round(center_y - patch.shape[0] / 2.0)
 
         old_x, old_y = layer.x, layer.y
-        old_h, old_w = layer.pixels.shape[:2]
+        old_h, old_w = source.shape[:2]
         new_x = min(old_x, dest_x)
         new_y = min(old_y, dest_y)
         new_right = max(old_x + old_w, dest_x + patch.shape[1])
         new_bottom = max(old_y + old_h, dest_y + patch.shape[0])
-        new_pixels = blank_rgba(new_right - new_x, new_bottom - new_y, (0, 0, 0, 0))
-        new_pixels[old_y - new_y : old_y - new_y + old_h, old_x - new_x : old_x - new_x + old_w] = layer.pixels
-        alpha_blend_inplace(new_pixels, patch, dest_x - new_x, dest_y - new_y, 1.0)
+        new_pixels = (
+            np.zeros((new_bottom - new_y, new_right - new_x, 4), dtype=np.float32)
+            if precise
+            else blank_rgba(new_right - new_x, new_bottom - new_y, (0, 0, 0, 0))
+        )
+        new_pixels[old_y - new_y : old_y - new_y + old_h, old_x - new_x : old_x - new_x + old_w] = source
+        if precise:
+            alpha_blend_precision(new_pixels, patch, dest_x - new_x, dest_y - new_y, 1.0)
+        else:
+            alpha_blend_inplace(new_pixels, patch, dest_x - new_x, dest_y - new_y, 1.0)
 
         if layer.mask is not None:
             new_mask = np.zeros(new_pixels.shape[:2], dtype=np.uint8)
@@ -147,7 +163,7 @@ class TransformsDocumentMixin:
         transformed_alpha = np.where(patch[:, :, 3] > 0, 255, 0).astype(np.uint8)
         paste_mask(new_selection, transformed_alpha, dest_x, dest_y)
         self.selection_mask = new_selection if np.any(new_selection) else None
-        layer.pixels = new_pixels
+        layer.replace_pixels(new_pixels)
         layer.x = new_x
         layer.y = new_y
         self.dirty = True
@@ -168,35 +184,48 @@ class TransformsDocumentMixin:
             return False
         ys, xs = np.where(selection > 0)
         x1, y1, x2, y2 = int(xs.min()), int(ys.min()), int(xs.max() + 1), int(ys.max() + 1)
-        patch = layer.pixels[y1:y2, x1:x2].copy()
+        precise = layer.working_pixels is not None
+        source = layer.working_rgba() if precise else layer.pixels.copy()
+        patch = source[y1:y2, x1:x2].copy()
         patch_mask = selection[y1:y2, x1:x2].astype(np.float32) / 255.0
-        patch[:, :, 3] = np.clip(patch[:, :, 3].astype(np.float32) * patch_mask, 0, 255).astype(np.uint8)
-        original_region = layer.pixels[y1:y2, x1:x2]
-        original_region[:, :, 3] = np.clip(original_region[:, :, 3].astype(np.float32) * (1.0 - patch_mask), 0, 255).astype(np.uint8)
+        if precise:
+            patch[:, :, 3] *= patch_mask
+            source[y1:y2, x1:x2, 3] *= 1.0 - patch_mask
+        else:
+            patch[:, :, 3] = np.clip(patch[:, :, 3].astype(np.float32) * patch_mask, 0, 255).astype(np.uint8)
+            source[y1:y2, x1:x2, 3] = np.clip(
+                source[y1:y2, x1:x2, 3].astype(np.float32) * (1.0 - patch_mask), 0, 255
+            ).astype(np.uint8)
         if str(mode).lower() == "mesh":
             transformed, offset = mesh_warp_pixels(patch, points, rows, columns, cv2.INTER_CUBIC)
         else:
             transformed, offset = perspective_warp_pixels(patch, points, cv2.INTER_CUBIC)
         destination_x, destination_y = offset
         old_x, old_y = layer.x, layer.y
-        old_height, old_width = layer.pixels.shape[:2]
+        old_height, old_width = source.shape[:2]
         new_x = min(old_x, destination_x)
         new_y = min(old_y, destination_y)
         new_right = max(old_x + old_width, destination_x + transformed.shape[1])
         new_bottom = max(old_y + old_height, destination_y + transformed.shape[0])
-        new_pixels = blank_rgba(new_right - new_x, new_bottom - new_y, (0, 0, 0, 0))
-        new_pixels[old_y - new_y:old_y - new_y + old_height, old_x - new_x:old_x - new_x + old_width] = layer.pixels
-        alpha_blend_inplace(new_pixels, transformed, destination_x - new_x, destination_y - new_y, 1.0)
+        new_pixels = (
+            np.zeros((new_bottom - new_y, new_right - new_x, 4), dtype=np.float32)
+            if precise
+            else blank_rgba(new_right - new_x, new_bottom - new_y, (0, 0, 0, 0))
+        )
+        new_pixels[old_y - new_y:old_y - new_y + old_height, old_x - new_x:old_x - new_x + old_width] = source
+        if precise:
+            alpha_blend_precision(new_pixels, transformed, destination_x - new_x, destination_y - new_y, 1.0)
+        else:
+            alpha_blend_inplace(new_pixels, transformed, destination_x - new_x, destination_y - new_y, 1.0)
         if layer.mask is not None:
             new_mask = np.zeros(new_pixels.shape[:2], dtype=np.uint8)
             paste_mask(new_mask, layer.mask, old_x - new_x, old_y - new_y)
             layer.mask = new_mask
-        layer.pixels = new_pixels
+        layer.replace_pixels(new_pixels)
         layer.x, layer.y = new_x, new_y
         new_selection = np.zeros((self.height, self.width), dtype=np.uint8)
         paste_mask(new_selection, transformed[:, :, 3], destination_x, destination_y)
         self.selection_mask = new_selection if np.any(new_selection) else None
-        layer.touch_pixels()
         self.dirty = True
         return True
 
@@ -217,8 +246,9 @@ class TransformsDocumentMixin:
         src = np.array([[0, 0], [w, 0], [w, h], [0, h]], dtype=np.float32)
         dst = dst_doc - np.array([min_x, min_y], dtype=np.float32)
         matrix = cv2.getPerspectiveTransform(src, dst)
-        layer.pixels = cv2.warpPerspective(
-            layer.pixels,
+        pixels = layer.working_rgba() if layer.working_pixels is not None else layer.pixels
+        pixels = cv2.warpPerspective(
+            pixels,
             matrix,
             (out_w, out_h),
             flags=cv2.INTER_CUBIC,
@@ -236,13 +266,15 @@ class TransformsDocumentMixin:
             )
         layer.x = min_x
         layer.y = min_y
+        layer.replace_pixels(pixels)
         self.dirty = True
 
     def warp_active_layer(self, mode: str, amount: float = 0.35, wavelength: float = 96.0) -> None:
         layer = self.layer
         if layer.locked:
             return
-        layer.pixels = warp_pixels(layer.pixels, mode, amount, wavelength, cv2.INTER_CUBIC)
+        pixels = layer.working_rgba() if layer.working_pixels is not None else layer.pixels
+        layer.replace_pixels(warp_pixels(pixels, mode, amount, wavelength, cv2.INTER_CUBIC))
         if layer.mask is not None:
             layer.mask = warp_pixels(layer.mask, mode, amount, wavelength, cv2.INTER_LINEAR)
         self.dirty = True

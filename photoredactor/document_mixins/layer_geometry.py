@@ -11,6 +11,7 @@ from ..text_ops import *
 from ..shape_ops import *
 from ..content_ops import *
 from ..adjustment_ops import *
+from ..precision_pipeline import alpha_blend_precision
 
 
 class LayerGeometryDocumentMixin:
@@ -42,10 +43,17 @@ class LayerGeometryDocumentMixin:
         min_y = min(lower.y, upper.y)
         max_x = max(lower.x + lower.pixels.shape[1], upper.x + upper.pixels.shape[1])
         max_y = max(lower.y + lower.pixels.shape[0], upper.y + upper.pixels.shape[0])
-        merged = blank_rgba(max_x - min_x, max_y - min_y, (0, 0, 0, 0))
-        alpha_blend_inplace(merged, lower.pixels, lower.x - min_x, lower.y - min_y, lower.opacity, lower.mask if lower.mask_enabled else None, lower.mask_density, lower.blend_mode)
-        alpha_blend_inplace(merged, upper.pixels, upper.x - min_x, upper.y - min_y, upper.opacity, upper.mask if upper.mask_enabled else None, upper.mask_density, upper.blend_mode)
-        lower.pixels = merged
+        precise = self.bit_depth > 8 or lower.working_pixels is not None or upper.working_pixels is not None
+        if precise:
+            merged = np.zeros((max_y - min_y, max_x - min_x, 4), dtype=np.float32)
+            alpha_blend_precision(merged, lower.working_rgba(), lower.x - min_x, lower.y - min_y, lower.opacity, lower.mask if lower.mask_enabled else None, lower.mask_density, lower.blend_mode)
+            alpha_blend_precision(merged, upper.working_rgba(), upper.x - min_x, upper.y - min_y, upper.opacity, upper.mask if upper.mask_enabled else None, upper.mask_density, upper.blend_mode)
+            lower.set_working_rgba(merged, self.bit_depth, self.color_model)
+        else:
+            merged = blank_rgba(max_x - min_x, max_y - min_y, (0, 0, 0, 0))
+            alpha_blend_inplace(merged, lower.pixels, lower.x - min_x, lower.y - min_y, lower.opacity, lower.mask if lower.mask_enabled else None, lower.mask_density, lower.blend_mode)
+            alpha_blend_inplace(merged, upper.pixels, upper.x - min_x, upper.y - min_y, upper.opacity, upper.mask if upper.mask_enabled else None, upper.mask_density, upper.blend_mode)
+            lower.replace_pixels(merged)
         lower.x = min_x
         lower.y = min_y
         lower.opacity = 1.0
@@ -55,7 +63,11 @@ class LayerGeometryDocumentMixin:
         self.dirty = True
 
     def flatten(self) -> None:
-        self.layers = [Layer("Flattened", self.composite(False))]
+        pixels = self.composite_precision(False) if self.bit_depth > 8 else self.composite(False)
+        flattened = Layer("Flattened", display_rgba(pixels))
+        if self.bit_depth > 8:
+            flattened.set_working_rgba(pixels, self.bit_depth, self.color_model)
+        self.layers = [flattened]
         self.active_layer = 0
         self.dirty = True
 
@@ -72,12 +84,14 @@ class LayerGeometryDocumentMixin:
                 layer.smart_data = data
                 render_smart_object(layer)
             else:
-                layer.pixels = cv2.resize(layer.pixels, (new_w, new_h), interpolation=interpolation)
+                source = layer.working_rgba() if layer.working_pixels is not None else layer.pixels
+                layer.replace_pixels(cv2.resize(source, (new_w, new_h), interpolation=interpolation))
             if layer.mask is not None:
                 layer.mask = cv2.resize(layer.mask, (layer.pixels.shape[1], layer.pixels.shape[0]), interpolation=cv2.INTER_NEAREST)
             layer.x = round(layer.x * width / self.width)
             layer.y = round(layer.y * height / self.height)
-            layer.touch_pixels()
+            if layer.kind in {"linked", "embedded"}:
+                layer.touch_pixels()
         self.width, self.height = width, height
         if self.selection_mask is not None:
             self.selection_mask = cv2.resize(self.selection_mask, (width, height), interpolation=cv2.INTER_NEAREST)
@@ -151,13 +165,17 @@ class LayerGeometryDocumentMixin:
             return
         new_w, new_h = max(1, x2 - x1), max(1, y2 - y1)
         for layer in self.layers:
-            canvas = blank_rgba(self.width, self.height, (0, 0, 0, 0))
-            alpha_blend_inplace(canvas, layer.pixels, layer.x, layer.y, 1.0)
+            if layer.working_pixels is not None:
+                canvas = np.zeros((self.height, self.width, 4), dtype=np.float32)
+                alpha_blend_precision(canvas, layer.working_rgba(), layer.x, layer.y, 1.0)
+            else:
+                canvas = blank_rgba(self.width, self.height, (0, 0, 0, 0))
+                alpha_blend_inplace(canvas, layer.pixels, layer.x, layer.y, 1.0)
             if layer.mask is not None:
                 mask_canvas = np.zeros((self.height, self.width), dtype=np.uint8)
                 paste_mask(mask_canvas, layer.mask, layer.x, layer.y)
                 layer.mask = mask_canvas[y1:y2, x1:x2].copy()
-            layer.pixels = canvas[y1:y2, x1:x2].copy()
+            layer.replace_pixels(canvas[y1:y2, x1:x2].copy())
             layer.x = 0
             layer.y = 0
         self.width, self.height = new_w, new_h

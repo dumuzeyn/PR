@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+from pathlib import Path
 import tkinter as tk
 import time
 from types import SimpleNamespace
@@ -368,6 +369,29 @@ class StartupTests(unittest.TestCase):
         self.app.tool.set("move")
         self.app.filter_patch_selection()
         self.assertEqual(self.app.tool.get(), "patch")
+
+    def test_color_workspace_enables_real_icc_softproof(self) -> None:
+        profile = Path("C:/Windows/System32/spool/drivers/color/RSWOP.icm")
+        if not profile.exists():
+            self.skipTest("Windows CMYK profile is not installed")
+        self.app.doc = self.app.doc.new(120, 80, (190, 80, 35, 255))
+        self.app.doc.dpi = 300
+        self.app.invalidate_pixels()
+        settings = self.app.doc.metadata.setdefault("color_management", {})
+        settings["proof_profile_path"] = str(profile)
+        self.app.color_proof_workspace()
+        self.app.update()
+        self.assertEqual(len(self.app._color_workspace_images), 2)
+        self.assertEqual(self.app._color_workspace_preflight["profile"]["color_space"].upper(), "CMYK")
+        self.app._color_workspace_warning.set(True)
+        self.app._color_workspace_update()
+        self.app._color_workspace_enable()
+        self.assertTrue(settings["soft_proof_enabled"])
+        self.assertTrue(settings["proof_icc_base64"])
+        source = self.app.render_engine.render(self.app.doc, checker=True)
+        proofed = self.app.apply_soft_proof_display(source)
+        self.assertEqual(proofed.shape, source.shape)
+        self.assertFalse(np.array_equal(proofed[:, :, :3], source[:, :, :3]))
 
 
 if __name__ == "__main__":
