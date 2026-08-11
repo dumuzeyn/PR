@@ -355,6 +355,8 @@ class SmartFilesMixin:
     def show_cache_status(self) -> None:
         status = self.render_engine.cache_status()
         gpu = status["gpu"]
+        metrics = acceleration_metrics()
+        calibration = metrics.get("calibration", {})
         project_info = None
         if self.doc.path and self.doc.path.lower().endswith(".prdx") and Path(self.doc.path).exists():
             try:
@@ -366,8 +368,11 @@ class SmartFilesMixin:
             f"Объектов в памяти: {status['memory_items']}\n"
             f"Объектов на scratch-диске: {status['disk_items']}\n"
             f"GPU доступен: {'да' if gpu['available'] else 'нет'}\n"
-            f"GPU включен: {'да' if gpu['enabled'] else 'нет'}\n"
-            f"Устройств: {gpu['devices']}"
+            f"Backend: {gpu.get('backend', 'cpu')}\n"
+            f"Устройство: {gpu.get('device') or 'CPU'}\n"
+            f"Режим: {gpu.get('mode', 'auto')}\n"
+            f"Автовыбор GPU: {'да' if calibration.get('selected') else 'нет'}\n"
+            f"GPU-операций: {sum(value for key, value in metrics.get('counts', {}).items() if key.startswith('gpu.'))}"
         )
         if project_info is not None:
             text += (
@@ -376,3 +381,64 @@ class SmartFilesMixin:
                 f"Несжатые данные: {project_info['bytes'] / 1024 / 1024:.1f} МБ"
             )
         messagebox.showinfo("Большие документы", text)
+
+    def gpu_acceleration_dialog(self) -> None:
+        dialog = tk.Toplevel(self)
+        dialog.title("Настройка GPU")
+        dialog.transient(self)
+        dialog.grab_set()
+        current = os.environ.get("PHOTO_REDACTOR_GPU", "auto").lower()
+        mode = tk.StringVar(value=current if current in {"auto", "force", "off"} else "auto")
+        body = ttk.Frame(dialog, padding=16)
+        body.pack(fill=tk.BOTH, expand=True)
+        ttk.Label(body, text="Режим вычислений", style="PanelTitle.TLabel").pack(anchor=tk.W)
+        labels = (("Автоматически", "auto"), ("Всегда использовать GPU", "force"), ("Только CPU", "off"))
+        for label, value in labels:
+            ttk.Radiobutton(body, text=label, value=value, variable=mode).pack(anchor=tk.W, pady=2)
+        status_label = ttk.Label(body, justify=tk.LEFT, style="Secondary.TLabel")
+        status_label.pack(fill=tk.X, pady=(14, 8))
+        result_label = ttk.Label(body, justify=tk.LEFT)
+        result_label.pack(fill=tk.X, pady=8)
+
+        def refresh_status() -> None:
+            status = acceleration_status()
+            status_label.configure(
+                text=(
+                    f"Backend: {status['backend']}\n"
+                    f"Устройство: {status['device'] or 'CPU'}\n"
+                    f"OpenCL: {'доступен' if status['opencl_available'] else 'недоступен'}"
+                )
+            )
+
+        def benchmark_done(report: dict[str, object]) -> None:
+            result_label.configure(
+                text=(
+                    f"CPU: {report['cpu_blur_ms']:.2f} мс   GPU: {report['gpu_blur_ms']:.2f} мс\n"
+                    f"Ускорение: {report['blur_speedup']:.2f}x   Макс. ошибка: {report['blur_max_error']}"
+                )
+            )
+
+        def run_benchmark() -> None:
+            self.run_background("Тест GPU", benchmark_acceleration, benchmark_done)
+
+        def apply() -> None:
+            os.environ["PHOTO_REDACTOR_GPU"] = mode.get()
+            reset_acceleration_metrics()
+            if mode.get() == "auto":
+                calibrate_acceleration()
+            self.render_engine.gpu = gpu_status()
+            self.render_engine.mipmaps.gpu = dict(self.render_engine.gpu)
+            self.save_settings()
+            dialog.destroy()
+
+        footer = ttk.Frame(body)
+        footer.pack(fill=tk.X, side=tk.BOTTOM, pady=(12, 0))
+        ttk.Button(footer, text="Применить", command=apply, style="Primary.TButton").pack(side=tk.RIGHT)
+        ttk.Button(footer, text="Закрыть", command=dialog.destroy).pack(side=tk.RIGHT, padx=6)
+        ttk.Button(footer, text="Запустить тест", command=run_benchmark).pack(side=tk.LEFT)
+        refresh_status()
+        self._gpu_mode_variable = mode
+        self._gpu_benchmark_result = result_label
+        self._gpu_apply = apply
+        self._gpu_dialog = dialog
+        self.center_toplevel(dialog, 620, 390)

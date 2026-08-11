@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from .core_shared import *
 from .layer import Layer
+from .gpu_acceleration import accelerated_canny, accelerated_filter2d, accelerated_gaussian_blur, accelerated_median_blur
 
 
 def adjust_brightness_contrast(arr: np.ndarray, brightness: int, contrast: float) -> np.ndarray:
@@ -105,12 +106,12 @@ def _restore_pixel_dtype(normalized: np.ndarray, dtype: np.dtype) -> np.ndarray:
 def blur(arr: np.ndarray, radius: int) -> np.ndarray:
     k = max(1, radius * 2 + 1)
     out = normalize_rgba(arr)
-    out[:, :, :3] = cv2.GaussianBlur(out[:, :, :3], (k, k), radius)
+    out[:, :, :3] = accelerated_gaussian_blur(out[:, :, :3], (k, k), radius)
     return _restore_pixel_dtype(out, arr.dtype)
 
 def sharpen(arr: np.ndarray, amount: float) -> np.ndarray:
     out = normalize_rgba(arr)
-    blurred = cv2.GaussianBlur(out[:, :, :3], (0, 0), 1.2)
+    blurred = accelerated_gaussian_blur(out[:, :, :3], (0, 0), 1.2)
     out[:, :, :3] = np.clip(out[:, :, :3] * (1 + amount) - blurred * amount, 0, 1)
     return _restore_pixel_dtype(out, arr.dtype)
 
@@ -210,7 +211,7 @@ def median_filter(arr: np.ndarray, size: int) -> np.ndarray:
     out = normalize_rgba(arr)
     passes = max(1, int(math.ceil((k - 1) / 4.0)))
     for _ in range(passes):
-        out[:, :, :3] = cv2.medianBlur(out[:, :, :3], 3 if k == 3 else 5)
+        out[:, :, :3] = accelerated_median_blur(out[:, :, :3], 3 if k == 3 else 5)
     return _restore_pixel_dtype(out, arr.dtype)
 
 def deterministic_noise(arr: np.ndarray, amount: float, seed: int = 12345) -> np.ndarray:
@@ -223,7 +224,7 @@ def deterministic_noise(arr: np.ndarray, amount: float, seed: int = 12345) -> np
 def edge_filter(arr: np.ndarray, strength: float = 1.0) -> np.ndarray:
     out = normalize_rgba(arr)
     gray = cv2.cvtColor(out[:, :, :3], cv2.COLOR_RGB2GRAY)
-    edges = cv2.Canny(np.rint(gray * 255.0).astype(np.uint8), 80, 160).astype(np.float32) / 255.0
+    edges = accelerated_canny(np.rint(gray * 255.0).astype(np.uint8), 80, 160).astype(np.float32) / 255.0
     edge_rgb = cv2.cvtColor(edges, cv2.COLOR_GRAY2RGB)
     mix = np.clip(float(strength), 0, 1)
     out[:, :, :3] = out[:, :, :3] * (1.0 - mix) + edge_rgb * mix
@@ -232,7 +233,7 @@ def edge_filter(arr: np.ndarray, strength: float = 1.0) -> np.ndarray:
 def emboss_filter(arr: np.ndarray, strength: float = 1.0) -> np.ndarray:
     kernel = np.array([[-2, -1, 0], [-1, 1, 1], [0, 1, 2]], dtype=np.float32)
     out = normalize_rgba(arr)
-    embossed = cv2.filter2D(out[:, :, :3], -1, kernel) + 0.5
+    embossed = accelerated_filter2d(out[:, :, :3], kernel) + 0.5
     mix = np.clip(float(strength), 0, 1)
     out[:, :, :3] = np.clip(out[:, :, :3] * (1.0 - mix) + embossed * mix, 0, 1)
     return _restore_pixel_dtype(out, arr.dtype)

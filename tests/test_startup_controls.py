@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import os
 from pathlib import Path
 import tempfile
 import tkinter as tk
@@ -436,6 +437,25 @@ class StartupTests(unittest.TestCase):
         self.app.refresh_canvas()
         self.assertIsNotNone(self.app._composite_cache)
         self.assertFalse(self.app._composite_dirty)
+
+    def test_gpu_settings_dialog_exposes_backend_and_persistent_modes(self) -> None:
+        original = os.environ.get("PHOTO_REDACTOR_GPU")
+        original_save = self.app.save_settings
+        self.app.save_settings = lambda: None
+        try:
+            self.app.gpu_acceleration_dialog()
+            self.app.update()
+            self.assertIn(self.app._gpu_mode_variable.get(), {"auto", "force", "off"})
+            self.assertTrue(self.app._gpu_benchmark_result.winfo_exists())
+            self.app._gpu_mode_variable.set("off")
+            self.app._gpu_apply()
+            self.assertEqual(os.environ["PHOTO_REDACTOR_GPU"], "off")
+        finally:
+            self.app.save_settings = original_save
+            if original is None:
+                os.environ.pop("PHOTO_REDACTOR_GPU", None)
+            else:
+                os.environ["PHOTO_REDACTOR_GPU"] = original
 
 
 if __name__ == "__main__":

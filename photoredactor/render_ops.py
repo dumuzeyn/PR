@@ -5,6 +5,7 @@ from .layer import Layer
 from .geometry_ops import *
 from .selection_ops import *
 from .filter_ops import *
+from .gpu_acceleration import accelerated_alpha_blend, accelerated_gaussian_blur, accelerated_resize
 
 
 def layer_alpha_canvas(document: Document, layer: Layer, pixels: np.ndarray | None = None) -> np.ndarray:
@@ -107,7 +108,7 @@ def render_smart_object(layer: Layer) -> np.ndarray:
     target_w = max(1, int(transform.get("width", source.shape[1])))
     target_h = max(1, int(transform.get("height", source.shape[0])))
     shrinking = target_w < source.shape[1] or target_h < source.shape[0]
-    rendered = cv2.resize(source, (target_w, target_h), interpolation=cv2.INTER_AREA if shrinking else cv2.INTER_CUBIC)
+    rendered = accelerated_resize(source, (target_w, target_h), cv2.INTER_AREA if shrinking else cv2.INTER_CUBIC)
     if bool(transform.get("flip_horizontal", False)):
         rendered = cv2.flip(rendered, 1)
     if bool(transform.get("flip_vertical", False)):
@@ -305,6 +306,17 @@ def alpha_blend_inplace(dst: np.ndarray, src: np.ndarray, x: int, y: int, opacit
     sx2, sy2 = sx1 + (x2 - x1), sy1 + (y2 - y1)
     s = src[sy1:sy2, sx1:sx2].astype(np.float32)
     target = dst[y1:y2, x1:x2]
+    if blend_mode == "Normal":
+        accelerated = accelerated_alpha_blend(
+            src[sy1:sy2, sx1:sx2],
+            target,
+            opacity,
+            None if alpha_mask is None else alpha_mask[sy1:sy2, sx1:sx2],
+            mask_density,
+        )
+        if accelerated is not None:
+            target[:] = accelerated
+            return
     d = target.astype(np.float32)
     sa = (s[:, :, 3:4] / 255.0) * float(opacity)
     if alpha_mask is not None:
@@ -362,11 +374,11 @@ def retouch_effect_rgb(source: np.ndarray, mode: str, strength: float, tonal_ran
     if mode == "blur":
         sigma = 0.65 + 1.85 * strength
         alpha = source[:, :, 3].astype(np.float32) / 255.0
-        weight = cv2.GaussianBlur(alpha, (0, 0), sigma, borderType=cv2.BORDER_REFLECT_101)
-        premultiplied = cv2.GaussianBlur(rgb * alpha[:, :, None], (0, 0), sigma, borderType=cv2.BORDER_REFLECT_101)
+        weight = accelerated_gaussian_blur(alpha, (0, 0), sigma, cv2.BORDER_REFLECT_101)
+        premultiplied = accelerated_gaussian_blur(rgb * alpha[:, :, None], (0, 0), sigma, cv2.BORDER_REFLECT_101)
         return np.where(weight[:, :, None] > 1e-4, premultiplied / np.maximum(weight[:, :, None], 1e-4), rgb)
     if mode == "sharpen":
-        blurred = cv2.GaussianBlur(rgb, (0, 0), 1.0, borderType=cv2.BORDER_REFLECT_101)
+        blurred = accelerated_gaussian_blur(rgb, (0, 0), 1.0, cv2.BORDER_REFLECT_101)
         detail = rgb - blurred
         detail_luma = np.abs(detail[:, :, 0] * 0.2126 + detail[:, :, 1] * 0.7152 + detail[:, :, 2] * 0.0722)
         detail[detail_luma < 2.0] = 0.0

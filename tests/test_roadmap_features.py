@@ -93,7 +93,7 @@ def test_scratch_cache_spills_and_mipmap_selects_level(tmp_path: Path) -> None:
     reduced, level = pyramid.for_zoom("image", image, 0.2)
     assert level == 2
     assert reduced.shape[:2] == (16, 16)
-    assert set(gpu_status()) == {"available", "enabled", "devices"}
+    assert {"available", "enabled", "devices", "backend", "device", "mode"} <= set(gpu_status())
     cache.close()
 
 

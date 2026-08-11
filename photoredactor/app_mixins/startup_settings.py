@@ -245,6 +245,11 @@ class StartupSettingsMixin:
         try:
             if self.settings_path.exists():
                 data = json.loads(self.settings_path.read_text(encoding="utf-8"))
+                gpu_mode = str(data.get("gpu_mode", os.environ.get("PHOTO_REDACTOR_GPU", "auto"))).lower()
+                os.environ["PHOTO_REDACTOR_GPU"] = gpu_mode if gpu_mode in {"auto", "force", "off"} else "auto"
+                reset_acceleration_metrics()
+                self.render_engine.gpu = gpu_status()
+                self.render_engine.mipmaps.gpu = dict(self.render_engine.gpu)
                 self.recent_files = [str(path) for path in data.get("recent_files", []) if Path(path).exists()]
                 self.tool_order = normalize_tool_order(data.get("tool_order"), TOOL_DEFINITIONS)
                 self.visible_tools = normalize_visible_tools(data.get("visible_tools"), self.tool_order)
@@ -298,6 +303,7 @@ class StartupSettingsMixin:
                         "tool_order": self.tool_order,
                         "visible_tools": self.visible_tools,
                         "tool_schema_version": 2,
+                        "gpu_mode": os.environ.get("PHOTO_REDACTOR_GPU", "auto"),
                         "tool_pane_position": self.tool_pane_position,
                         "tool_settings": self.tool_settings,
                         "shape_settings": {

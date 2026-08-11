@@ -11,27 +11,30 @@ from typing import Hashable
 import cv2
 import numpy as np
 
+from .gpu_acceleration import acceleration_status, should_accelerate
+
 
 def gpu_status() -> dict[str, object]:
-    count = 0
-    try:
-        count = int(cv2.cuda.getCudaEnabledDeviceCount())
-    except (AttributeError, cv2.error):
-        count = 0
-    requested = os.environ.get("PHOTO_REDACTOR_GPU", "auto").lower() not in {"0", "false", "off"}
-    return {"available": count > 0, "enabled": requested and count > 0, "devices": count}
+    status = acceleration_status()
+    return {
+        **status,
+        "devices": int(status["cuda_devices"]) if status["backend"] == "cuda" else int(bool(status["opencl_available"])),
+    }
 
 
 def pyr_down(array: np.ndarray, use_gpu: bool = True) -> np.ndarray:
     """Downsample on CUDA when available and fall back to the identical CPU path."""
-    if use_gpu and bool(gpu_status()["enabled"]):
+    status = gpu_status()
+    if use_gpu and should_accelerate(array):
         try:
-            source = cv2.cuda_GpuMat()
-            source.upload(array)
-            if hasattr(cv2.cuda, "pyrDown"):
-                return cv2.cuda.pyrDown(source).download()
-            size = (max(1, array.shape[1] // 2), max(1, array.shape[0] // 2))
-            return cv2.cuda.resize(source, size, interpolation=cv2.INTER_AREA).download()
+            if status["backend"] == "cuda":
+                source = cv2.cuda_GpuMat()
+                source.upload(array)
+                if hasattr(cv2.cuda, "pyrDown"):
+                    return cv2.cuda.pyrDown(source).download()
+                size = (max(1, array.shape[1] // 2), max(1, array.shape[0] // 2))
+                return cv2.cuda.resize(source, size, interpolation=cv2.INTER_AREA).download()
+            return cv2.pyrDown(cv2.UMat(array)).get()
         except (AttributeError, cv2.error):
             pass
     return cv2.pyrDown(array)

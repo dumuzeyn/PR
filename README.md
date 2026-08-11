@@ -32,7 +32,7 @@ This repository starts with a real working editor and an architecture intended t
 - replayable action recording in JSON v2, action playback and batch execution
 - Smart Objects with embedded originals, re-editable transforms and linked-file conflict status
 - native 16-bit RAW decoding; high-precision 8/16/32-bit layers, composition, filters, history and geometry; ICC assignment/conversion, soft proof, gamut warning, print preflight and profile-embedded CMYK TIFF export
-- direct tile-by-tile distant-zoom rendering without a full-size composite, scratch-disk cache eviction and optional CUDA detection with CPU fallback
+- direct tile-by-tile distant-zoom rendering without a full-size composite, scratch-disk cache eviction and measured OpenCL GPU kernels with adaptive CPU fallback
 - Python plugin API plus validated external executable filters
 - local algorithmic canvas expansion with a live preview; true AI generative fill/expand remains unfinished in `ROADMAP.md`
 - metadata/EXIF view, histogram, image statistics and eyedropper
@@ -113,7 +113,7 @@ Every push to `master` starts the `Build PhotoRedactor for Windows` workflow. Op
 - The plugin contract and external filter protocol are documented in [`PLUGINS.md`](PLUGINS.md).
 - Action v2 files can be replayed on the current document or a group of images. A ready example is in `actions\web_thumbnail.json`.
 - `PHOTO_REDACTOR_CACHE_MB` controls the RAM budget for render caches; older arrays automatically move to the scratch folder.
-- `PHOTO_REDACTOR_GPU=0` disables optional GPU selection. CPU rendering always remains available.
+- `PHOTO_REDACTOR_GPU=auto` benchmarks OpenCL and uses it only when beneficial; `force` always selects GPU and `off` keeps all work on CPU. The same modes and a live benchmark are available under Analysis > GPU settings.
 
 ## Navigation
 
