@@ -59,7 +59,7 @@ TOOL_SHORTCUT_GROUPS = {
     "l": ("lasso", "magnetic_lasso", "polygon_lasso"),
     "w": ("quick_selection", "magic_wand", "color_range"),
     "u": ("rect_shape", "ellipse_shape", "line_shape", "polygon_shape", "star_shape", "custom_shape"),
-    "p": ("bezier_shape",),
+    "p": ("bezier_shape", "path_select", "direct_select", "add_anchor", "delete_anchor", "convert_anchor"),
 }
 
 

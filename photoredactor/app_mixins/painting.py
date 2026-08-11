@@ -175,7 +175,12 @@ class PaintingMixin:
             self.refresh_layer_previews()
 
     def end_move_layer(self) -> None:
-        if self._move_layer_id and self._move_start:
+        if len(self._move_group_starts) > 1:
+            after = {layer_id: (layer.x, layer.y) for layer_id in self._move_group_starts if (layer := self.doc.get_layer(layer_id)) is not None}
+            if after != self._move_group_starts:
+                after_masks = {layer_id: None if (layer := self.doc.get_layer(layer_id)) is None or layer.mask is None else layer.mask.copy() for layer_id in after}
+                self.push_command(LayerGroupMoveCommand("Переместить группу", dict(self._move_group_starts), after, dict(self._move_group_masks), after_masks))
+        elif self._move_layer_id and self._move_start:
             layer = self.doc.get_layer(self._move_layer_id)
             if layer is not None:
                 end = (layer.x, layer.y)
@@ -186,6 +191,8 @@ class PaintingMixin:
         self._move_start = None
         self._move_start_mask = None
         self._move_last_bounds = None
+        self._move_group_starts.clear()
+        self._move_group_masks.clear()
 
     def paint_at(self, point: tuple[int, int], pressure: float = 1.0) -> None:
         self.capture_stroke_before(self.brush_local_rect(point))

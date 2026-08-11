@@ -126,6 +126,8 @@ class MenusToolsMixin:
         layer.add_command(label="Дублировать слой", command=self.duplicate_layer, accelerator=accelerator("duplicate_layer"))
         layer.add_command(label="Удалить слой", command=self.delete_layer)
         layer.add_command(label="Переименовать слой", command=self.rename_layer)
+        layer.add_command(label="Сгруппировать выбранные", command=self.group_selected_layers)
+        layer.add_command(label="Распустить группу", command=self.ungroup_selected_layers)
         layer.add_command(label="Заблокировать/разблокировать", command=self.toggle_layer_lock)
         layer.add_command(label="Редактировать текстовый слой", command=self.edit_text_layer)
         layer.add_command(label="Редактировать контур текста", command=self.edit_text_path)
@@ -366,6 +368,7 @@ class MenusToolsMixin:
             gradient_mid_enabled=self.gradient_mid_enabled,
             gradient_mid_position=self.gradient_mid_position,
             pick_gradient_mid=self.pick_gradient_mid,
+            open_gradient_editor=self.open_gradient_editor,
             crop_aspect=self.crop_aspect,
             crop_custom_width=self.crop_custom_width,
             crop_custom_height=self.crop_custom_height,

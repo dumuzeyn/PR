@@ -1,11 +1,61 @@
 from __future__ import annotations
 
+import copy
+
 from .core_shared import *
 from .layer import Layer
 from .geometry_ops import *
 from .selection_ops import *
 from .render_ops import *
 from .retouch_ops import *
+
+
+def render_text_in_local_region(layer: Layer) -> bool:
+    data = layer.text_data
+    if data is None or data.get("_local_render") or str(data.get("path_mode", "none")) == "bezier":
+        return False
+    height, width = layer.pixels.shape[:2]
+    size = max(4, int(data.get("size", 48)))
+    text = str(data.get("text", ""))
+    box_width = max(0, int(data.get("box_width", 0) or 0))
+    tracking = abs(int(data.get("tracking", 0))) + abs(int(data.get("kerning", 0)))
+    longest = max((len(line) for line in text.splitlines()), default=1)
+    estimated_width = box_width or max(size * 2, longest * (size + tracking))
+    if box_width:
+        estimated_lines = sum(max(1, math.ceil(max(1, len(line)) * size * 0.7 / max(1, box_width))) for line in text.splitlines() or [""])
+    else:
+        estimated_lines = max(1, len(text.splitlines()))
+    if bool(data.get("vertical", False)):
+        estimated_width = max(1, len(text.splitlines())) * round(size * 1.4)
+        estimated_height = max((len(line) for line in text.splitlines()), default=1) * (size + int(data.get("line_spacing", 0)))
+    else:
+        estimated_height = estimated_lines * (round(size * 1.7) + int(data.get("line_spacing", 0)))
+    estimated_height += estimated_lines * (int(data.get("spacing_before", 0)) + int(data.get("spacing_after", 0)))
+    padding = max(size * 3, abs(int(data.get("baseline_shift", 0))) + size, abs(int(data.get("first_line_indent", 0))) + size)
+    if abs(float(data.get("rotation", 0.0))) > 0.001:
+        diagonal = math.ceil(math.hypot(estimated_width, estimated_height))
+        estimated_width = estimated_height = diagonal
+    local_width = max(1, min(width + padding * 2, estimated_width + padding * 2))
+    local_height = max(1, min(height + padding * 2, estimated_height + padding * 2))
+    if local_width * local_height >= width * height * 0.85:
+        return False
+    original_data = data
+    local_data = copy.deepcopy(data)
+    local_data.update({"x": padding, "y": padding, "_local_render": True})
+    layer.text_data = local_data
+    layer.pixels = blank_rgba(local_width, local_height, (0, 0, 0, 0))
+    render_text_layer(layer)
+    local_pixels = layer.pixels
+    layer.text_data = original_data
+    output = blank_rgba(width, height, (0, 0, 0, 0))
+    if np.any(local_pixels[:, :, 3]):
+        ys, xs = np.where(local_pixels[:, :, 3] > 0)
+        x1, y1, x2, y2 = int(xs.min()), int(ys.min()), int(xs.max() + 1), int(ys.max() + 1)
+        target_x = int(original_data.get("x", 0)) - padding + x1
+        target_y = int(original_data.get("y", 0)) - padding + y1
+        alpha_blend_inplace(output, local_pixels[y1:y2, x1:x2], target_x, target_y, 1.0)
+    layer.pixels = output
+    return True
 
 
 def render_text_layer(layer: Layer) -> None:
@@ -24,6 +74,8 @@ def render_text_layer(layer: Layer) -> None:
         layer.transform_source = source.copy()
         apply_saved_layer_transform(layer, source, layer.transform_mask_source)
         return
+    if render_text_in_local_region(layer):
+        return
     layer.pixels[:] = 0
     pil = rgba_array_to_pil(layer.pixels)
     draw = ImageDraw.Draw(pil)
@@ -31,6 +83,7 @@ def render_text_layer(layer: Layer) -> None:
     bold = bool(data.get("bold", False))
     italic = bool(data.get("italic", False))
     underline = bool(data.get("underline", False))
+    strike_through = bool(data.get("strike_through", False))
     font = load_text_font(str(data.get("font_family", "arial.ttf")), int(data.get("size", 48)), bold, italic)
     color = tuple(int(v) for v in data.get("color", [255, 255, 255, 255]))
     x = int(data.get("x", 0))
@@ -38,38 +91,73 @@ def render_text_layer(layer: Layer) -> None:
     size = int(data.get("size", 48))
     box_width = max(0, int(data.get("box_width", 0) or 0))
     spacing = max(0, int(data.get("line_spacing", max(2, size // 5))))
-    tracking = int(data.get("tracking", 0))
+    tracking = int(data.get("tracking", 0)) + int(data.get("kerning", 0))
     align = str(data.get("align", "left")).lower()
     path_mode = str(data.get("path_mode", "none")).lower()
     path_amount = int(data.get("path_amount", 0))
     baseline_shift = int(data.get("baseline_shift", 0))
     if path_mode == "bezier":
         draw_text_on_bezier_path(pil, data, font, color, tracking, bold, underline)
-    else:
-        lines = wrapped_text_lines(draw, str(data.get("text", "")), font, box_width, tracking)
-        line_y = y
-        for line in lines:
-            bbox = draw.textbbox((0, 0), line or " ", font=font)
-            line_width = text_line_width(draw, line or " ", font, tracking)
-            dx = 0
-            if box_width > 0 and align == "center":
-                dx = max(0, (box_width - line_width) // 2)
-            elif box_width > 0 and align == "right":
-                dx = max(0, box_width - line_width)
+    elif bool(data.get("vertical", False)):
+        line_x, line_y = x, y - baseline_shift
+        advance_x = max(1, round(size * 1.25))
+        for char in str(data.get("text", "")):
+            if char == "\n":
+                line_x += advance_x
+                line_y = y - baseline_shift
+                continue
+            bbox = draw.textbbox((0, 0), char or " ", font=font)
             draw_text_styled(
-                draw,
-                (x + dx, line_y - baseline_shift),
-                line,
-                fill=color,
-                font=font,
-                tracking=tracking,
-                bold=bold,
-                underline=underline,
-                path_mode=path_mode,
-                path_amount=path_amount,
+                draw, (line_x, line_y), char, fill=color, font=font, tracking=0,
+                bold=bold, underline=underline, strike_through=strike_through,
             )
             line_y += max(1, bbox[3] - bbox[1]) + spacing
+    else:
+        line_y = y
+        indent_left = max(0, int(data.get("indent_left", 0)))
+        indent_right = max(0, int(data.get("indent_right", 0)))
+        first_indent = int(data.get("first_line_indent", 0))
+        spacing_before = max(0, int(data.get("spacing_before", 0)))
+        spacing_after = max(0, int(data.get("spacing_after", 0)))
+        paragraphs = str(data.get("text", "")).splitlines() or [""]
+        for paragraph in paragraphs:
+            line_y += spacing_before
+            available = max(1, box_width - indent_left - indent_right) if box_width else 0
+            lines = wrapped_text_lines(draw, paragraph, font, available, tracking)
+            for line_index, line in enumerate(lines):
+                first_offset = first_indent if line_index == 0 else 0
+                line_available = max(1, available - first_offset) if available else 0
+                line_width = text_line_width(draw, line or " ", font, tracking)
+                dx = indent_left + first_offset
+                if line_available > 0 and align == "center":
+                    dx += max(0, (line_available - line_width) // 2)
+                elif line_available > 0 and align == "right":
+                    dx += max(0, line_available - line_width)
+                justify = line_available > 0 and align == "justify" and line_index < len(lines) - 1 and " " in line
+                if justify:
+                    words = line.split(" ")
+                    words_width = sum(text_line_width(draw, word, font, tracking) for word in words)
+                    gap = max(0.0, (line_available - words_width) / max(1, len(words) - 1))
+                    cursor = float(x + dx)
+                    for word in words:
+                        draw_text_styled(draw, (round(cursor), line_y - baseline_shift), word, fill=color, font=font, tracking=tracking, bold=bold, underline=underline, strike_through=strike_through, path_mode=path_mode, path_amount=path_amount)
+                        cursor += text_line_width(draw, word, font, tracking) + gap
+                else:
+                    draw_text_styled(draw, (x + dx, line_y - baseline_shift), line, fill=color, font=font, tracking=tracking, bold=bold, underline=underline, strike_through=strike_through, path_mode=path_mode, path_amount=path_amount)
+                bbox = draw.textbbox((0, 0), line or " ", font=font)
+                line_y += max(1, bbox[3] - bbox[1]) + spacing
+            line_y += spacing_after
     rendered = pil_to_rgba_array(pil)
+    horizontal_scale = max(1, int(data.get("horizontal_scale", 100))) / 100.0
+    vertical_scale = max(1, int(data.get("vertical_scale", 100))) / 100.0
+    if (abs(horizontal_scale - 1.0) > 0.001 or abs(vertical_scale - 1.0) > 0.001) and np.any(rendered[:, :, 3]):
+        ys, xs = np.where(rendered[:, :, 3] > 0)
+        x1, y1, x2, y2 = int(xs.min()), int(ys.min()), int(xs.max() + 1), int(ys.max() + 1)
+        patch = rendered[y1:y2, x1:x2]
+        scaled = cv2.resize(patch, (max(1, round(patch.shape[1] * horizontal_scale)), max(1, round(patch.shape[0] * vertical_scale))), interpolation=cv2.INTER_CUBIC)
+        resized = np.zeros_like(rendered)
+        alpha_blend_inplace(resized, scaled, x1, y1, 1.0)
+        rendered = resized
     rotation = float(data.get("rotation", 0.0))
     flip_horizontal = bool(data.get("flip_horizontal", False))
     flip_vertical = bool(data.get("flip_vertical", False))
@@ -254,7 +342,14 @@ def draw_text_on_bezier_path(
         image.paste(rotated, (left, top), rotated)
         cursor += advance
         last_distance = min(cursor, end_distance)
-    if underline and last_distance > first_distance:
+    decorations = []
+    if underline:
+        decorations.append(max(1.0, size * 0.08))
+    if bool(data.get("strike_through", False)):
+        decorations.append(-max(1.0, size * 0.42))
+    for decoration_offset in decorations:
+        if last_distance <= first_distance:
+            continue
         path_draw = ImageDraw.Draw(image)
         samples = max(8, round((last_distance - first_distance) / 4.0))
         line_points: list[tuple[float, float]] = []
@@ -263,8 +358,8 @@ def draw_text_on_bezier_path(
             normal = np.array([-tangent[1], tangent[0]], dtype=np.float64)
             if path_reversed:
                 normal = -normal
-            underline_point = point + normal * side * (max(1.0, size * 0.08) - baseline_shift)
-            line_points.append((float(underline_point[0]), float(underline_point[1])))
+            decoration_point = point + normal * side * (decoration_offset - baseline_shift)
+            line_points.append((float(decoration_point[0]), float(decoration_point[1])))
         path_draw.line(line_points, fill=fill, width=max(1, size // 16), joint="curve")
 
 def cumulative_path_estimate(points: list[list[float]]) -> float:
@@ -315,6 +410,7 @@ def draw_text_styled(
     tracking: int = 0,
     bold: bool = False,
     underline: bool = False,
+    strike_through: bool = False,
     path_mode: str = "none",
     path_amount: int = 0,
 ) -> None:
@@ -336,6 +432,9 @@ def draw_text_styled(
     if underline and text:
         underline_y = y + max(1, int(getattr(font, "size", 12) * 1.05))
         draw.line((x, underline_y, x + total_width, underline_y), fill=fill, width=max(1, int(getattr(font, "size", 12) / 16)))
+    if strike_through and text:
+        strike_y = y + max(1, int(getattr(font, "size", 12) * 0.55))
+        draw.line((x, strike_y, x + total_width, strike_y), fill=fill, width=max(1, int(getattr(font, "size", 12) / 16)))
 
 def load_text_font(font_family: str, size: int, bold: bool = False, italic: bool = False) -> ImageFont.ImageFont:
     family = font_family.strip() or "arial.ttf"

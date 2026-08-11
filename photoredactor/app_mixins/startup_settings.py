@@ -33,7 +33,7 @@ class StartupSettingsMixin:
         self._edit_generation = 0
         self.adjustment_presets = {name: dict(value) for name, value in ADJUSTMENT_PRESETS.items()}
         self.tool = tk.StringVar(value="brush")
-        self.auto_select = tk.BooleanVar(value=True)
+        self.auto_select = tk.StringVar(value="Слой")
         self.tool_order = [value for _label, value, _description in TOOL_DEFINITIONS]
         self.visible_tools = list(self.tool_order)
         self.tool_pane_position = 360
@@ -107,6 +107,7 @@ class StartupSettingsMixin:
         self.gradient_mid_enabled = tk.BooleanVar(value=False)
         self.gradient_mid_position = tk.DoubleVar(value=0.5)
         self.gradient_mid_color = (255, 90, 80, 255)
+        self.gradient_definition: dict[str, object] | None = None
         self.crop_aspect = tk.StringVar(value="Свободно")
         self.crop_custom_width = tk.IntVar(value=1920)
         self.crop_custom_height = tk.IntVar(value=1080)
@@ -134,6 +135,8 @@ class StartupSettingsMixin:
         self._move_layer_id: str | None = None
         self._move_start: tuple[int, int] | None = None
         self._move_start_mask: np.ndarray | None = None
+        self._move_group_starts: dict[str, tuple[int, int]] = {}
+        self._move_group_masks: dict[str, np.ndarray | None] = {}
         self._move_last_bounds: tuple[int, int, int, int] | None = None
         self._object_resize_handle: str | None = None
         self._object_resize_before: dict | None = None
@@ -199,6 +202,11 @@ class StartupSettingsMixin:
         self._clone_anchor_target: tuple[int, int] | None = None
         self._clone_anchor_source: tuple[int, int] | None = None
         self._source_anchor = SourceAnchor()
+        self._path_overlay_ids: list[int] = []
+        self._path_selected_nodes: set[int] = set()
+        self._path_drag_target: tuple[int, str] | None = None
+        self._path_drag_before: dict[str, object] | None = None
+        self._path_drag_origin = None
         self._clone_sample_pixels: np.ndarray | None = None
         self._clone_sample_origin = (0, 0)
         self._clone_source_marker_ids: list[int] = []
@@ -326,6 +334,10 @@ class StartupSettingsMixin:
                 self.visible_tools = normalize_visible_tools(data.get("visible_tools"), self.tool_order)
                 if int(data.get("tool_schema_version", 1)) < 2 and "spot_healing" not in self.visible_tools:
                     self.visible_tools.append("spot_healing")
+                if int(data.get("tool_schema_version", 1)) < 3:
+                    for tool_id in ("path_select", "direct_select", "add_anchor", "delete_anchor", "convert_anchor"):
+                        if tool_id not in self.visible_tools:
+                            self.visible_tools.append(tool_id)
                 self.tool_pane_position = int(data.get("tool_pane_position", self.tool_pane_position))
                 saved_tool_settings = data.get("tool_settings", {})
                 if isinstance(saved_tool_settings, dict):
@@ -412,7 +424,7 @@ class StartupSettingsMixin:
                         "recent_files": self.recent_files[:12],
                         "tool_order": self.tool_order,
                         "visible_tools": self.visible_tools,
-                        "tool_schema_version": 2,
+                        "tool_schema_version": 3,
                         "gpu_mode": os.environ.get("PHOTO_REDACTOR_GPU", "auto"),
                         "tool_pane_position": self.tool_pane_position,
                         "tool_settings": self.tool_settings,

@@ -17,6 +17,7 @@ TOOLS = (
     "hand", "move", "brush", "eraser", "blur_tool", "sharpen_tool", "dodge", "burn",
     "clone", "healing", "spot_healing", "patch", "fill", "gradient", "text", "eyedropper",
     "rect_shape", "ellipse_shape", "line_shape", "bezier_shape", "polygon_shape", "star_shape",
+    "path_select", "direct_select", "add_anchor", "delete_anchor", "convert_anchor",
     "custom_shape", "select", "ellipse_select", "lasso", "magnetic_lasso", "polygon_lasso",
     "quick_selection", "magic_wand", "color_range", "crop",
 )
@@ -29,6 +30,9 @@ ACTION_LABELS = {
     "patch": "ПЕРЕНОС ЧИСТОГО УЧАСТКА", "fill": "ЗАЛИВКА ОБЛАСТИ", "gradient": "РАСТЯГИВАНИЕ ПЕРЕХОДА",
     "text": "ВВОД ТЕКСТА", "eyedropper": "ВЫБОР ЦВЕТА", "rect_shape": "СОЗДАНИЕ ПРЯМОУГОЛЬНИКА",
     "ellipse_shape": "СОЗДАНИЕ ЭЛЛИПСА", "line_shape": "СОЗДАНИЕ ЛИНИИ", "bezier_shape": "ИЗГИБ КРИВОЙ",
+    "path_select": "ВЫБОР КОНТУРА", "direct_select": "ПЕРЕМЕЩЕНИЕ УЗЛА",
+    "add_anchor": "ДОБАВЛЕНИЕ УЗЛА", "delete_anchor": "УДАЛЕНИЕ УЗЛА",
+    "convert_anchor": "УГЛОВОЙ И ПЛАВНЫЙ УЗЕЛ",
     "polygon_shape": "СОЗДАНИЕ МНОГОУГОЛЬНИКА", "star_shape": "СОЗДАНИЕ ЗВЕЗДЫ",
     "custom_shape": "СОЗДАНИЕ СВОЕЙ ФИГУРЫ", "select": "ПРЯМОУГОЛЬНОЕ ВЫДЕЛЕНИЕ",
     "ellipse_select": "ОВАЛЬНОЕ ВЫДЕЛЕНИЕ", "lasso": "СВОБОДНЫЙ КОНТУР",
@@ -367,6 +371,40 @@ def make_frames(tool: str, still: Image.Image, landscape: Image.Image) -> list[I
             image = landscape.copy()
             point = draw_shape(image, tool, t, phase)
             cursor(image, point)
+        elif tool in {"path_select", "direct_select", "add_anchor", "delete_anchor", "convert_anchor"}:
+            image = landscape.copy()
+            draw = ImageDraw.Draw(image, "RGBA")
+            nodes = [(55, 120), (112, 45), (186, 116), (238, 48)]
+            handles = [(82, 39), (157, 142)]
+            curve = []
+            for step in range(61):
+                u = step / 60
+                x = (1-u)**3*nodes[0][0] + 3*(1-u)**2*u*handles[0][0] + 3*(1-u)*u*u*handles[1][0] + u**3*nodes[-1][0]
+                y = (1-u)**3*nodes[0][1] + 3*(1-u)**2*u*handles[0][1] + 3*(1-u)*u*u*handles[1][1] + u**3*nodes[-1][1]
+                curve.append((x, y))
+            draw.line(curve, fill="#ffffff", width=4)
+            active = (112, int(45 + 35*t)) if tool == "direct_select" else nodes[1]
+            shown = [nodes[0], active, nodes[2], nodes[3]]
+            if tool == "add_anchor" and t > .55:
+                shown.insert(2, (150, 81))
+            if tool == "delete_anchor" and t > .55:
+                shown.pop(1)
+            draw.line((shown[0], handles[0]), fill="#f0b84f", width=2)
+            draw.line((handles[1], shown[-1]), fill="#f0b84f", width=2)
+            for n, (x, y) in enumerate(shown):
+                fill = "#2384d3" if n == min(1, len(shown) - 1) else "#ffffff"
+                draw.rectangle((x-5, y-5, x+5, y+5), fill=fill, outline="#14181d", width=2)
+            if tool == "convert_anchor" and t > .55:
+                draw.line((active[0]-30, active[1], active[0]+30, active[1]), fill="#f0b84f", width=2)
+                draw.ellipse((active[0]-34, active[1]-4, active[0]-26, active[1]+4), fill="#ffffff")
+                draw.ellipse((active[0]+26, active[1]-4, active[0]+34, active[1]+4), fill="#ffffff")
+            pointer = lerp((262, 142), active, t)
+            draw.ellipse(
+                (active[0] - 7 - int(2 * t), active[1] - 7 - int(2 * t), active[0] + 7 + int(2 * t), active[1] + 7 + int(2 * t)),
+                outline=(35, 132, 211, 90 + int(150 * t)),
+                width=2,
+            )
+            cursor(image, pointer)
         elif tool in {"select", "ellipse_select", "lasso", "magnetic_lasso", "polygon_lasso", "quick_selection", "magic_wand", "color_range"}:
             image, _ = selection_demo(base, tool, t, phase)
         else:  # crop

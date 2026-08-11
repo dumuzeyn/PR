@@ -4,6 +4,24 @@ from ..app_shared import *
 
 
 class LayerMasksMixin:
+    def group_selected_layers(self) -> None:
+        selected = [layer for layer in self.doc.layers if layer.id in self.selected_layer_ids]
+        if len(selected) < 2:
+            self.status_text("Для группы выберите минимум два слоя")
+            return
+        group_id = uuid.uuid4().hex
+        self.run_document_command("Сгруппировать слои", lambda: [setattr(layer, "group_id", group_id) for layer in selected])
+        self.refresh_layers()
+
+    def ungroup_selected_layers(self) -> None:
+        group_ids = {layer.group_id for layer in self.doc.layers if layer.id in self.selected_layer_ids and layer.group_id}
+        if not group_ids:
+            self.status_text("Выбранные слои не входят в группу")
+            return
+        self.run_document_command("Распустить группу", lambda: [setattr(layer, "group_id", None) for layer in self.doc.layers if layer.group_id in group_ids])
+        self.selected_layer_ids = {layer.id for layer in self.doc.layers if layer.id in self.selected_layer_ids}
+        self.refresh_layers()
+
     def merge_down(self) -> None:
         self.run_document_command("Merge down", self.doc.merge_down)
         self.refresh()

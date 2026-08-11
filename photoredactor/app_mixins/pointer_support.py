@@ -100,11 +100,12 @@ class PointerSupportMixin:
         if not hasattr(self, "canvas"):
             return
         layer = self.doc.layer if self.doc.layers else None
-        bounds = None if layer is None or layer.id not in self.selected_layer_ids or layer.kind not in {"shape", "text"} else self.object_document_bounds(layer)
+        bounds = None if self.tool.get() != "move" or layer is None or layer.id not in self.selected_layer_ids or layer.kind not in {"shape", "text"} else self.object_document_bounds(layer)
         if bounds is None:
             for item_id in self._object_bounds_ids:
                 self.canvas.delete(item_id)
             self._object_bounds_ids.clear()
+            self.update_path_overlay()
             return
         x1, y1 = self.doc_to_canvas(bounds[0], bounds[1])
         x2, y2 = self.doc_to_canvas(bounds[2], bounds[3])
@@ -122,6 +123,7 @@ class PointerSupportMixin:
             self.canvas.coords(item_id, x - radius, y - radius, x + radius, y + radius)
             self.canvas.tag_raise(item_id)
         self.canvas.tag_raise(self._object_bounds_ids[0])
+        self.update_path_overlay()
 
     def select_object_at(self, point: tuple[int, int], add: bool = False) -> Layer | None:
         index = topmost_layer_at(self.doc, point, tolerance=max(2, round(5 / max(self.zoom.get(), 0.01))))

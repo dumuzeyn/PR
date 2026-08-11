@@ -55,9 +55,19 @@ class VectorLayersDocumentMixin:
                 "align": align,
                 "line_spacing": int(line_spacing if line_spacing is not None else max(2, int(size) // 5)),
                 "tracking": int(tracking),
+                "kerning": 0,
+                "horizontal_scale": 100,
+                "vertical_scale": 100,
                 "bold": bool(bold),
                 "italic": bool(italic),
                 "underline": bool(underline),
+                "strike_through": False,
+                "vertical": False,
+                "indent_left": 0,
+                "indent_right": 0,
+                "first_line_indent": 0,
+                "spacing_before": 0,
+                "spacing_after": 0,
                 "path_mode": path_mode if path_mode in {"none", "arc", "wave", "bezier"} else "none",
                 "path_amount": int(path_amount),
                 "path_points": normalize_text_path_points(path_points, int(x), int(y) + int(size), max(int(box_width), int(size) * 8)),
@@ -103,9 +113,14 @@ class VectorLayersDocumentMixin:
                 "fill": list(fill),
                 "stroke": None if stroke is None else list(stroke),
                 "stroke_width": int(stroke_width),
+                "stroke_alignment": "center",
+                "opacity": 1.0,
+                "rotation": 0.0,
+                "corner_radius": 0,
                 "sides": int(sides),
                 "inner_ratio": float(inner_ratio),
                 "control_points": None if control_points is None else [[float(x), float(y)] for x, y in control_points],
+                "path_nodes": None,
                 "custom_points": None if custom_points is None else [[float(x), float(y)] for x, y in custom_points],
                 "gradient": None if gradient is None else json.loads(json.dumps(gradient)),
                 "texture": None if texture is None else json.loads(json.dumps(texture)),
@@ -215,9 +230,19 @@ class VectorLayersDocumentMixin:
         align: str | None = None,
         line_spacing: int | None = None,
         tracking: int | None = None,
+        kerning: int | None = None,
+        horizontal_scale: int | None = None,
+        vertical_scale: int | None = None,
         bold: bool | None = None,
         italic: bool | None = None,
         underline: bool | None = None,
+        strike_through: bool | None = None,
+        vertical: bool | None = None,
+        indent_left: int | None = None,
+        indent_right: int | None = None,
+        first_line_indent: int | None = None,
+        spacing_before: int | None = None,
+        spacing_after: int | None = None,
         path_mode: str | None = None,
         path_amount: int | None = None,
         path_points: list[tuple[float, float]] | list[list[float]] | None = None,
@@ -243,17 +268,36 @@ class VectorLayersDocumentMixin:
         if box_width is not None:
             layer.text_data["box_width"] = max(0, int(box_width))
         if align is not None:
-            layer.text_data["align"] = align if align in {"left", "center", "right"} else "left"
+            layer.text_data["align"] = align if align in {"left", "center", "right", "justify"} else "left"
         if line_spacing is not None:
             layer.text_data["line_spacing"] = max(0, int(line_spacing))
         if tracking is not None:
             layer.text_data["tracking"] = int(tracking)
+        if kerning is not None:
+            layer.text_data["kerning"] = int(kerning)
+        if horizontal_scale is not None:
+            layer.text_data["horizontal_scale"] = max(1, int(horizontal_scale))
+        if vertical_scale is not None:
+            layer.text_data["vertical_scale"] = max(1, int(vertical_scale))
         if bold is not None:
             layer.text_data["bold"] = bool(bold)
         if italic is not None:
             layer.text_data["italic"] = bool(italic)
         if underline is not None:
             layer.text_data["underline"] = bool(underline)
+        if strike_through is not None:
+            layer.text_data["strike_through"] = bool(strike_through)
+        if vertical is not None:
+            layer.text_data["vertical"] = bool(vertical)
+        for key, value in {
+            "indent_left": indent_left,
+            "indent_right": indent_right,
+            "first_line_indent": first_line_indent,
+            "spacing_before": spacing_before,
+            "spacing_after": spacing_after,
+        }.items():
+            if value is not None:
+                layer.text_data[key] = int(value)
         if path_mode is not None:
             layer.text_data["path_mode"] = path_mode if path_mode in {"none", "arc", "wave", "bezier"} else "none"
         if path_amount is not None:

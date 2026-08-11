@@ -237,11 +237,7 @@ class ToolOptionsControlsMixin:
                 values=["Линейный", "Радиальный", "Отраженный", "Ромб", "Угловой"],
                 state="readonly",
             ).pack(fill=tk.X, padx=8)
-            middle = ttk.Frame(self.body)
-            middle.pack(fill=tk.X, padx=8, pady=(8, 0))
-            ttk.Checkbutton(middle, text="Средняя точка", variable=self.gradient_mid_enabled).pack(side=tk.LEFT)
-            ttk.Button(middle, text="Цвет", command=self.pick_gradient_mid).pack(side=tk.RIGHT)
-            self._add_scale("Позиция средней точки", self.gradient_mid_position, 0.01, 0.99, "%", percent=True)
+            ttk.Button(self.body, text="Редактор градиента...", command=self.open_gradient_editor).pack(fill=tk.X, padx=8, pady=(8, 2))
         else:
             ttk.Label(self.body, text="Текстура").pack(anchor=tk.W, padx=8, pady=(6, 0))
             ttk.Combobox(self.body, textvariable=self.gradient_texture, values=["Шахматная", "Полосы", "Точки"], state="readonly").pack(fill=tk.X, padx=8)

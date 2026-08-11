@@ -7,38 +7,11 @@ class ShapeVectorMixin:
     def edit_shape_layer(self) -> None:
         layer = self.doc.layer
         if layer.kind != "shape" or layer.shape_data is None:
-            messagebox.showinfo("Shape layer", "Select a shape layer first.")
+            messagebox.showinfo("Свойства фигуры", "Сначала выберите слой-фигуру.")
             return
-        control_points = layer.shape_data.get("control_points")
-        suffix = ""
-        if isinstance(control_points, list) and len(control_points) == 4:
-            suffix = "," + ",".join(str(v) for point in control_points for v in point[:2])
-        initial = f"{layer.shape_data.get('shape', 'rectangle')},{layer.shape_data.get('stroke_width', 0)},{layer.shape_data.get('sides', 5)},{layer.shape_data.get('inner_ratio', 0.5)}{suffix}"
-        raw = simpledialog.askstring("Shape layer", "shape,stroke_width,sides,inner_ratio[,p0x,p0y,p1x,p1y,p2x,p2y,p3x,p3y]:", initialvalue=initial)
-        if raw is None:
-            return
-        try:
-            parts = [part.strip() for part in raw.split(",")]
-            if len(parts) not in {4, 12}:
-                raise ValueError
-            shape = parts[0].lower()
-            if shape not in {"rectangle", "ellipse", "line", "bezier", "polygon", "star", "custom"}:
-                raise ValueError
-            stroke_width = max(0, int(float(parts[1])))
-            sides = max(3, int(float(parts[2])))
-            inner_ratio = max(0.05, min(0.95, float(parts[3])))
-            new_control_points = None
-            if len(parts) == 12:
-                values = [float(value) for value in parts[4:]]
-                new_control_points = [(values[i], values[i + 1]) for i in range(0, 8, 2)]
-        except ValueError:
-            messagebox.showerror("Shape layer", "Use: shape,stroke_width,sides,inner_ratio[,p0x,p0y,p1x,p1y,p2x,p2y,p3x,p3y]")
-            return
-        self.run_shape_data_command(
-            "Edit shape layer",
-            lambda: self.doc.edit_shape_layer(shape=shape, fill=self.foreground, stroke=self.background, stroke_width=stroke_width, sides=sides, inner_ratio=inner_ratio, control_points=new_control_points),
-        )
-        self.refresh()
+        self.refresh_properties()
+        self.right_tabs.select(1)
+        self.status_text("Свойства фигуры открыты в правой панели")
 
     def edit_bezier_points(self) -> None:
         layer = self.doc.layer

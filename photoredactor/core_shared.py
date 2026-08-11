@@ -104,6 +104,45 @@ class GradientEngine:
         return normalized
 
     @staticmethod
+    def normalize_opacity_stops(stops: list[Any] | None) -> list[tuple[float, float]]:
+        normalized: list[tuple[float, float]] = []
+        for stop in stops or []:
+            if isinstance(stop, dict):
+                position, opacity = stop.get("position", 0.0), stop.get("opacity", 1.0)
+            else:
+                position, opacity = stop
+            value = float(opacity)
+            if value > 1.0:
+                value /= 100.0
+            normalized.append((float(np.clip(position, 0.0, 1.0)), float(np.clip(value, 0.0, 1.0))))
+        if len(normalized) < 2:
+            normalized = [(0.0, 1.0), (1.0, 1.0)]
+        normalized.sort(key=lambda item: item[0])
+        return normalized
+
+    @staticmethod
+    def midpoint_axis(axis: np.ndarray, stops: list[Any] | None, positions: np.ndarray) -> np.ndarray:
+        if len(positions) < 2:
+            return axis
+        midpoints = []
+        source = stops or []
+        for index in range(len(positions) - 1):
+            raw = source[index] if index < len(source) and isinstance(source[index], dict) else {}
+            midpoints.append(float(np.clip(raw.get("midpoint", 0.5), 0.01, 0.99)))
+        adjusted = axis.copy()
+        for index, midpoint in enumerate(midpoints):
+            left, right = float(positions[index]), float(positions[index + 1])
+            selected = (axis >= left) & (axis <= right)
+            local = (axis[selected] - left) / max(1e-8, right - left)
+            curved = np.where(
+                local <= midpoint,
+                local * (0.5 / midpoint),
+                0.5 + (local - midpoint) * (0.5 / (1.0 - midpoint)),
+            )
+            adjusted[selected] = left + curved * (right - left)
+        return adjusted
+
+    @staticmethod
     def coordinates(
         width: int,
         height: int,
@@ -146,17 +185,37 @@ class GradientEngine:
         stops: list[Any] | None,
         kind: str = "linear",
         origin: tuple[float, float] = (0.0, 0.0),
+        opacity_stops: list[Any] | None = None,
+        reverse: bool = False,
+        dither: bool = False,
+        transparency: bool = True,
     ) -> np.ndarray:
         values = cls.coordinates(width, height, start, end, kind, origin)
+        if reverse:
+            values = 1.0 - values
         normalized = cls.normalize_stops(stops)
         positions = np.array([item[0] for item in normalized], dtype=np.float32)
         colors = np.array([item[1] for item in normalized], dtype=np.float32)
         axis = np.arange(65537, dtype=np.float32) / 65536.0
+        interpolation_axis = cls.midpoint_axis(axis, stops, positions)
         lookup = np.empty((65537, 4), dtype=np.uint8)
         for channel in range(4):
-            lookup[:, channel] = np.interp(axis, positions, colors[:, channel]).astype(np.uint8)
+            lookup[:, channel] = np.interp(interpolation_axis, positions, colors[:, channel]).astype(np.uint8)
+        opacity = cls.normalize_opacity_stops(opacity_stops)
+        opacity_positions = np.array([item[0] for item in opacity], dtype=np.float32)
+        opacity_values = np.array([item[1] for item in opacity], dtype=np.float32)
+        alpha = np.interp(axis, opacity_positions, opacity_values)
+        lookup[:, 3] = np.clip(lookup[:, 3].astype(np.float32) * alpha, 0, 255).astype(np.uint8)
+        if not transparency:
+            lookup[:, 3] = 255
         indices = np.clip(values * 65536.0, 0.0, 65536.0).astype(np.uint32)
-        return np.ascontiguousarray(lookup[indices])
+        output = lookup[indices]
+        if dither and width > 1 and height > 1:
+            bayer = np.array([[0, 2], [3, 1]], dtype=np.float32) / 4.0 - 0.375
+            noise = np.tile(bayer, ((height + 1) // 2, (width + 1) // 2))[:height, :width, None]
+            output = output.copy()
+            output[:, :, :3] = np.clip(output[:, :, :3].astype(np.float32) + noise, 0, 255).astype(np.uint8)
+        return np.ascontiguousarray(output)
 
 
 def blank_rgba(width: int, height: int, color=(255, 255, 255, 255)) -> np.ndarray:

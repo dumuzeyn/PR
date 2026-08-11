@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import field
+
 from .history_base import *
 
 
@@ -112,6 +114,37 @@ class LayerMoveCommand:
             if self.after_mask is not None:
                 layer.mask = self.after_mask.copy()
             document.dirty = True
+
+
+@dataclass
+class LayerGroupMoveCommand:
+    label: str
+    before: dict[str, tuple[int, int]]
+    after: dict[str, tuple[int, int]]
+    before_masks: dict[str, np.ndarray | None] = field(default_factory=dict)
+    after_masks: dict[str, np.ndarray | None] = field(default_factory=dict)
+
+    @property
+    def memory_bytes(self) -> int:
+        arrays = [mask for mask in (*self.before_masks.values(), *self.after_masks.values()) if mask is not None]
+        return 96 + len(self.before) * 48 + sum(int(mask.nbytes) for mask in arrays)
+
+    @staticmethod
+    def _apply(document: Document, positions: dict[str, tuple[int, int]], masks: dict[str, np.ndarray | None]) -> None:
+        for layer_id, position in positions.items():
+            layer = document.get_layer(layer_id)
+            if layer is None:
+                continue
+            layer.x, layer.y = position
+            if layer_id in masks and masks[layer_id] is not None:
+                layer.mask = masks[layer_id].copy()
+        document.dirty = True
+
+    def undo(self, document: Document) -> None:
+        self._apply(document, self.before, self.before_masks)
+
+    def redo(self, document: Document) -> None:
+        self._apply(document, self.after, self.after_masks)
 
 @dataclass
 class LayerOpacityCommand:

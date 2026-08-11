@@ -24,6 +24,8 @@ TOOL_GROUPS = {
     "text": "text",
     "rect_shape": "shape", "ellipse_shape": "shape", "line_shape": "shape", "bezier_shape": "shape",
     "polygon_shape": "shape", "star_shape": "shape", "custom_shape": "shape",
+    "path_select": "path", "direct_select": "path", "add_anchor": "path",
+    "delete_anchor": "path", "convert_anchor": "path",
 }
 
 
@@ -154,6 +156,23 @@ def tool_icon_bitmap(tool: str, size: int = 20, color: str = TOKENS.TEXT_PRIMARY
         line([(3, 15), (7, 3)], stroke=thin); line([(14, 17), (17, 5)], stroke=thin)
         for x, y in ((3, 15), (7, 3), (14, 17), (17, 5)):
             ellipse((x - 1, y - 1, x + 1, y + 1), stroke=thin, fill=color if (x, y) in {(3, 15), (17, 5)} else TOKENS.SURFACE)
+    elif tool in {"path_select", "direct_select", "add_anchor", "delete_anchor", "convert_anchor"}:
+        line([(3, 15), (7, 4), (14, 16), (17, 5)], stroke=thin)
+        line([(3, 15), (7, 4)], stroke=thin)
+        line([(14, 16), (17, 5)], stroke=thin)
+        for x, y in ((3, 15), (7, 4), (14, 16), (17, 5)):
+            ellipse((x - 1, y - 1, x + 1, y + 1), stroke=thin, fill=TOKENS.SURFACE)
+        if tool == "path_select":
+            line([(5, 5), (5, 12), (8, 10), (10, 15), (12, 14), (9, 9)], stroke=thin, fill=TOKENS.ACCENT)
+        elif tool == "direct_select":
+            rectangle((1.5, 12.5, 5.5, 16.5), fill=TOKENS.ACCENT)
+        elif tool == "add_anchor":
+            line([(8, 9), (8, 15)], fill=TOKENS.ACCENT)
+            line([(5, 12), (11, 12)], fill=TOKENS.ACCENT)
+        elif tool == "delete_anchor":
+            line([(5, 12), (11, 12)], fill=TOKENS.ACCENT)
+        else:
+            line([(6, 9), (10, 12), (6, 15)], fill=TOKENS.ACCENT)
     elif tool == "polygon_shape":
         line([(10, 2), (18, 8), (15, 17), (5, 17), (2, 8), (10, 2)])
     elif tool == "star_shape":

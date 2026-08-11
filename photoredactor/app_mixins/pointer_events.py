@@ -27,7 +27,9 @@ class PointerEventsMixin:
         if tool.endswith("_shape"):
             self._shape_drag_options = self.current_shape_options(tool)
             self.clear_selection_overlay()
-        if tool in ["brush", "eraser", "blur_tool", "sharpen_tool", "dodge", "burn", "clone", "healing", "spot_healing"]:
+        if tool in {"path_select", "direct_select", "add_anchor", "delete_anchor", "convert_anchor"}:
+            self.path_pointer_down(tool, point, event.state)
+        elif tool in ["brush", "eraser", "blur_tool", "sharpen_tool", "dodge", "burn", "clone", "healing", "spot_healing"]:
             if tool in ["clone", "healing"]:
                 if event.state & 0x0008:
                     self.set_clone_source(point)
@@ -91,7 +93,11 @@ class PointerEventsMixin:
             if handle is not None:
                 self.begin_object_resize(handle)
                 return
-            layer = self.select_object_at(point, add=bool(event.state & 0x0001)) if self.auto_select.get() else self.doc.layer
+            auto_select = str(self.auto_select.get())
+            layer = self.select_object_at(point, add=bool(event.state & 0x0001)) if auto_select != "Выкл" else self.doc.layer
+            if layer is not None and auto_select == "Группа" and layer.group_id:
+                self.selected_layer_ids = {candidate.id for candidate in self.doc.layers if candidate.group_id == layer.group_id}
+                self.refresh_layers()
             if layer is None and self.doc.layers and self.doc.layer.kind not in {"shape", "text", "adjustment"}:
                 candidate = self.doc.layer
                 if layer_contains_point(candidate, point, 0):
@@ -107,7 +113,14 @@ class PointerEventsMixin:
             self._move_layer_id = layer.id
             self._move_start = (layer.x, layer.y)
             self._move_start_mask = None if layer.mask is None else layer.mask.copy()
-            self._move_last_bounds = self.layer_render_bounds(layer)
+            move_layers = [candidate for candidate in self.doc.layers if candidate.id in self.selected_layer_ids and not candidate.locked]
+            self._move_group_starts = {candidate.id: (candidate.x, candidate.y) for candidate in move_layers}
+            self._move_group_masks = {candidate.id: None if candidate.mask is None else candidate.mask.copy() for candidate in move_layers}
+            group_bounds = [self.layer_render_bounds(candidate) for candidate in move_layers]
+            self._move_last_bounds = None
+            for bounds in group_bounds:
+                if bounds is not None:
+                    self._move_last_bounds = bounds if self._move_last_bounds is None else union_rect(self._move_last_bounds, bounds)
         elif tool == "polygon_lasso":
             self._polygon_points.append(point)
             self.draw_polygon_lasso()
@@ -127,7 +140,9 @@ class PointerEventsMixin:
             return
         point = self.canvas_to_doc(event)
         tool = self.tool.get()
-        if tool in ["brush", "eraser", "blur_tool", "sharpen_tool", "dodge", "burn", "clone", "healing", "spot_healing"]:
+        if tool == "direct_select":
+            self.path_pointer_drag(point, event.state)
+        elif tool in ["brush", "eraser", "blur_tool", "sharpen_tool", "dodge", "burn", "clone", "healing", "spot_healing"]:
             self.paint_line(self.last_point or point, point, pointer_pressure(event))
             self.last_point = point
         elif tool == "move" and self._object_resize_handle is not None:
@@ -138,8 +153,20 @@ class PointerEventsMixin:
                 layer = self.doc.get_layer(self._move_layer_id or "")
                 if layer is not None:
                     old_bounds = self._move_last_bounds or self.layer_render_bounds(layer)
-                    self.doc.move_active_layer(dx, dy)
-                    new_bounds = self.layer_render_bounds(layer)
+                    active = self.doc.active_layer
+                    for index, candidate in enumerate(self.doc.layers):
+                        if candidate.id not in self._move_group_starts:
+                            continue
+                        self.doc.active_layer = index
+                        self.doc.move_active_layer(dx, dy)
+                    self.doc.active_layer = active
+                    new_bounds = None
+                    for candidate in self.doc.layers:
+                        if candidate.id in self._move_group_starts:
+                            bounds = self.layer_render_bounds(candidate)
+                            if bounds is not None:
+                                new_bounds = bounds if new_bounds is None else union_rect(new_bounds, bounds)
+                    new_bounds = new_bounds or self.layer_render_bounds(layer)
                     dirty = union_rect(old_bounds, new_bounds)
                     self._move_last_bounds = new_bounds
                     self.drag_start = point
@@ -173,7 +200,9 @@ class PointerEventsMixin:
             return
         point = self.canvas_to_doc(event)
         tool = self.tool.get()
-        if tool in ["brush", "eraser", "blur_tool", "sharpen_tool", "dodge", "burn", "clone", "healing", "spot_healing"]:
+        if tool == "direct_select":
+            self.finish_path_drag()
+        elif tool in ["brush", "eraser", "blur_tool", "sharpen_tool", "dodge", "burn", "clone", "healing", "spot_healing"]:
             self.end_stroke(f"{tool.title()} stroke")
             self._source_anchor.end_stroke()
             self._clone_anchor_target = None
@@ -201,6 +230,7 @@ class PointerEventsMixin:
                         self.doc.layer_selection_mask(self.doc.layer),
                         kind,
                         stops,
+                        self.current_gradient_definition(),
                     ),
                 )
             self.clear_gradient_preview()

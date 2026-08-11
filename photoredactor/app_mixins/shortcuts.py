@@ -193,7 +193,8 @@ class ShortcutsMixin:
         if context == "layers":
             self.delete_layer()
         elif context == "canvas":
-            self.delete_selected_pixels()
+            if not self.delete_selected_anchors():
+                self.delete_selected_pixels()
         return "break"
 
     def shortcut_copy(self, _event=None):

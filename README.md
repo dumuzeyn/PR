@@ -125,9 +125,12 @@ The print preparation window can export four process plates and one grayscale TI
 
 - Shapes are created corner-to-corner. `Shift` keeps proportions, `Alt` creates from the center, and both modifiers can be combined.
 - With Move selected, clicking visible Shape/Text content activates the topmost matching layer; hidden layers are ignored and locked layers can be selected but not moved.
+- Move Auto-Select offers `Слой`, `Группа` and `Выкл`. Selected layers can be grouped or ungrouped from the Layer menu; group membership is saved in projects and a group drag is one Undo operation.
 - Dragging moves the selected object live. Arrow keys move it by 1 px and `Shift` + arrow by 10 px.
 - Shape handles resize on one or two axes. `Shift` keeps proportions and `Alt` resizes around the center.
 - One drag creates one compact history command. Move and resize redraw only affected render tiles and do not store full-document snapshots.
+- Bezier paths are edited directly on the canvas with separate path, node, add, delete and convert tools. Anchors support multi-selection, linked or independent handles and grid snapping.
+- Shape and text properties stay in the Properties tab. Shapes expose geometry, appearance and editable gradients; text exposes character, paragraph, vertical type and text-on-path settings.
 - With a selection tool active, right-clicking outside the selected mask clears the selection; right-clicking inside keeps it.
 
 ## Plugins and actions

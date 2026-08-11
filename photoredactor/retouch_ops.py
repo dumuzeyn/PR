@@ -290,13 +290,19 @@ def apply_gradient(
     selection_mask: np.ndarray | None = None,
     kind: str = "linear",
     stops: list[Any] | None = None,
+    options: dict[str, Any] | None = None,
 ) -> None:
     if layer.locked:
         return
     x1, y1, x2, y2 = (int(value) for value in vector)
     gradient_stops = stops or [(0.0, start), (1.0, end)]
     height, width = layer.pixels.shape[:2]
-    patch = GradientEngine.render(width, height, (x1, y1), (x2, y2), gradient_stops, kind, (layer.x, layer.y))
+    options = options or {}
+    patch = GradientEngine.render(
+        width, height, (x1, y1), (x2, y2), gradient_stops, kind, (layer.x, layer.y),
+        options.get("opacity_stops"), bool(options.get("reverse", False)),
+        bool(options.get("dither", False)), bool(options.get("transparency", True)),
+    )
     if selection_mask is None:
         layer.pixels[:] = patch
     else:

@@ -82,6 +82,7 @@ class ToolOptionsBaseMixin:
         gradient_mid_enabled: tk.BooleanVar,
         gradient_mid_position: tk.DoubleVar,
         pick_gradient_mid,
+        open_gradient_editor,
         crop_aspect: tk.StringVar,
         crop_custom_width: tk.IntVar,
         crop_custom_height: tk.IntVar,
@@ -100,7 +101,7 @@ class ToolOptionsBaseMixin:
         edit_text_path,
         tooltip_factory=None,
         compact: bool = False,
-        auto_select: tk.BooleanVar | None = None,
+        auto_select: tk.StringVar | None = None,
         color_provider=None,
     ) -> None:
         super().__init__(parent)
@@ -180,6 +181,7 @@ class ToolOptionsBaseMixin:
         self.gradient_mid_enabled = gradient_mid_enabled
         self.gradient_mid_position = gradient_mid_position
         self.pick_gradient_mid = pick_gradient_mid
+        self.open_gradient_editor = open_gradient_editor
         self.crop_aspect = crop_aspect
         self.crop_custom_width = crop_custom_width
         self.crop_custom_height = crop_custom_height
@@ -353,7 +355,8 @@ class ToolOptionsBaseMixin:
         primary = ttk.Frame(self.body)
         primary.pack(side=tk.LEFT, fill=tk.X, expand=True)
         if tool == "move" and self.auto_select is not None:
-            ttk.Checkbutton(primary, text="Автовыбор", variable=self.auto_select).pack(side=tk.LEFT, padx=4)
+            ttk.Label(primary, text="Автовыбор", style="Topbar.TLabel").pack(side=tk.LEFT, padx=(6, 2))
+            ttk.Combobox(primary, textvariable=self.auto_select, values=("Слой", "Группа", "Выкл"), state="readonly", width=8).pack(side=tk.LEFT, padx=(0, 4), pady=4)
         elif tool in BRUSH_TOOLS:
             self._compact_spin(primary, "Размер", self.brush_size, 1, 220, 5)
             variable = self.opacity if tool in {"brush", "eraser", "clone"} else self.exposure if tool in {"dodge", "burn"} else self.retouch_strength
@@ -434,10 +437,7 @@ class ToolOptionsBaseMixin:
             ttk.Checkbutton(parent, text="Выровненный", variable=self.clone_aligned).pack(side=tk.LEFT, padx=3)
             ttk.Button(parent, text="Источник...", command=self.open_clone_source_panel).pack(side=tk.LEFT, padx=3)
         elif tool == "gradient" and (self.gradient_mode.get() == "Заливка" or self.gradient_object_fill.get() == "Градиент"):
-            ttk.Checkbutton(parent, text="Средняя точка", variable=self.gradient_mid_enabled, command=lambda: self.after_idle(self.render)).pack(side=tk.LEFT, padx=3)
-            if self.gradient_mid_enabled.get():
-                self._compact_percent(parent, "Позиция", self.gradient_mid_position)
-                ttk.Button(parent, text="Цвет", command=self.pick_gradient_mid).pack(side=tk.LEFT, padx=3)
+            ttk.Button(parent, text="Редактор градиента...", command=self.open_gradient_editor).pack(side=tk.LEFT, padx=3)
         elif tool == "text":
             self._compact_combo(parent, "Выравнивание", self.text_align, ["left", "center", "right"], 9)
             self._compact_spin(parent, "Интервал", self.text_tracking, -100, 500, 5)

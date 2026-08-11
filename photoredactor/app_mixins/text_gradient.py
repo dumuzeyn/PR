@@ -246,6 +246,8 @@ class TextGradientMixin:
             self.push_command(TextDataCommand("Text properties", layer.id, before, after, before_name, layer.name))
 
     def current_gradient_stops(self) -> list[dict[str, object]]:
+        if self.gradient_definition is not None:
+            return copy.deepcopy(list(self.gradient_definition.get("stops", [])))
         stops: list[dict[str, object]] = [
             {"position": 0.0, "color": list(self.foreground)},
             {"position": 1.0, "color": list(self.background)},
@@ -256,6 +258,24 @@ class TextGradientMixin:
                 "color": list(self.gradient_mid_color),
             })
         return sorted(stops, key=lambda stop: float(stop["position"]))
+
+    def current_gradient_definition(self) -> dict[str, object]:
+        definition = copy.deepcopy(self.gradient_definition or {})
+        definition["stops"] = self.current_gradient_stops()
+        definition.setdefault("opacity_stops", [{"position": 0.0, "opacity": 1.0}, {"position": 1.0, "opacity": 1.0}])
+        definition.setdefault("reverse", False)
+        definition.setdefault("dither", False)
+        definition.setdefault("transparency", True)
+        return definition
+
+    def gradient_render_options(self) -> dict[str, object]:
+        definition = self.current_gradient_definition()
+        return {
+            "opacity_stops": definition["opacity_stops"],
+            "reverse": definition["reverse"],
+            "dither": definition["dither"],
+            "transparency": definition["transparency"],
+        }
 
     def pick_gradient_mid(self) -> None:
         color = colorchooser.askcolor(color=self.color_hex(self.gradient_mid_color), title="Средняя точка градиента")[0]
@@ -306,6 +326,7 @@ class TextGradientMixin:
             self.current_gradient_stops(),
             self.current_gradient_kind(),
             (x1 * scale, y1 * scale),
+            **self.gradient_render_options(),
         )
         alpha = np.full((height, width), 190, dtype=np.uint8)
         if self.doc.selection_mask is not None:
@@ -360,7 +381,7 @@ class TextGradientMixin:
         else:
             pixels = GradientEngine.render(
                 width, height, scaled_start, scaled_end, self.current_gradient_stops(),
-                self.current_gradient_kind(), origin,
+                self.current_gradient_kind(), origin, **self.gradient_render_options(),
             )
         mask_image = Image.new("L", (width, height), 0)
         draw = ImageDraw.Draw(mask_image)
@@ -419,9 +440,9 @@ class TextGradientMixin:
             "type": self.current_gradient_kind(),
             "start": list(start),
             "end": list(end),
-            "stops": self.current_gradient_stops(),
             "opacity": 1.0,
         }
+        gradient.update(self.current_gradient_definition())
         texture = {
             "type": {"Шахматная": "checker", "Полосы": "stripes", "Точки": "dots"}.get(self.gradient_texture.get(), "checker"),
             "size": 18,

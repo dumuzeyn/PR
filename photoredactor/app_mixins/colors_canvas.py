@@ -202,6 +202,7 @@ class ColorsCanvasMixin:
         if hasattr(self, "canvas"):
             self.canvas.configure(cursor=cursor)
         self.update_clone_source_marker()
+        self.update_path_overlay()
 
     def tool_label(self, value: str) -> str:
         for label, tool_id, _description in TOOL_DEFINITIONS:
