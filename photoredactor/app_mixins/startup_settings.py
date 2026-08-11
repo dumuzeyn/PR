@@ -78,6 +78,8 @@ class StartupSettingsMixin:
         self.selection_feather = tk.IntVar(value=0)
         self.selection_antialias = tk.BooleanVar(value=True)
         self.magic_contiguous = tk.BooleanVar(value=True)
+        self.magic_sample_all_layers = tk.BooleanVar(value=False)
+        self.color_range_sample_all_layers = tk.BooleanVar(value=False)
         self.tolerance = tk.IntVar(value=24)
         self.color_range_sample_hex = tk.StringVar(value="#000000")
         self.clone_aligned = tk.BooleanVar(value=True)

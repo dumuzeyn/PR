@@ -220,6 +220,22 @@ def correct_selection_edges(mask: np.ndarray, image: np.ndarray, radius: int = 3
     blend = binary.astype(np.float32) * (1.0 - strength) + sharpened.astype(np.float32) * strength
     return np.where(blend >= 128, 255, 0).astype(np.uint8)
 
+def smart_radius_refine(mask: np.ndarray, image: np.ndarray, radius: int = 5, strength: float = 0.7) -> np.ndarray:
+    """Refine uncertain boundaries while retaining the mask's fractional alpha."""
+    radius = max(1, int(radius))
+    strength = float(np.clip(strength, 0.0, 1.0))
+    source = np.asarray(mask, dtype=np.uint8)
+    binary = np.where(source >= 128, 255, 0).astype(np.uint8)
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (radius * 2 + 1, radius * 2 + 1))
+    boundary = cv2.subtract(cv2.dilate(binary, kernel), cv2.erode(binary, kernel))
+    if not np.any(boundary):
+        return source.copy()
+    confidence = selection_edge_confidence(binary, image, radius).astype(np.float32) / 255.0
+    adaptive = cv2.bilateralFilter(source, max(3, radius * 2 + 1), 24 + radius * 2, 24 + radius * 2)
+    uncertain = (boundary.astype(np.float32) / 255.0) * (1.0 - confidence) * strength
+    result = source.astype(np.float32) * (1.0 - uncertain) + adaptive.astype(np.float32) * uncertain
+    return np.clip(result, 0, 255).astype(np.uint8)
+
 def subject_selection_mask(pixels: np.ndarray, sensitivity: float = 0.5) -> np.ndarray:
     if pixels.size == 0:
         return np.zeros(pixels.shape[:2], dtype=np.uint8)

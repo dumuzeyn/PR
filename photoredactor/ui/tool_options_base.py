@@ -52,6 +52,9 @@ class ToolOptionsBaseMixin:
         selection_feather: tk.IntVar,
         selection_antialias: tk.BooleanVar,
         magic_contiguous: tk.BooleanVar,
+        magic_sample_all_layers: tk.BooleanVar,
+        color_range_sample_all_layers: tk.BooleanVar,
+        open_color_range_dialog: Callable[[], None],
         clone_aligned: tk.BooleanVar,
         clone_sampling: tk.StringVar,
         clone_source_x: tk.IntVar,
@@ -147,6 +150,9 @@ class ToolOptionsBaseMixin:
         self.selection_feather = selection_feather
         self.selection_antialias = selection_antialias
         self.magic_contiguous = magic_contiguous
+        self.magic_sample_all_layers = magic_sample_all_layers
+        self.color_range_sample_all_layers = color_range_sample_all_layers
+        self.open_color_range_dialog = open_color_range_dialog
         self.clone_aligned = clone_aligned
         self.clone_sampling = clone_sampling
         self.clone_source_x = clone_source_x
@@ -310,7 +316,9 @@ class ToolOptionsBaseMixin:
             ttk.Label(self.body, text="Цвет образца").pack(anchor=tk.W, padx=8, pady=(6, 0))
             sample = tk.Label(self.body, textvariable=self.color_range_sample_hex, background=self.color_range_sample_hex.get(), relief=tk.SOLID, borderwidth=1)
             sample.pack(fill=tk.X, padx=8, pady=(2, 4))
-            ttk.Label(self.body, text="Кликните по цвету на холсте. Допуск расширяет диапазон похожих цветов по всему слою.", wraplength=220, justify=tk.LEFT).pack(fill=tk.X, padx=8, pady=(0, 6))
+            ttk.Checkbutton(self.body, text="Образец со всех слоёв", variable=self.color_range_sample_all_layers).pack(anchor=tk.W, padx=8, pady=(3, 0))
+            ttk.Button(self.body, text="Диапазон с предпросмотром...", command=self.open_color_range_dialog).pack(fill=tk.X, padx=8, pady=(6, 4))
+            ttk.Label(self.body, text="Shift добавляет образец, Ctrl вычитает его.", wraplength=220, justify=tk.LEFT).pack(fill=tk.X, padx=8, pady=(0, 6))
         if tool == "quick_selection":
             self._add_scale("Сглаживание края", self.quick_smooth, 0, 12, "px", integer=True)
             self._add_scale("Радиус анализа", self.quick_edge_radius, 0, 12, "px", integer=True)
@@ -326,6 +334,8 @@ class ToolOptionsBaseMixin:
                 ttk.Checkbutton(self.body, text="Сглаживание", variable=self.selection_antialias).pack(anchor=tk.W, padx=8, pady=(6, 0))
             if tool == "magic_wand":
                 ttk.Checkbutton(self.body, text="Смежные пиксели", variable=self.magic_contiguous).pack(anchor=tk.W, padx=8, pady=(6, 0))
+                ttk.Checkbutton(self.body, text="Образец со всех слоёв", variable=self.magic_sample_all_layers).pack(anchor=tk.W, padx=8, pady=(4, 0))
+                ttk.Checkbutton(self.body, text="Сглаживание", variable=self.selection_antialias).pack(anchor=tk.W, padx=8, pady=(4, 0))
             text = ttk.Label(self.body, text="Shift добавляет к выделению, Ctrl вычитает, Shift+Ctrl пересекает.", wraplength=220, justify=tk.LEFT)
             text.pack(fill=tk.X, padx=8, pady=(4, 8))
             shown = True
@@ -385,6 +395,12 @@ class ToolOptionsBaseMixin:
                 self._compact_spin(primary, "Допуск", self.tolerance, 0, 128, 4)
             if tool == "quick_selection":
                 self._compact_spin(primary, "Размер", self.brush_size, 1, 220, 5)
+            elif tool == "magic_wand":
+                ttk.Checkbutton(primary, text="Смежные", variable=self.magic_contiguous).pack(side=tk.LEFT, padx=3)
+                ttk.Checkbutton(primary, text="Все слои", variable=self.magic_sample_all_layers).pack(side=tk.LEFT, padx=3)
+            elif tool == "color_range":
+                ttk.Checkbutton(primary, text="Все слои", variable=self.color_range_sample_all_layers).pack(side=tk.LEFT, padx=3)
+                ttk.Button(primary, text="Предпросмотр...", command=self.open_color_range_dialog).pack(side=tk.LEFT, padx=3)
         elif tool == "fill":
             self._compact_single_color(primary, self.pick_foreground, 0, "Цвет заливки")
             self._compact_spin(primary, "Допуск", self.tolerance, 0, 128, 4)

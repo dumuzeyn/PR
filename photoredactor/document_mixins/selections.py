@@ -11,6 +11,7 @@ from ..text_ops import *
 from ..shape_ops import *
 from ..content_ops import *
 from ..adjustment_ops import *
+from ..selection_color import perceptual_color_mask, combine_sample_masks
 
 
 class SelectionsDocumentMixin:
@@ -60,50 +61,41 @@ class SelectionsDocumentMixin:
             mask[:, x : x + 1] = 255
         self.apply_selection_mask(mask, mode)
 
-    def magic_wand_selection(self, layer: Layer, x: int, y: int, tolerance: int, mode: str = "replace", contiguous: bool = True) -> None:
-        lx, ly = int(x) - layer.x, int(y) - layer.y
-        if lx < 0 or ly < 0 or lx >= layer.pixels.shape[1] or ly >= layer.pixels.shape[0]:
+    def magic_wand_selection(
+        self, layer: Layer, x: int, y: int, tolerance: int, mode: str = "replace",
+        contiguous: bool = True, antialias: bool = True, sample_all_layers: bool = False,
+    ) -> None:
+        source = self.composite(False) if sample_all_layers else layer.pixels
+        origin_x, origin_y = (0, 0) if sample_all_layers else (layer.x, layer.y)
+        lx, ly = int(x) - origin_x, int(y) - origin_y
+        if lx < 0 or ly < 0 or lx >= source.shape[1] or ly >= source.shape[0]:
             return
-        tolerance = max(0, int(tolerance))
-        seed = layer.pixels[ly, lx]
-        if tolerance == 0:
-            soft = np.where(np.all(layer.pixels == seed, axis=2), 255, 0).astype(np.uint8)
-        else:
-            lab = cv2.cvtColor(layer.pixels[:, :, :3], cv2.COLOR_RGB2LAB).astype(np.float32)
-            seed_lab = lab[ly, lx]
-            color_distance = np.linalg.norm(lab - seed_lab, axis=2)
-            alpha_distance = np.abs(layer.pixels[:, :, 3].astype(np.float32) - float(seed[3])) / 255.0 * 100.0
-            distance = np.sqrt(color_distance * color_distance + alpha_distance * alpha_distance)
-            outer = max(1.0, tolerance * 0.9)
-            inner = outer * 0.55
-            soft = np.clip((outer - distance) / max(1e-6, outer - inner) * 255.0, 0, 255).astype(np.uint8)
+        seed = tuple(int(value) for value in source[ly, lx])
+        soft = perceptual_color_mask(source, [seed], tolerance, antialias)
         candidates = (soft > 0).astype(np.uint8)
         if contiguous:
             _, labels, _, _ = cv2.connectedComponentsWithStats(candidates, 4)
             local = np.where(labels == labels[ly, lx], soft, 0).astype(np.uint8)
         else:
             local = soft
-        self.apply_selection_mask(self._layer_mask_to_document(layer, local), mode)
+        mask = local if sample_all_layers else self._layer_mask_to_document(layer, local)
+        self.apply_selection_mask(mask, mode)
 
-    def color_range_selection(self, layer: Layer, x: int, y: int, tolerance: int, mode: str = "replace") -> None:
-        lx, ly = int(x) - layer.x, int(y) - layer.y
-        if lx < 0 or ly < 0 or lx >= layer.pixels.shape[1] or ly >= layer.pixels.shape[0]:
+    def color_range_selection(
+        self, layer: Layer, x: int, y: int, tolerance: int, mode: str = "replace",
+        samples: list[tuple[int, int, int, int]] | None = None,
+        excluded: list[tuple[int, int, int, int]] | None = None,
+        antialias: bool = True, sample_all_layers: bool = False,
+    ) -> None:
+        source = self.composite(False) if sample_all_layers else layer.pixels
+        origin_x, origin_y = (0, 0) if sample_all_layers else (layer.x, layer.y)
+        lx, ly = int(x) - origin_x, int(y) - origin_y
+        if lx < 0 or ly < 0 or lx >= source.shape[1] or ly >= source.shape[0]:
             return
-        tolerance = max(0, int(tolerance))
-        seed_rgba = layer.pixels[ly, lx]
-        if tolerance == 0:
-            local = np.all(layer.pixels == seed_rgba, axis=2).astype(np.uint8) * 255
-        else:
-            rgb = layer.pixels[:, :, :3].astype(np.float32) / 255.0
-            lab = cv2.cvtColor(rgb, cv2.COLOR_RGB2LAB)
-            seed_lab = lab[ly, lx]
-            color_distance = np.linalg.norm(lab - seed_lab, axis=2)
-            alpha_distance = np.abs(layer.pixels[:, :, 3].astype(np.float32) - float(seed_rgba[3])) / 255.0 * 100.0
-            perceptual_distance = np.sqrt(color_distance * color_distance + alpha_distance * alpha_distance)
-            outer = max(1.0, tolerance * 0.9)
-            inner = outer * 0.55
-            local = np.clip((outer - perceptual_distance) / max(1e-6, outer - inner) * 255.0, 0, 255).astype(np.uint8)
-        self.apply_selection_mask(self._layer_mask_to_document(layer, local), mode)
+        included = list(samples or [tuple(int(value) for value in source[ly, lx])])
+        local = combine_sample_masks(source, included, list(excluded or []), tolerance, antialias)
+        mask = local if sample_all_layers else self._layer_mask_to_document(layer, local)
+        self.apply_selection_mask(mask, mode)
 
     def _quick_selection_mask(
         self,
@@ -118,6 +110,13 @@ class SelectionsDocumentMixin:
         local_union = np.zeros(layer.pixels.shape[:2], dtype=np.uint8)
         radius = max(1, int(radius))
         tolerance = max(0, int(tolerance))
+        rgb = layer.pixels[:, :, :3].astype(np.float32) / 255.0
+        lab = cv2.cvtColor(rgb, cv2.COLOR_RGB2LAB)
+        gray = cv2.cvtColor(layer.pixels[:, :, :3], cv2.COLOR_RGB2GRAY)
+        gradient_x = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
+        gradient_y = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
+        edge_map = cv2.magnitude(gradient_x, gradient_y)
+        edge_limit = 110.0 - float(np.clip(edge_strength, 0.0, 1.0)) * 78.0
         for x, y in points:
             lx, ly = int(x) - layer.x, int(y) - layer.y
             if lx < 0 or ly < 0 or lx >= layer.pixels.shape[1] or ly >= layer.pixels.shape[0]:
@@ -127,16 +126,19 @@ class SelectionsDocumentMixin:
             sample = layer.pixels[y1:y2, x1:x2]
             opaque = sample[:, :, 3] > 0
             if np.any(opaque):
-                seed = sample[:, :, :3][opaque].mean(axis=0)
+                seed = np.median(lab[y1:y2, x1:x2][opaque], axis=0)
             else:
-                seed = layer.pixels[ly, lx, :3].astype(np.float32)
+                seed = lab[ly, lx]
             gate_radius = radius * 3
             gx1, gy1 = max(0, lx - gate_radius), max(0, ly - gate_radius)
             gx2 = min(layer.pixels.shape[1], lx + gate_radius + 1)
             gy2 = min(layer.pixels.shape[0], ly + gate_radius + 1)
             region = layer.pixels[gy1:gy2, gx1:gx2]
-            diff = np.abs(region[:, :, :3].astype(np.float32) - seed).max(axis=2)
-            candidates = ((diff <= tolerance) & (region[:, :, 3] > 0)).astype(np.uint8)
+            color_distance = np.linalg.norm(lab[gy1:gy2, gx1:gx2] - seed, axis=2)
+            perceptual_limit = max(1.0, float(tolerance) * 0.9)
+            local_edges = edge_map[gy1:gy2, gx1:gx2]
+            candidates = ((color_distance <= perceptual_limit) & (local_edges <= edge_limit) & (region[:, :, 3] > 0)).astype(np.uint8)
+            candidates[ly - gy1, lx - gx1] = 1
             _, labels, _, _ = cv2.connectedComponentsWithStats(candidates, 4)
             rx, ry = lx - gx1, ly - gy1
             label = labels[ry, rx]

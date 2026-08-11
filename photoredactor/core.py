@@ -3,6 +3,8 @@ from .layer import Layer
 from .document import Document
 from .geometry_ops import *
 from .selection_ops import *
+from .selection_color import *
+from .segmentation import *
 from .filter_ops import *
 from .render_ops import *
 from .brush_engine import *

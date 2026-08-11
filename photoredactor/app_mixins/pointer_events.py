@@ -55,16 +55,21 @@ class PointerEventsMixin:
         elif tool == "magic_wand":
             mode = self.selection_mode_from_event(event)
             contiguous = bool(self.magic_contiguous.get())
-            self.run_selection_command("Magic wand selection", lambda: self.doc.magic_wand_selection(self.doc.layer, point[0], point[1], int(self.tolerance.get()), mode, contiguous))
+            antialias = bool(self.selection_antialias.get())
+            sample_all = bool(self.magic_sample_all_layers.get())
+            self.run_selection_command("Magic wand selection", lambda: self.doc.magic_wand_selection(self.doc.layer, point[0], point[1], int(self.tolerance.get()), mode, contiguous, antialias, sample_all))
         elif tool == "color_range":
             mode = self.selection_mode_from_event(event)
-            lx, ly = point[0] - self.doc.layer.x, point[1] - self.doc.layer.y
-            if 0 <= lx < self.doc.layer.pixels.shape[1] and 0 <= ly < self.doc.layer.pixels.shape[0]:
-                sample = tuple(int(value) for value in self.doc.layer.pixels[ly, lx])
+            sample_all = bool(self.color_range_sample_all_layers.get())
+            source = self.doc.composite(False) if sample_all else self.doc.layer.pixels
+            ox, oy = (0, 0) if sample_all else (self.doc.layer.x, self.doc.layer.y)
+            lx, ly = point[0] - ox, point[1] - oy
+            if 0 <= lx < source.shape[1] and 0 <= ly < source.shape[0]:
+                sample = tuple(int(value) for value in source[ly, lx])
                 self.color_range_sample_hex.set(self.color_hex(sample).upper())
                 if hasattr(self, "tool_options_panel"):
                     self.tool_options_panel.render()
-            self.run_selection_command("Color range selection", lambda: self.doc.color_range_selection(self.doc.layer, point[0], point[1], int(self.tolerance.get()), mode))
+            self.run_selection_command("Color range selection", lambda: self.doc.color_range_selection(self.doc.layer, point[0], point[1], int(self.tolerance.get()), mode, antialias=bool(self.selection_antialias.get()), sample_all_layers=sample_all))
             self.status_text(f"Диапазон цвета {self.color_range_sample_hex.get()}, допуск {int(self.tolerance.get())}")
         elif tool == "quick_selection":
             self._quick_points = [point]

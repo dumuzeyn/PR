@@ -269,6 +269,8 @@ class MenusToolsMixin:
 
         models = tk.Menu(menu, tearoff=False)
         menu.add_cascade(label="Модели", menu=models)
+        models.add_command(label="Модель автоматического выделения...", command=self.segmentation_model_folder)
+        models.add_separator()
         models.add_command(label="Управление локальными моделями...", command=self.model_manager_dialog)
         models.add_command(label="Настройки Stability AI...", command=self.generative_settings_dialog)
 
@@ -334,6 +336,9 @@ class MenusToolsMixin:
             selection_feather=self.selection_feather,
             selection_antialias=self.selection_antialias,
             magic_contiguous=self.magic_contiguous,
+            magic_sample_all_layers=self.magic_sample_all_layers,
+            color_range_sample_all_layers=self.color_range_sample_all_layers,
+            open_color_range_dialog=self.color_range_dialog,
             clone_aligned=self.clone_aligned,
             clone_sampling=self.clone_sampling,
             clone_source_x=self.clone_source_x,

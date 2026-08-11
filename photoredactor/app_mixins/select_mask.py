@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from ..app_shared import *
+from ..selection_ops import smart_radius_refine
 
 
 class SelectMaskMixin:
@@ -97,12 +98,14 @@ class SelectMaskMixin:
         brush_size = tk.IntVar(value=36)
         edge_radius = tk.IntVar(value=7)
         edge_strength = tk.DoubleVar(value=0.8)
+        smart_radius = tk.BooleanVar(value=True)
         decontaminate = tk.BooleanVar(value=False)
         decontaminate_strength = tk.DoubleVar(value=0.5)
         working = source.copy()
         stroke_history: list[np.ndarray] = []
         last_point: list[tuple[int, int] | None] = [None]
         result: dict[str, object] | None = None
+        preview_after: list[str | None] = [None]
 
         header = ttk.Frame(dialog, padding=(12, 10, 12, 6))
         header.pack(fill=tk.X)
@@ -131,9 +134,13 @@ class SelectMaskMixin:
         }
 
         def current_mask() -> np.ndarray:
-            return refine_selection_mask(working, int(smooth.get()), int(feather.get()), float(contrast.get()), int(shift.get()))
+            mask = refine_selection_mask(working, int(smooth.get()), int(feather.get()), float(contrast.get()), int(shift.get()))
+            if bool(smart_radius.get()):
+                mask = smart_radius_refine(mask, composite, int(edge_radius.get()), float(edge_strength.get()))
+            return mask
 
         def update_preview(*_args) -> None:
+            preview_after[0] = None
             try:
                 mask = current_mask()
             except (tk.TclError, ValueError):
@@ -160,11 +167,19 @@ class SelectMaskMixin:
             soft = int(np.count_nonzero((mask > 0) & (mask < 255)))
             stats.configure(text=f"Выбрано: {selected} px  |  Полупрозрачных: {soft} px")
 
+        def schedule_preview(*_args) -> None:
+            if preview_after[0] is not None:
+                try:
+                    dialog.after_cancel(preview_after[0])
+                except tk.TclError:
+                    pass
+            preview_after[0] = dialog.after(35, update_preview)
+
         def add_spin(parent: ttk.Frame, label: str, variable, from_: float, to: float, increment: float = 1.0) -> None:
             row = ttk.Frame(parent)
             row.pack(fill=tk.X, pady=3)
             ttk.Label(row, text=label).pack(side=tk.LEFT)
-            ttk.Spinbox(row, textvariable=variable, from_=from_, to=to, increment=increment, width=9, command=update_preview).pack(side=tk.RIGHT)
+            ttk.Spinbox(row, textvariable=variable, from_=from_, to=to, increment=increment, width=9, command=schedule_preview).pack(side=tk.RIGHT)
 
         ttk.Label(controls, text="Кисть уточнения", style="PanelTitle.TLabel").pack(anchor=tk.W, pady=(2, 4))
         brush_box = ttk.Combobox(controls, textvariable=brush_mode, values=list(mode_ids), state="readonly")
@@ -172,6 +187,7 @@ class SelectMaskMixin:
         add_spin(controls, "Размер", brush_size, 3, 300)
         add_spin(controls, "Радиус анализа", edge_radius, 1, 40)
         add_spin(controls, "Сила", edge_strength, 0.05, 1.0, 0.05)
+        ttk.Checkbutton(controls, text="Умный радиус", variable=smart_radius, command=schedule_preview).pack(anchor=tk.W, pady=(2, 4))
         brush_buttons = ttk.Frame(controls)
         brush_buttons.pack(fill=tk.X, pady=(4, 8))
 
@@ -180,13 +196,13 @@ class SelectMaskMixin:
             if not np.array_equal(working, source):
                 stroke_history.append(working.copy())
             working = source.copy()
-            update_preview()
+            schedule_preview()
 
         def undo_brush() -> None:
             nonlocal working
             if stroke_history:
                 working = stroke_history.pop()
-                update_preview()
+                schedule_preview()
 
         ttk.Button(brush_buttons, text="Отменить штрих", command=undo_brush).pack(side=tk.LEFT, fill=tk.X, expand=True)
         ttk.Button(brush_buttons, text="Сбросить", command=reset_brushes).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(5, 0))
@@ -252,7 +268,7 @@ class SelectMaskMixin:
                 max(1, int(edge_radius.get())),
                 float(edge_strength.get()),
             )
-            update_preview()
+            schedule_preview()
 
         def brush_press(event) -> None:
             point = canvas_to_document(event)
@@ -271,6 +287,7 @@ class SelectMaskMixin:
 
         def brush_release(_event) -> None:
             last_point[0] = None
+            update_preview()
 
         def brush_cursor(event) -> None:
             preview.delete("brush-cursor")
@@ -303,9 +320,9 @@ class SelectMaskMixin:
         preview.bind("<ButtonRelease-1>", brush_release)
         preview.bind("<Motion>", brush_cursor)
         preview.bind("<Leave>", lambda _event: preview.delete("brush-cursor"))
-        preview.bind("<Configure>", update_preview)
-        for variable in [smooth, feather, contrast, shift, decontaminate_strength]:
-            variable.trace_add("write", update_preview)
+        preview.bind("<Configure>", schedule_preview)
+        for variable in [smooth, feather, contrast, shift, edge_radius, edge_strength, decontaminate_strength]:
+            variable.trace_add("write", schedule_preview)
         dialog.protocol("WM_DELETE_WINDOW", cancel)
         self._select_mask_canvas = preview
         self._select_mask_brush_mode = brush_mode
@@ -346,6 +363,38 @@ class SelectMaskMixin:
             overlay = Image.new("RGBA", source.size, (255, 36, 68, 0))
             overlay.putalpha(mask_image.point(lambda value: int(value * 0.55)))
             canvas.alpha_composite(overlay, (x, y))
+            return canvas
+        if mode == SELECT_MASK_PREVIEW_ONION:
+            canvas = Image.new("RGBA", preview_size, (44, 46, 52, 255))
+            faded = source.copy()
+            faded.putalpha(mask_image.point(lambda value: 72 + round(value * 0.72)))
+            canvas.alpha_composite(faded, (x, y))
+            return canvas
+        if mode == SELECT_MASK_PREVIEW_MARCHING:
+            canvas = Image.new("RGBA", preview_size, (44, 46, 52, 255))
+            canvas.alpha_composite(source, (x, y))
+            mask_array = np.asarray(mask_image, dtype=np.uint8)
+            binary = np.where(mask_array >= 128, 255, 0).astype(np.uint8)
+            contour = cv2.morphologyEx(binary, cv2.MORPH_GRADIENT, np.ones((3, 3), dtype=np.uint8)) > 0
+            yy, xx = np.indices(contour.shape)
+            ants = np.zeros((source.height, source.width, 4), dtype=np.uint8)
+            ants[contour & (((xx + yy) // 4) % 2 == 0)] = (255, 255, 255, 255)
+            ants[contour & (((xx + yy) // 4) % 2 == 1)] = (0, 0, 0, 255)
+            canvas.alpha_composite(Image.fromarray(ants, "RGBA"), (x, y))
+            return canvas
+        if mode in {SELECT_MASK_PREVIEW_BLACK, SELECT_MASK_PREVIEW_WHITE}:
+            background = (0, 0, 0, 255) if mode == SELECT_MASK_PREVIEW_BLACK else (255, 255, 255, 255)
+            canvas = Image.new("RGBA", preview_size, background)
+            cutout = source.copy()
+            cutout.putalpha(mask_image)
+            canvas.alpha_composite(cutout, (x, y))
+            return canvas
+        if mode == SELECT_MASK_PREVIEW_LAYERS:
+            canvas = Image.new("RGBA", preview_size, (44, 46, 52, 255))
+            canvas.alpha_composite(source, (x, y))
+            dim = Image.new("RGBA", source.size, (0, 0, 0, 0))
+            dim.putalpha(mask_image.point(lambda value: round((255 - value) * 0.62)))
+            canvas.alpha_composite(dim, (x, y))
             return canvas
         if mode == SELECT_MASK_PREVIEW_CUTOUT:
             checker = Image.new("RGBA", preview_size, (44, 46, 52, 255))
