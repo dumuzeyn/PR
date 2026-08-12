@@ -298,14 +298,17 @@ def apply_gradient(
     gradient_stops = stops or [(0.0, start), (1.0, end)]
     height, width = layer.pixels.shape[:2]
     options = options or {}
+    output_depth = layer.working_depth if layer.working_pixels is not None else 8
     patch = GradientEngine.render(
         width, height, (x1, y1), (x2, y2), gradient_stops, kind, (layer.x, layer.y),
         options.get("opacity_stops"), bool(options.get("reverse", False)),
         bool(options.get("dither", False)), bool(options.get("transparency", True)),
+        output_depth,
     )
-    if selection_mask is None:
-        layer.pixels[:] = patch
-    else:
+    if output_depth == 8:
+        if selection_mask is None:
+            layer.pixels[:] = patch
+            return
         coverage = selection_mask.astype(np.float32) / 255.0
         target = layer.pixels.astype(np.float32)
         layer.pixels[:] = np.clip(
@@ -313,6 +316,12 @@ def apply_gradient(
             0,
             255,
         ).astype(np.uint8)
+        return
+    result = normalize_rgba(patch)
+    if selection_mask is not None:
+        coverage = selection_mask.astype(np.float32)[:, :, None] / 255.0
+        result = layer.working_rgba() * (1.0 - coverage) + result * coverage
+    layer.set_working_rgba(result, output_depth, layer.working_model)
 
 def add_text(layer: Layer, x: int, y: int, text: str, color: tuple[int, int, int, int], size: int, selection_mask: np.ndarray | None = None) -> None:
     if layer.locked:

@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 import tifffile
+import photoredactor.document_mixins.project_io as project_io
 
 from photoredactor.color_management import (
     builtin_srgb_bytes,
@@ -104,6 +105,21 @@ def test_icc_identity_preserves_float_values_exactly() -> None:
     np.testing.assert_array_equal(converted, source)
     details = profile_details(profile)
     assert details["color_space"].upper() == "RGB"
+
+
+def test_assign_profile_keeps_pixels_while_convert_recalculates(monkeypatch: pytest.MonkeyPatch) -> None:
+    document = Document.new(128, 4)
+    document.set_bit_depth(32)
+    source = np.tile(high_precision_gradient(128), (4, 1, 1))
+    document.layer.set_working_rgba(source, 32, "RGBA")
+    profile = builtin_srgb_bytes()
+    before = document.layer.working_rgba().copy()
+    document.assign_color_profile(profile)
+    np.testing.assert_array_equal(document.layer.working_rgba(), before)
+
+    monkeypatch.setattr(project_io, "convert_icc", lambda pixels, *_args, **_kwargs: np.clip(pixels * 0.8, 0.0, 1.0))
+    document.convert_color_profile(profile)
+    assert not np.array_equal(document.layer.working_rgba(), before)
 
 
 def test_precision_patch_undo_restores_exact_sub_eight_bit_values() -> None:

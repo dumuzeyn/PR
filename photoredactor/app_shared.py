@@ -148,8 +148,7 @@ from .rendering import RenderEngine
 from .gpu_acceleration import acceleration_metrics, acceleration_status, benchmark_acceleration, calibrate_acceleration, reset_acceleration_metrics
 from .large_document import gpu_status
 from .interactive_performance import benchmark_interactive_paths
-from .credential_store import CredentialStoreError, EncryptedCredentialStore
-from .generative_api import GeneratedVariant, GenerativeAPIError, MAX_SEED, STABILITY_STYLES, StabilityImageClient, validate_outpaint_dimensions, variant_seeds
+from .generative_api import GeneratedVariant, GenerativeAPIError, MAX_SEED, validate_outpaint_dimensions, variant_seeds
 from .psd_compat import PSDCompatibilityError, export_psd
 from .automation import ActionRecorder, ActionRunner, ActionStep, load_action
 from .batch_queue import BatchQueue

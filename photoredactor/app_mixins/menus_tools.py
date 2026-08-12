@@ -50,7 +50,6 @@ class MenusToolsMixin:
         edit.add_command(label="Удалить выбранные пиксели", command=self.shortcut_delete, accelerator="Delete")
         edit.add_command(label="Генеративная заливка", command=self.generative_fill_dialog)
         edit.add_command(label="История генераций", command=self.generative_history_dialog)
-        edit.add_command(label="Настройки генеративного ИИ", command=self.generative_settings_dialog)
         edit.add_separator()
         edit.add_command(label="Снять выделение", command=self.clear_selection, accelerator=accelerator("deselect"))
 
@@ -288,7 +287,6 @@ class MenusToolsMixin:
         models.add_command(label="Модель автоматического выделения...", command=self.segmentation_model_folder)
         models.add_separator()
         models.add_command(label="Управление локальными моделями...", command=self.model_manager_dialog)
-        models.add_command(label="Настройки Stability AI...", command=self.generative_settings_dialog)
 
     def _build_tools(self, parent: ttk.Frame) -> None:
         parent.configure(width=188)

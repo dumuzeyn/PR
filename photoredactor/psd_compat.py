@@ -36,6 +36,15 @@ BLEND_TO_PSD = {
     "Luminosity": BlendMode.LUMINOSITY,
 }
 PSD_TO_BLEND = {value.value: key for key, value in BLEND_TO_PSD.items()}
+PSD_EFFECT_TAGS = {
+    Tag.EFFECTS_LAYER.value, Tag.OBJECT_BASED_EFFECTS_LAYER_INFO.value,
+    Tag.OBJECT_BASED_EFFECTS_LAYER_INFO_V0.value, Tag.OBJECT_BASED_EFFECTS_LAYER_INFO_V1.value,
+}
+PSD_VECTOR_TAGS = {
+    Tag.VECTOR_MASK_AS_GLOBAL_MASK.value, Tag.VECTOR_MASK_SETTING1.value, Tag.VECTOR_MASK_SETTING2.value,
+    Tag.VECTOR_ORIGINATION_DATA.value, Tag.VECTOR_ORIGINATION_UNKNOWN.value,
+    Tag.VECTOR_STROKE_DATA.value, Tag.VECTOR_STROKE_CONTENT_DATA.value,
+}
 
 
 class PSDCompatibilityError(RuntimeError):
@@ -72,6 +81,23 @@ def _layer_image(source) -> Image.Image:
         width, height = max(1, source.width), max(1, source.height)
         return Image.new("RGBA", (width, height), (0, 0, 0, 0))
     return image.convert("RGBA")
+
+
+def _compatibility_risks(source) -> list[str]:
+    name = str(getattr(source, "name", "Слой"))
+    kind = str(getattr(source, "kind", "pixel")).lower()
+    risks: list[str] = []
+    if kind == "type":
+        risks.append(f"Текстовый слой «{name}» будет сохранён в PSD с приблизительными параметрами")
+    if kind == "smartobject":
+        risks.append(f"Photoshop Smart Object «{name}» при совместимом экспорте станет пиксельным слоем")
+    blocks = getattr(source, "tagged_blocks", {})
+    keys = {getattr(key, "value", key) for key in getattr(blocks, "keys", lambda: ())()}
+    if keys & PSD_EFFECT_TAGS:
+        risks.append(f"Эффекты Photoshop слоя «{name}» не останутся редактируемыми")
+    if keys & PSD_VECTOR_TAGS:
+        risks.append(f"Векторные данные слоя «{name}» не останутся редактируемыми")
+    return risks
 
 
 def _mask(source, size: tuple[int, int]) -> np.ndarray | None:
@@ -193,8 +219,9 @@ def _load_psd_image(psd: PSDImage, document_type, source_name: str) -> "Document
     for source, groups in _leaf_layers(psd):
         layer, warning = _import_layer(source, groups, document_type, psd.size, int(psd.depth), color_model)
         document.layers.append(layer)
-        if warning and warning not in warnings:
-            warnings.append(warning)
+        for risk in [warning, *_compatibility_risks(source)]:
+            if risk and risk not in warnings:
+                warnings.append(risk)
     if not document.layers:
         composite = psd.composite(apply_icc=False)
         document.layers.append(Layer("Сведённое изображение", pil_to_rgba_array(composite.convert("RGBA"))))

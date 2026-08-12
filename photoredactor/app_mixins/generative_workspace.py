@@ -19,9 +19,6 @@ STYLE_LABELS = {
     "Пиксель-арт": "pixel-art",
     "3D-модель": "3d-model",
 }
-PROVIDER_LABELS = {"Локально": "local", "Stability AI (облако)": "stability-ai"}
-
-
 class GenerativeWorkspaceMixin:
     @staticmethod
     def _window_exists(window) -> bool:
@@ -29,79 +26,6 @@ class GenerativeWorkspaceMixin:
             return bool(window.winfo_exists())
         except tk.TclError:
             return False
-
-    def generative_key(self) -> str | None:
-        return os.environ.get("STABILITY_API_KEY") or EncryptedCredentialStore(self.generative_credential_path).load()
-
-    def generative_settings_dialog(self) -> bool:
-        dialog = tk.Toplevel(self)
-        dialog.title("Генеративный ИИ")
-        dialog.transient(self)
-        dialog.grab_set()
-        saved = [False]
-        key = tk.StringVar()
-        body = ttk.Frame(dialog, padding=16)
-        body.pack(fill=tk.BOTH, expand=True)
-        ttk.Label(body, text="Stability AI", style="PanelTitle.TLabel").pack(anchor=tk.W)
-        ttk.Label(body, text="API-ключ", style="Secondary.TLabel").pack(anchor=tk.W, pady=(14, 3))
-        entry = ttk.Entry(body, textvariable=key, show="•")
-        entry.pack(fill=tk.X)
-        status = ttk.Label(body, text="Ключ сохранён" if self.generative_key() else "Ключ не настроен")
-        status.pack(anchor=tk.W, pady=(8, 12))
-        actions = ttk.Frame(body)
-        actions.pack(fill=tk.X)
-        test_button = ttk.Button(actions, text="Проверить")
-        test_button.pack(side=tk.LEFT)
-
-        def current_key() -> str | None:
-            return key.get().strip() or self.generative_key()
-
-        def test_done(result) -> None:
-            test_button.configure(state=tk.NORMAL)
-            if isinstance(result, Exception):
-                status.configure(text=str(result))
-            else:
-                status.configure(text=f"Подключено: {result.get('email', 'аккаунт Stability AI')}")
-
-        def test_connection() -> None:
-            value = current_key()
-            if not value:
-                status.configure(text="Введите API-ключ")
-                return
-            test_button.configure(state=tk.DISABLED)
-            self.run_background(
-                "Проверка Stability AI",
-                lambda: self._generative_safe_call(lambda: StabilityImageClient(value).account()),
-                test_done,
-                lambda: self._window_exists(dialog),
-            )
-
-        def save() -> None:
-            value = key.get().strip()
-            if value:
-                try:
-                    EncryptedCredentialStore(self.generative_credential_path).save(value)
-                except CredentialStoreError as exc:
-                    messagebox.showerror("Генеративный ИИ", str(exc), parent=dialog)
-                    return
-            saved[0] = bool(self.generative_key())
-            dialog.destroy()
-
-        def delete() -> None:
-            EncryptedCredentialStore(self.generative_credential_path).delete()
-            key.set("")
-            status.configure(text="Ключ удалён")
-
-        test_button.configure(command=test_connection)
-        ttk.Button(actions, text="Удалить ключ", command=delete).pack(side=tk.LEFT, padx=6)
-        ttk.Button(actions, text="Сохранить", command=save, style="Primary.TButton").pack(side=tk.RIGHT)
-        ttk.Button(actions, text="Отмена", command=dialog.destroy).pack(side=tk.RIGHT, padx=6)
-        self._generative_settings_key = key
-        self._generative_settings_test = test_connection
-        self._generative_settings_status = status
-        self.center_toplevel(dialog, 520, 260)
-        dialog.wait_window()
-        return saved[0]
 
     @staticmethod
     def _generative_safe_call(operation):
@@ -153,8 +77,6 @@ class GenerativeWorkspaceMixin:
         prompt = tk.StringVar(value=str(data.get("prompt", "")))
         negative = tk.StringVar(value=str(data.get("negative_prompt", "")))
         seed = tk.IntVar(value=int(data.get("seed", 0)))
-        provider_slug = str(data.get("provider", self.generative_settings.get("provider", "local")))
-        provider = tk.StringVar(value=next((label for label, value in PROVIDER_LABELS.items() if value == provider_slug), "Локально"))
         variants_count = tk.IntVar(value=int(self.generative_settings.get("variants", 3)))
         style_slug = str(data.get("style", self.generative_settings.get("style", "photographic")))
         style = tk.StringVar(value=next((label for label, slug in STYLE_LABELS.items() if slug == style_slug), "Без пресета"))
@@ -188,9 +110,6 @@ class GenerativeWorkspaceMixin:
         variants_bar = ttk.Frame(preview_panel, padding=(0, 8, 0, 0))
         variants_bar.pack(fill=tk.X)
 
-        ttk.Label(controls, text="Режим", style="Secondary.TLabel").pack(anchor=tk.W)
-        provider_box = ttk.Combobox(controls, textvariable=provider, values=list(PROVIDER_LABELS), state="readonly")
-        provider_box.pack(fill=tk.X, pady=(3, 10))
         ttk.Label(controls, text="Запрос", style="PanelTitle.TLabel").pack(anchor=tk.W)
         prompt_entry = ttk.Entry(controls, textvariable=prompt)
         prompt_entry.pack(fill=tk.X, pady=(3, 10))
@@ -249,16 +168,6 @@ class GenerativeWorkspaceMixin:
         for variable in (steps, cfg_scale, sampler):
             variable.trace_add("write", mark_manual)
 
-        def update_provider(*_args) -> None:
-            local = PROVIDER_LABELS.get(provider.get(), "local") == "local"
-            if local:
-                if not local_controls.winfo_manager():
-                    local_controls.pack(fill=tk.X, pady=(14, 0), before=action_row)
-                status.configure(text=self.active_local_model_name())
-            else:
-                local_controls.pack_forget()
-                status.configure(text="Stability AI")
-
         if operation == "expand":
             ttk.Label(controls, text="Расширение, px", style="PanelTitle.TLabel").pack(anchor=tk.W, pady=(16, 5))
             for label, variable in zip(("Слева", "Сверху", "Справа", "Снизу"), margin_vars):
@@ -277,8 +186,7 @@ class GenerativeWorkspaceMixin:
         repeat_button.pack(fill=tk.X, pady=(6, 0))
         cancel_button = ttk.Button(action_row, text="Отменить генерацию", state=tk.DISABLED, command=generation_cancel.set)
         cancel_button.pack(fill=tk.X, pady=(6, 0))
-        provider.trace_add("write", update_provider)
-        update_provider()
+        status.configure(text=self.active_local_model_name())
         footer = ttk.Frame(dialog, padding=12)
         footer.pack(fill=tk.X)
         apply_button = ttk.Button(footer, text="Применить", state=tk.DISABLED, style="Primary.TButton")
@@ -365,7 +273,7 @@ class GenerativeWorkspaceMixin:
                 raise GenerativeAPIError("Seed и творческая свобода должны быть числами") from exc
             return {
                 "operation": operation,
-                "provider": PROVIDER_LABELS.get(provider.get(), "local"),
+                "provider": "local",
                 "prompt": prompt.get().strip(),
                 "negative_prompt": negative.get().strip(),
                 "seed": current_seed,
@@ -398,34 +306,18 @@ class GenerativeWorkspaceMixin:
                 except GenerativeAPIError as exc:
                     messagebox.showinfo("Генеративное расширение", str(exc), parent=dialog)
                     return
-            client = None
-            if settings["provider"] == "local":
-                if not self.local_generation_ready():
-                    self.model_manager_dialog()
-                    return
-            else:
-                api_key = self.generative_key()
-                if not api_key:
-                    self.generative_settings_dialog()
-                    api_key = self.generative_key()
-                if not api_key:
-                    return
-                client = StabilityImageClient(api_key)
+            if not self.local_generation_ready():
+                self.model_manager_dialog()
+                return
             generate_button.configure(state=tk.DISABLED)
-            cancel_button.configure(state=tk.NORMAL if settings["provider"] == "local" else tk.DISABLED)
+            cancel_button.configure(state=tk.NORMAL)
             generation_cancel.clear()
             status.configure(text="Создание вариантов...")
 
             def worker():
-                if settings["provider"] == "local":
-                    return self._generative_safe_call(
-                        lambda: self.local_generation_variants(operation, source, mask, margins, settings, count, generation_cancel)
-                    )
-                if operation == "fill":
-                    call = lambda value: client.inpaint(source, mask, str(settings["prompt"]), str(settings["negative_prompt"]), value, str(settings["style"]))
-                else:
-                    call = lambda value: client.outpaint(source, margins, str(settings["prompt"]), value, float(settings["creativity"]), str(settings["style"]))
-                return self._generative_safe_call(lambda: client.variants(call, int(settings["seed"]), count))
+                return self._generative_safe_call(
+                    lambda: self.local_generation_variants(operation, source, mask, margins, settings, count, generation_cancel)
+                )
 
             def done(result) -> None:
                 generate_button.configure(state=tk.NORMAL)
@@ -487,7 +379,6 @@ class GenerativeWorkspaceMixin:
         self._generative_workspace_negative = negative
         self._generative_workspace_seed = seed
         self._generative_workspace_variants = variants_count
-        self._generative_workspace_provider = provider
         self._generative_workspace_steps = steps
         self._generative_workspace_cfg = cfg_scale
         self._generative_workspace_strength = strength

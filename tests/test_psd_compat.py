@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 from PIL import Image
 from psd_tools import PSDImage
+from psd_tools.constants import Tag
 
 from photoredactor.color_management import builtin_srgb_bytes, color_settings
 from photoredactor.core import Document, Layer
-from photoredactor.psd_compat import export_psd, load_psd
+from photoredactor.psd_compat import _compatibility_risks, export_psd, load_psd
 
 
 def test_layered_psd_roundtrip_preserves_editable_raster_properties(tmp_path: Path) -> None:
@@ -19,6 +21,7 @@ def test_layered_psd_roundtrip_preserves_editable_raster_properties(tmp_path: Pa
     document.layer.locked = True
     pixels = np.full((9, 13, 4), (210, 50, 70, 225), dtype=np.uint8)
     top = Layer("Верхний слой", pixels, x=5, y=4, opacity=0.65, blend_mode="Multiply", clipping=True)
+    top.visible = False
     top.mask = np.tile(np.linspace(0, 255, 13, dtype=np.uint8), (9, 1))
     document.layers.append(top)
     document.active_layer = 1
@@ -34,6 +37,7 @@ def test_layered_psd_roundtrip_preserves_editable_raster_properties(tmp_path: Pa
     assert (loaded.x, loaded.y) == (5, 4)
     assert abs(loaded.opacity - 0.65) < 0.005
     assert loaded.blend_mode == "Multiply"
+    assert not loaded.visible
     assert loaded.clipping
     np.testing.assert_array_equal(loaded.mask, top.mask)
     assert color_settings(restored.metadata)["icc_base64"] == color_settings(document.metadata)["icc_base64"]
@@ -96,3 +100,17 @@ def test_adjustment_export_has_one_visible_merged_preview(tmp_path: Path) -> Non
     visible = [layer.name for layer in reopened if layer.visible]
     assert visible == ["Сведённая визуальная копия"]
     assert any("Корректирующие" in warning for warning in report["warnings"])
+
+
+def test_only_real_photoshop_editability_risks_are_reported() -> None:
+    plain = SimpleNamespace(name="Фото", kind="pixel", tagged_blocks={})
+    assert _compatibility_risks(plain) == []
+    complex_layer = SimpleNamespace(
+        name="Логотип", kind="smartobject",
+        tagged_blocks={Tag.OBJECT_BASED_EFFECTS_LAYER_INFO: object(), Tag.VECTOR_MASK_SETTING1: object()},
+    )
+    risks = _compatibility_risks(complex_layer)
+    assert len(risks) == 3
+    assert any("Smart Object" in item for item in risks)
+    assert any("Эффекты" in item for item in risks)
+    assert any("Векторные" in item for item in risks)

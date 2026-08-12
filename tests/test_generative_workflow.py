@@ -13,7 +13,8 @@ def test_generation_metadata_survives_project_roundtrip(tmp_path) -> None:
     document = Document.new(12, 9, (0, 0, 0, 0))
     document.layer.generation_data = {
         "operation": "fill",
-        "provider": "stability-ai",
+        "provider": "local",
+        "local_model_id": "realistic-vision-51-inpaint",
         "prompt": "красная чашка",
         "negative_prompt": "текст",
         "seed": 714,

@@ -82,7 +82,7 @@ class GenerativeHistoryMixin:
         ordered = list(reversed(layers))
         for index, layer in enumerate(ordered):
             data = layer.generation_data or {}
-            provider = data.get("local_model_id") if data.get("provider") == "local" else "Stability AI"
+            provider = data.get("local_model_id") or "Локальная модель"
             tree.insert(
                 "", tk.END, iid=str(index),
                 values=("Заливка" if data.get("operation") == "fill" else "Расширение", provider, data.get("seed", ""), data.get("prompt", "")),

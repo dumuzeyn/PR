@@ -20,7 +20,6 @@ class StartupSettingsMixin:
         self.app_data_dir = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "PhotoRedactor"
         self.recovery_path = self.app_data_dir / "recovery.prdx"
         self.settings_path = self.app_data_dir / "settings.json"
-        self.generative_credential_path = self.app_data_dir / "stability-api-key.bin"
         self.recent_files: list[str] = []
         self.action_recorder = ActionRecorder()
         self.action_runner = ActionRunner()
@@ -42,7 +41,7 @@ class StartupSettingsMixin:
         self.custom_canvas_dpi = 72
         self.custom_canvas_background = "Белый"
         self.generative_settings = {
-            "provider": "stability-ai" if os.environ.get("STABILITY_API_KEY") else "local",
+            "provider": "local",
             "local_model_id": "realistic-vision-51-inpaint", "local_backend": "auto",
             "variants": 3, "style": "photographic", "creativity": 0.5,
             "performance_profile": "balanced", "steps": 6, "cfg_scale": 1.5,
@@ -383,10 +382,8 @@ class StartupSettingsMixin:
                     self.custom_canvas_background = saved_background
                 generative = data.get("generative", {})
                 if isinstance(generative, dict):
-                    fallback_provider = "stability-ai" if self.generative_key() else "local"
-                    provider = str(generative.get("provider", fallback_provider))
                     self.generative_settings = {
-                        "provider": provider if provider in {"local", "stability-ai"} else "local",
+                        "provider": "local",
                         "local_model_id": str(generative.get("local_model_id", "realistic-vision-51-inpaint")),
                         "local_backend": str(generative.get("local_backend", "auto")),
                         "variants": max(1, min(4, int(generative.get("variants", 3)))),

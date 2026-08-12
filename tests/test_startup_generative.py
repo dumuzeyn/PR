@@ -10,59 +10,47 @@ import numpy as np
 from photoredactor.app import PhotoRedactorApp
 from photoredactor.core import Document
 from photoredactor.generative_api import GeneratedVariant, variant_seeds
-import photoredactor.app_mixins.generative_workspace as workspace_module
 
 
-class _FakeStabilityClient:
-    def __init__(self, api_key: str) -> None:
-        if api_key != "test-key":
-            raise AssertionError("UI did not pass the configured API key")
-
-    def variants(self, operation, seed: int, count: int) -> list[GeneratedVariant]:
-        return [GeneratedVariant(operation(value), value) for value in variant_seeds(seed, count)]
-
-    def inpaint(self, image, mask, prompt, negative_prompt, seed, style):
-        assert prompt and negative_prompt == "надпись" and style == "photographic"
-        return np.full_like(image, (seed % 255, 45, 210, 255))
-
-    def outpaint(self, image, margins, prompt, seed, creativity, style):
-        left, top, right, bottom = margins
-        result = np.full(
-            (image.shape[0] + top + bottom, image.shape[1] + left + right, 4),
-            (30, seed % 255, 180, 255),
-            dtype=np.uint8,
-        )
-        result[top:top + image.shape[0], left:left + image.shape[1]] = image
-        return result
+def _fake_local_variants(operation, source, mask, margins, settings, count, cancel) -> list[GeneratedVariant]:
+    assert settings["provider"] == "local"
+    assert settings["prompt"]
+    seeds = variant_seeds(int(settings["seed"]), count)
+    results = []
+    for value in seeds:
+        if operation == "fill":
+            pixels = np.full_like(source, (value % 255, 45, 210, 255))
+        else:
+            left, top, right, bottom = margins
+            pixels = np.full(
+                (source.shape[0] + top + bottom, source.shape[1] + left + right, 4),
+                (30, value % 255, 180, 255), dtype=np.uint8,
+            )
+            pixels[top:top + source.shape[0], left:left + source.shape[1]] = source
+        results.append(GeneratedVariant(pixels, value))
+    return results
 
 
 class StartupGenerativeTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
         self.original_local_app_data = os.environ.get("LOCALAPPDATA")
-        self.original_api_key = os.environ.get("STABILITY_API_KEY")
-        self.original_client = workspace_module.StabilityImageClient
         self.original_clipboard_reader = PhotoRedactorApp.read_clipboard_image
         os.environ["LOCALAPPDATA"] = self.temp.name
-        os.environ["STABILITY_API_KEY"] = "test-key"
-        workspace_module.StabilityImageClient = _FakeStabilityClient
         PhotoRedactorApp.read_clipboard_image = staticmethod(lambda: None)
         self.app = PhotoRedactorApp()
         self.app.run_background = lambda _label, worker, done=None, is_current=None: done(worker()) if done else worker()
+        self.app.local_generation_ready = lambda: True
+        self.app.local_generation_variants = _fake_local_variants
         self.app.update()
 
     def tearDown(self) -> None:
         self.app.destroy()
         PhotoRedactorApp.read_clipboard_image = staticmethod(self.original_clipboard_reader)
-        workspace_module.StabilityImageClient = self.original_client
         if self.original_local_app_data is None:
             os.environ.pop("LOCALAPPDATA", None)
         else:
             os.environ["LOCALAPPDATA"] = self.original_local_app_data
-        if self.original_api_key is None:
-            os.environ.pop("STABILITY_API_KEY", None)
-        else:
-            os.environ["STABILITY_API_KEY"] = self.original_api_key
         self.temp.cleanup()
 
     def test_fill_variants_apply_as_layer_and_undo_redo(self) -> None:
@@ -100,6 +88,9 @@ class StartupGenerativeTests(unittest.TestCase):
     def test_models_menu_follows_view_and_manager_lists_downloads(self) -> None:
         labels = [self.app.editor_menu.entrycget(index, "label") for index in range(self.app.editor_menu.index(tk.END) + 1)]
         self.assertEqual(labels[labels.index("Вид") + 1], "Модели")
+        models_menu = self.app.editor_menu.nametowidget(self.app.editor_menu.entrycget(labels.index("Модели"), "menu"))
+        model_labels = [models_menu.entrycget(index, "label") for index in range(models_menu.index(tk.END) + 1) if models_menu.type(index) != "separator"]
+        self.assertFalse(any("Stability" in label for label in model_labels))
         self.app.model_manager_dialog()
         self.app.update()
         self.assertEqual(

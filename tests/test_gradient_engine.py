@@ -50,6 +50,16 @@ def test_gradient_stops_and_selection_coverage() -> None:
     assert tuple(layer.pixels[1, 4]) == BLACK
 
 
+def test_gradient_preserves_high_precision_working_data() -> None:
+    for depth, dtype in ((16, np.uint16), (32, np.float32)):
+        document = Document.new(1024, 1, (0, 0, 0, 255))
+        document.set_bit_depth(depth)
+        apply_gradient(document.layer, (0, 0, 1023, 0), BLACK, WHITE)
+        working = document.layer.working_pixels
+        assert working is not None and working.dtype == dtype
+        assert np.unique(document.layer.working_rgba()[:, :, 0]).size > 900
+
+
 def test_gradient_and_texture_shape_objects_stay_editable() -> None:
     document = Document.new(64, 48, (0, 0, 0, 0))
     gradient = {

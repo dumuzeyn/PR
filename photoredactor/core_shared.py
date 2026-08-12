@@ -189,33 +189,34 @@ class GradientEngine:
         reverse: bool = False,
         dither: bool = False,
         transparency: bool = True,
+        output_depth: int = 8,
     ) -> np.ndarray:
         values = cls.coordinates(width, height, start, end, kind, origin)
         if reverse:
             values = 1.0 - values
         normalized = cls.normalize_stops(stops)
         positions = np.array([item[0] for item in normalized], dtype=np.float32)
-        colors = np.array([item[1] for item in normalized], dtype=np.float32)
+        colors = np.array([item[1] for item in normalized], dtype=np.float32) / 255.0
         axis = np.arange(65537, dtype=np.float32) / 65536.0
         interpolation_axis = cls.midpoint_axis(axis, stops, positions)
-        lookup = np.empty((65537, 4), dtype=np.uint8)
+        lookup = np.empty((65537, 4), dtype=np.float32)
         for channel in range(4):
-            lookup[:, channel] = np.interp(interpolation_axis, positions, colors[:, channel]).astype(np.uint8)
+            lookup[:, channel] = np.interp(interpolation_axis, positions, colors[:, channel])
         opacity = cls.normalize_opacity_stops(opacity_stops)
         opacity_positions = np.array([item[0] for item in opacity], dtype=np.float32)
         opacity_values = np.array([item[1] for item in opacity], dtype=np.float32)
         alpha = np.interp(axis, opacity_positions, opacity_values)
-        lookup[:, 3] = np.clip(lookup[:, 3].astype(np.float32) * alpha, 0, 255).astype(np.uint8)
+        lookup[:, 3] = np.clip(lookup[:, 3] * alpha, 0.0, 1.0)
         if not transparency:
-            lookup[:, 3] = 255
+            lookup[:, 3] = 1.0
         indices = np.clip(values * 65536.0, 0.0, 65536.0).astype(np.uint32)
         output = lookup[indices]
         if dither and width > 1 and height > 1:
             bayer = np.array([[0, 2], [3, 1]], dtype=np.float32) / 4.0 - 0.375
             noise = np.tile(bayer, ((height + 1) // 2, (width + 1) // 2))[:height, :width, None]
             output = output.copy()
-            output[:, :, :3] = np.clip(output[:, :, :3].astype(np.float32) + noise, 0, 255).astype(np.uint8)
-        return np.ascontiguousarray(output)
+            output[:, :, :3] = np.clip(output[:, :, :3] + noise / 255.0, 0.0, 1.0)
+        return np.ascontiguousarray(quantize_rgba(output, output_depth))
 
 
 def blank_rgba(width: int, height: int, color=(255, 255, 255, 255)) -> np.ndarray:
