@@ -22,6 +22,8 @@ def apply_adjustment(arr: np.ndarray, adjustment: dict[str, Any]) -> np.ndarray:
         adjusted = adjust_exposure(arr, float(adjustment.get("exposure", 0.0)), float(adjustment.get("offset", 0.0)), float(adjustment.get("gamma", 1.0)))
     elif kind == "color_balance":
         adjusted = adjust_color_balance(arr, int(adjustment.get("red", 0)), int(adjustment.get("green", 0)), int(adjustment.get("blue", 0)))
+    elif kind == "black_white":
+        adjusted = adjust_black_white(arr, float(adjustment.get("red", 0.299)), float(adjustment.get("green", 0.587)), float(adjustment.get("blue", 0.114)))
     elif kind == "threshold":
         adjusted = adjust_threshold(arr, int(adjustment.get("threshold", 128)))
     elif kind == "posterize":

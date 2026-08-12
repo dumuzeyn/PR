@@ -6,6 +6,7 @@ from .geometry_ops import *
 from .selection_ops import *
 from .filter_ops import *
 from .gpu_acceleration import accelerated_alpha_blend, accelerated_gaussian_blur, accelerated_resize
+from .layer_effects import LayerEffectsStack
 
 
 def layer_alpha_canvas(document: Document, layer: Layer, pixels: np.ndarray | None = None) -> np.ndarray:
@@ -37,39 +38,12 @@ def render_layer_pixels(layer: Layer) -> np.ndarray:
     return display_rgba(apply_filter_stack(source, layer.filters))
 
 def render_layer_effects(layer: Layer, pixels: np.ndarray | None = None) -> list[tuple[np.ndarray, int, int, float, str]]:
-    effects: list[tuple[np.ndarray, int, int, float, str]] = []
-    if not layer.effects:
-        return effects
     source = pixels if pixels is not None else render_layer_pixels(layer)
-    alpha = source[:, :, 3]
-    if not np.any(alpha):
-        return effects
-    shadow = layer.effects.get("drop_shadow")
-    if shadow and shadow.get("enabled", True):
-        blur_radius = max(0, int(shadow.get("blur", 12)))
-        offset_x = int(shadow.get("x", 10))
-        offset_y = int(shadow.get("y", 10))
-        opacity = float(shadow.get("opacity", 0.55))
-        color = tuple(int(v) for v in shadow.get("color", [0, 0, 0, 255]))
-        mask = effect_mask(alpha, blur_radius)
-        effects.append((solid_from_alpha(mask, color), layer.x + offset_x, layer.y + offset_y, opacity, "Normal"))
-    glow = layer.effects.get("outer_glow")
-    if glow and glow.get("enabled", True):
-        blur_radius = max(1, int(glow.get("blur", 18)))
-        opacity = float(glow.get("opacity", 0.5))
-        color = tuple(int(v) for v in glow.get("color", [255, 220, 80, 255]))
-        mask = effect_mask(alpha, blur_radius)
-        effects.append((solid_from_alpha(mask, color), layer.x, layer.y, opacity, "Screen"))
-    stroke = layer.effects.get("stroke")
-    if stroke and stroke.get("enabled", True):
-        size = max(1, int(stroke.get("size", 4)))
-        opacity = float(stroke.get("opacity", 1.0))
-        color = tuple(int(v) for v in stroke.get("color", [255, 255, 255, 255]))
-        kernel = np.ones((size * 2 + 1, size * 2 + 1), dtype=np.uint8)
-        expanded = cv2.dilate((alpha > 0).astype(np.uint8) * 255, kernel)
-        outline = np.where((expanded > 0) & (alpha == 0), 255, 0).astype(np.uint8)
-        effects.append((solid_from_alpha(outline, color), layer.x, layer.y, opacity, "Normal"))
-    return effects
+    return LayerEffectsStack.render(layer, source)[0]
+
+def render_layer_style(layer: Layer, pixels: np.ndarray | None = None) -> tuple[list[tuple[np.ndarray, int, int, float, str]], np.ndarray]:
+    source = pixels if pixels is not None else render_layer_pixels(layer)
+    return LayerEffectsStack.render(layer, source)
 
 def effect_mask(alpha: np.ndarray, blur_radius: int) -> np.ndarray:
     mask = alpha.copy()

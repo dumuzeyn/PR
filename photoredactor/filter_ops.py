@@ -121,6 +121,61 @@ def add_noise(arr: np.ndarray, amount: float) -> np.ndarray:
     out[:, :, :3] = np.clip(out[:, :, :3] + noise, 0, 1)
     return _restore_pixel_dtype(out, arr.dtype)
 
+def adjust_black_white(arr: np.ndarray, red: float = 0.299, green: float = 0.587, blue: float = 0.114) -> np.ndarray:
+    out = normalize_rgba(arr)
+    weights = np.maximum(0.0, np.asarray([red, green, blue], dtype=np.float32))
+    weights /= max(1e-8, float(weights.sum()))
+    gray = np.sum(out[:, :, :3] * weights[None, None, :], axis=2)
+    out[:, :, :3] = gray[:, :, None]
+    return _restore_pixel_dtype(out, arr.dtype)
+
+def motion_blur(arr: np.ndarray, distance: int = 16, angle: float = 0.0) -> np.ndarray:
+    distance = max(1, int(distance))
+    size = distance * 2 + 1
+    kernel = np.zeros((size, size), dtype=np.float32)
+    kernel[distance, :] = 1.0
+    matrix = cv2.getRotationMatrix2D((distance, distance), -float(angle), 1.0)
+    kernel = cv2.warpAffine(kernel, matrix, (size, size))
+    kernel /= max(1e-8, float(kernel.sum()))
+    out = normalize_rgba(arr)
+    out[:, :, :3] = cv2.filter2D(out[:, :, :3], -1, kernel, borderType=cv2.BORDER_REFLECT)
+    return _restore_pixel_dtype(out, arr.dtype)
+
+def unsharp_mask(arr: np.ndarray, amount: float = 1.0, radius: float = 2.0, threshold: float = 0.0) -> np.ndarray:
+    out = normalize_rgba(arr)
+    source = out[:, :, :3]
+    blurred = accelerated_gaussian_blur(source, (0, 0), max(0.1, float(radius)))
+    detail = source - blurred
+    if threshold > 0:
+        detail[np.max(np.abs(detail), axis=2) < float(threshold) / 255.0] = 0.0
+    out[:, :, :3] = np.clip(source + detail * max(0.0, float(amount)), 0.0, 1.0)
+    return _restore_pixel_dtype(out, arr.dtype)
+
+def smart_sharpen(arr: np.ndarray, amount: float = 1.0, radius: float = 1.2) -> np.ndarray:
+    out = normalize_rgba(arr)
+    source = out[:, :, :3]
+    smooth = cv2.bilateralFilter(source.astype(np.float32), 7, 0.08, max(1.0, float(radius) * 2.0))
+    detail = source - smooth
+    luminance = cv2.cvtColor(source, cv2.COLOR_RGB2GRAY)
+    edge = cv2.GaussianBlur(np.abs(cv2.Laplacian(luminance, cv2.CV_32F)), (0, 0), 0.8)
+    edge /= max(1e-6, float(np.percentile(edge, 95)))
+    out[:, :, :3] = np.clip(source + detail * max(0.0, float(amount)) * np.clip(edge, 0, 1)[:, :, None], 0, 1)
+    return _restore_pixel_dtype(out, arr.dtype)
+
+def reduce_noise(arr: np.ndarray, strength: float = 0.35) -> np.ndarray:
+    out = normalize_rgba(arr)
+    sigma = float(np.clip(strength, 0.0, 1.0))
+    diameter = max(3, int(round(3 + sigma * 8)) | 1)
+    out[:, :, :3] = cv2.bilateralFilter(out[:, :, :3].astype(np.float32), diameter, 0.03 + sigma * 0.22, 2.0 + sigma * 8.0)
+    return _restore_pixel_dtype(out, arr.dtype)
+
+def high_pass(arr: np.ndarray, radius: float = 4.0) -> np.ndarray:
+    out = normalize_rgba(arr)
+    source = out[:, :, :3]
+    blurred = accelerated_gaussian_blur(source, (0, 0), max(0.1, float(radius)))
+    out[:, :, :3] = np.clip(0.5 + source - blurred, 0.0, 1.0)
+    return _restore_pixel_dtype(out, arr.dtype)
+
 def apply_filter_stack(arr: np.ndarray, filters: list[dict[str, Any]]) -> np.ndarray:
     original_dtype = arr.dtype
     out = normalize_rgba(arr)
@@ -136,16 +191,26 @@ def apply_filter_stack(arr: np.ndarray, filters: list[dict[str, Any]]) -> np.nda
             source = np.dstack((alpha, alpha, alpha, alpha)).astype(np.float32)
         if kind == "blur":
             filtered = normalize_rgba(blur(source, int(item.get("radius", 3))))
+        elif kind == "motion_blur":
+            filtered = normalize_rgba(motion_blur(source, int(item.get("distance", 16)), float(item.get("angle", 0.0))))
         elif kind == "sharpen":
             filtered = normalize_rgba(sharpen(source, float(item.get("amount", 1.0))))
+        elif kind == "unsharp_mask":
+            filtered = normalize_rgba(unsharp_mask(source, float(item.get("amount", 1.0)), float(item.get("radius", 2.0)), float(item.get("threshold", 0.0))))
+        elif kind == "smart_sharpen":
+            filtered = normalize_rgba(smart_sharpen(source, float(item.get("amount", 1.0)), float(item.get("radius", 1.2))))
         elif kind == "noise":
             filtered = normalize_rgba(deterministic_noise(source, float(item.get("amount", 0.03)), int(item.get("seed", 12345))))
+        elif kind == "reduce_noise":
+            filtered = normalize_rgba(reduce_noise(source, float(item.get("strength", 0.35))))
         elif kind == "median":
             filtered = normalize_rgba(median_filter(source, int(item.get("size", 3))))
         elif kind == "edge":
             filtered = normalize_rgba(edge_filter(source, float(item.get("strength", 1.0))))
         elif kind == "emboss":
             filtered = normalize_rgba(emboss_filter(source, float(item.get("strength", 1.0))))
+        elif kind == "high_pass":
+            filtered = normalize_rgba(high_pass(source, float(item.get("radius", 4.0))))
         else:
             continue
         if channel == "Alpha":

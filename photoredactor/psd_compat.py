@@ -15,7 +15,7 @@ from psd_tools.psd.tagged_blocks import ProtectedSetting
 from .color_management import color_settings, display_rgba, profile_name
 from .core_shared import pil_to_rgba_array, rgba_array_to_pil
 from .layer import Layer
-from .render_ops import render_layer_effects, render_layer_pixels
+from .render_ops import render_layer_pixels, render_layer_style
 
 if TYPE_CHECKING:
     from .document import Document
@@ -249,10 +249,11 @@ def export_psd(document: "Document", path: str | Path) -> dict[str, Any]:
             warnings.append("Корректирующие слои добавлены в сведённую визуальную копию")
             continue
         pixels = render_layer_pixels(source)
-        for index, (effect_pixels, x, y, opacity, blend_mode) in enumerate(render_layer_effects(source, pixels), 1):
+        effects, styled_pixels = render_layer_style(source, pixels)
+        for index, (effect_pixels, x, y, opacity, blend_mode) in enumerate(effects, 1):
             effect = _create_pixel_layer(psd, effect_pixels, f"{source.name} · эффект {index}", x, y, opacity, blend_mode)
             effect.visible = bool(source.visible) and not has_adjustments
-        created = _create_pixel_layer(psd, pixels, source.name, source.x, source.y, source.opacity, source.blend_mode)
+        created = _create_pixel_layer(psd, styled_pixels, source.name, source.x, source.y, source.opacity, source.blend_mode)
         created.visible = bool(source.visible) and not has_adjustments
         created.clipping = bool(source.clipping)
         if source.locked:

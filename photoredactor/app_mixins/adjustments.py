@@ -97,6 +97,8 @@ class AdjustmentsMixin:
 
     def adjustment_layer_dialog(self, initial: dict | None = None) -> dict | None:
         initial = dict(initial or {"type": "brightness_contrast", "brightness": 0, "contrast": 1.1})
+        if initial.get("type") == "grayscale":
+            initial = {"type": "black_white", "red": 0.299, "green": 0.587, "blue": 0.114}
         result: dict | None = None
         dialog = tk.Toplevel(self)
         dialog.title("\u041a\u043e\u0440\u0440\u0435\u043a\u0442\u0438\u0440\u0443\u044e\u0449\u0438\u0439 \u0441\u043b\u043e\u0439")
@@ -269,6 +271,8 @@ class AdjustmentsMixin:
             return [("\u042d\u043a\u0441\u043f\u043e\u0437\u0438\u0446\u0438\u044f", float(adjustment.get("exposure", 0.0)), -5, 5, 0.05), ("\u0421\u0434\u0432\u0438\u0433", float(adjustment.get("offset", 0.0)), -1, 1, 0.01), ("\u0413\u0430\u043c\u043c\u0430", float(adjustment.get("gamma", 1.0)), 0.01, 10, 0.05)]
         if kind == "color_balance":
             return [("\u041a\u0440\u0430\u0441\u043d\u044b\u0439", float(adjustment.get("red", 0)), -255, 255, 1), ("\u0417\u0435\u043b\u0435\u043d\u044b\u0439", float(adjustment.get("green", 0)), -255, 255, 1), ("\u0421\u0438\u043d\u0438\u0439", float(adjustment.get("blue", 0)), -255, 255, 1)]
+        if kind == "black_white":
+            return [("Красный", float(adjustment.get("red", 0.299)), 0, 1, 0.01), ("Зелёный", float(adjustment.get("green", 0.587)), 0, 1, 0.01), ("Синий", float(adjustment.get("blue", 0.114)), 0, 1, 0.01)]
         if kind == "levels":
             return [("\u0427\u0435\u0440\u043d\u0430\u044f \u0442\u043e\u0447\u043a\u0430", float(adjustment.get("black", 0)), 0, 254, 1), ("\u0411\u0435\u043b\u0430\u044f \u0442\u043e\u0447\u043a\u0430", float(adjustment.get("white", 255)), 1, 255, 1), ("\u0413\u0430\u043c\u043c\u0430", float(adjustment.get("gamma", 1.0)), 0.01, 10, 0.05)]
         if kind == "curves":
@@ -281,7 +285,7 @@ class AdjustmentsMixin:
 
     @staticmethod
     def adjustment_hint(kind: str) -> str:
-        if kind in {"invert", "grayscale"}:
+        if kind == "invert":
             return "\u042d\u0442\u043e\u0442 \u0442\u0438\u043f \u043d\u0435 \u0442\u0440\u0435\u0431\u0443\u0435\u0442 \u043f\u0430\u0440\u0430\u043c\u0435\u0442\u0440\u043e\u0432."
         return "\u0418\u0437\u043c\u0435\u043d\u0435\u043d\u0438\u044f \u043f\u043e\u043a\u0430\u0437\u044b\u0432\u0430\u044e\u0442\u0441\u044f \u0432 \u043f\u0440\u0435\u0434\u043f\u0440\u043e\u0441\u043c\u043e\u0442\u0440\u0435."
 
@@ -301,6 +305,8 @@ class AdjustmentsMixin:
             return {"type": kind, "exposure": float(values[0]), "offset": float(values[1]), "gamma": max(0.01, float(values[2]))}
         if kind == "color_balance":
             return {"type": kind, "red": int(values[0]), "green": int(values[1]), "blue": int(values[2])}
+        if kind == "black_white":
+            return {"type": kind, "red": float(values[0]), "green": float(values[1]), "blue": float(values[2])}
         if kind == "levels":
             black = int(values[0])
             white = max(black + 1, int(values[1]))

@@ -216,7 +216,7 @@ class RenderingViewMixin:
         self.selected_layer_ids = selected_ids
         rows: list[str] = []
         for i, layer in enumerate(reversed(self.doc.layers)):
-            marker = "V" if layer.visible else " "
+            marker = "👁" if layer.visible else "⊘"
             indicators: list[str] = []
             if layer.mask is not None:
                 indicators.append("M")

@@ -37,7 +37,9 @@ This repository starts with a real working editor and an architecture intended t
 - downloadable local generative models powered by the real stable-diffusion.cpp engine, with CUDA/Vulkan/CPU selection, verified downloads, LCM speed profiles, masked fill, outpaint, prompts, negative prompts, seeds, variants, history and undo/redo; Stability AI remains an optional cloud provider
 - tested PSD/PSB compatibility import and export for ordered raster layers, offsets, opacity, visibility, locks, clipping, blend modes, masks, DPI, ICC profiles and 8/16/32-bit document depth; unsupported Photoshop-only structures are reported instead of silently advertised as editable
 - metadata/EXIF view, histogram, image statistics and eyedropper
-- non-destructive adjustment layers with importable/exportable preset libraries for brightness/contrast, saturation, vibrance, temperature/tint, hue/saturation, exposure, color balance, levels, curves, threshold, posterize, invert and grayscale
+- non-destructive adjustment layers with importable/exportable preset libraries for brightness/contrast, saturation, vibrance, temperature/tint, hue/saturation, exposure, color balance, editable black and white channel mixing, levels, curves, threshold, posterize and invert
+- a deterministic non-destructive layer style stack with ten editable effects and live preview
+- separate destructive and smart-filter workflows for Gaussian and motion blur, unsharp and smart sharpening, noise reduction/addition and high pass
 - undo/redo
 - command-based undo for strokes, moves and layer edits
 - tile-based compositor and canvas output: brush, eraser, retouch and healing strokes update only changed 256 px regions

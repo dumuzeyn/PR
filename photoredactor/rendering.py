@@ -19,7 +19,7 @@ from .core import (
     checker_background,
     checker_region,
     effective_layer_mask,
-    render_layer_effects,
+    render_layer_style,
 )
 from .performance import PerformanceProfiler, profiler
 from .large_document import MipmapPyramid, ScratchCache, gpu_status
@@ -43,7 +43,7 @@ class RenderEngine:
         self.gpu = gpu_status()
         self._filtered_cache: dict[str, tuple[object, ...]] = {}
         self._mask_cache: dict[str, tuple[tuple[object, ...], np.ndarray | None]] = {}
-        self._effects_cache: dict[str, tuple[tuple[object, ...], list[tuple[np.ndarray, int, int, float, str]]]] = {}
+        self._effects_cache: dict[str, tuple[tuple[object, ...], object]] = {}
         self._active_bases: dict[bool, tuple[str, np.ndarray]] = {}
         self._filter_dirty: dict[str, Rect] = {}
         self._mask_dirty: dict[str, Rect] = {}
@@ -228,10 +228,11 @@ class RenderEngine:
             if layer.clipping and previous_alpha is not None:
                 clipping_mask = self._tile_alpha_to_layer_mask(previous_alpha, rect, layer)
                 alpha_mask = clipping_mask if alpha_mask is None else np.minimum(alpha_mask, clipping_mask)
-            for effect_pixels, ex, ey, opacity, blend_mode in self.layer_effects(layer, pixels):
+            effects, styled_pixels = self.layer_effects(layer, pixels)
+            for effect_pixels, ex, ey, opacity, blend_mode in effects:
                 self._blend_region(out, rect, effect_pixels, ex, ey, opacity, None, 1.0, blend_mode)
-            self._blend_region(out, rect, pixels, layer.x, layer.y, layer.opacity, alpha_mask, layer.mask_density, layer.blend_mode)
-            previous_alpha = self._layer_alpha_region(rect, layer, pixels, alpha_mask)
+            self._blend_region(out, rect, styled_pixels, layer.x, layer.y, layer.opacity, alpha_mask, layer.mask_density, layer.blend_mode)
+            previous_alpha = self._layer_alpha_region(rect, layer, styled_pixels, alpha_mask)
         return out
     def _layer_intersects_region(self, layer: Layer, rect: Rect) -> bool:
         if layer.kind == "shape" and layer.shape_data is not None:
@@ -403,14 +404,14 @@ class RenderEngine:
         updated = cv2.GaussianBlur(layer.mask[y1:y2, x1:x2], (kernel, kernel), float(layer.mask_feather)).astype(np.uint8)
         filtered[dy1:dy2, dx1:dx2] = updated[dy1 - y1:dy2 - y1, dx1 - x1:dx2 - x1]
 
-    def layer_effects(self, layer: Layer, pixels: np.ndarray) -> list[tuple[np.ndarray, int, int, float, str]]:
+    def layer_effects(self, layer: Layer, pixels: np.ndarray) -> tuple[list[tuple[np.ndarray, int, int, float, str]], np.ndarray]:
         signature = (layer.pixels_revision, self._json_signature(layer.filters), self._json_signature(layer.effects))
         cached = self._effects_cache.get(layer.id)
         if cached is not None and cached[0] == signature:
             self.profiler.count("render.effects_cache_hit")
             return cached[1]
         with self.profiler.measure("render.effects"):
-            effects = render_layer_effects(layer, pixels)
+            effects = render_layer_style(layer, pixels)
         self._effects_cache[layer.id] = (signature, effects)
         return effects
 
@@ -482,7 +483,6 @@ class RenderEngine:
             lx1, ly1 = ix1 - layer.x, iy1 - layer.y
             result[ly1:ly1 + iy2 - iy1, lx1:lx1 + ix2 - ix1] = alpha[iy1 - ry1:iy2 - ry1, ix1 - rx1:ix2 - rx1]
         return result
-
     @staticmethod
     def _layer_alpha_region(rect: Rect, layer: Layer, pixels: np.ndarray, alpha_mask: np.ndarray | None) -> np.ndarray:
         rx1, ry1, rx2, ry2 = rect

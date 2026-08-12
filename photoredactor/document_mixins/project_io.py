@@ -215,10 +215,11 @@ class ProjectIoDocumentMixin:
                 if layer.clipping and previous_alpha is not None:
                     clipping_mask = document_alpha_to_layer_mask(previous_alpha, layer)
                     alpha_mask = clipping_mask if alpha_mask is None else np.minimum(alpha_mask, clipping_mask)
-                for pixels, x, y, opacity, blend_mode in render_layer_effects(layer, layer_pixels):
+                effects, styled_pixels = render_layer_style(layer, layer_pixels)
+                for pixels, x, y, opacity, blend_mode in effects:
                     alpha_blend_inplace(out, pixels, x, y, opacity, None, 1.0, blend_mode)
-                alpha_blend_inplace(out, layer_pixels, layer.x, layer.y, layer.opacity, alpha_mask, layer.mask_density, layer.blend_mode)
-                previous_alpha = layer_alpha_canvas(self, layer, layer_pixels)
+                alpha_blend_inplace(out, styled_pixels, layer.x, layer.y, layer.opacity, alpha_mask, layer.mask_density, layer.blend_mode)
+                previous_alpha = layer_alpha_canvas(self, layer, styled_pixels)
             return out
 
     def composite_precision(self, checker: bool = False) -> np.ndarray:

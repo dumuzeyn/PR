@@ -144,6 +144,18 @@ class ImageGeometryMixin:
         if layer.locked:
             self.status_text("Слой заблокирован")
             return
+        if layer.kind in {"linked", "embedded"}:
+            approved = messagebox.askyesno(
+                "Растеризация Smart Object",
+                "Эта операция изменяет пиксели. Растеризовать Smart Object? Для неразрушающей обработки используйте «Слой -> Фильтры слоя».",
+            )
+            if not approved:
+                return
+            def rasterize() -> None:
+                layer.kind = "raster"; layer.smart_data = None; layer.smart_source = None
+                layer.transform_data = None; layer.transform_source = None; layer.transform_mask_source = None
+                self.doc.dirty = True
+            self.run_document_command("Растеризация Smart Object", rasterize)
         layer_id = layer.id
         generation = self._edit_generation
         pixels_revision = layer.pixels_revision

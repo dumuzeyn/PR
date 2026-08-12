@@ -93,7 +93,6 @@ class RetouchMixin:
         update_preview()
         dialog.wait_window()
         return result
-
     def portrait_cleanup_layer(self) -> None:
         layer = self.doc.layer
         if layer.locked or layer.kind == "adjustment":
@@ -203,18 +202,3 @@ class RetouchMixin:
         update_preview()
         dialog.wait_window()
         return result
-
-    def filter_blur(self) -> None:
-        r = simpledialog.askinteger("Gaussian blur", "Radius:", initialvalue=3, minvalue=1, maxvalue=200)
-        if r:
-            self.apply_to_layer("blur", lambda arr: blur(arr, r))
-
-    def filter_sharpen(self) -> None:
-        a = simpledialog.askfloat("Sharpen", "Amount:", initialvalue=1.0, minvalue=0.0, maxvalue=10.0)
-        if a is not None:
-            self.apply_to_layer("sharpen", lambda arr: sharpen(arr, a))
-
-    def filter_noise(self) -> None:
-        a = simpledialog.askfloat("Noise", "Amount 0..1:", initialvalue=0.04, minvalue=0.0, maxvalue=1.0)
-        if a is not None:
-            self.apply_to_layer("noise", lambda arr: add_noise(arr, a))

@@ -106,12 +106,22 @@ class FilterMasksMixin:
         original = original or {}
         if kind == "blur":
             item = {"type": "blur", "radius": max(1, int(float(value)))}
+        elif kind == "motion_blur":
+            item = {"type": kind, "distance": max(1, int(float(value))), "angle": float(original.get("angle", 0.0))}
         elif kind == "sharpen":
             item = {"type": "sharpen", "amount": max(0.0, float(value))}
+        elif kind == "unsharp_mask":
+            item = {"type": kind, "amount": max(0.0, float(value)), "radius": float(original.get("radius", 2.0)), "threshold": float(original.get("threshold", 0.0))}
+        elif kind == "smart_sharpen":
+            item = {"type": kind, "amount": max(0.0, float(value)), "radius": float(original.get("radius", 1.2))}
         elif kind == "noise":
             item = {"type": "noise", "amount": max(0.0, min(1.0, float(value))), "seed": int(original.get("seed", 12345))}
+        elif kind == "reduce_noise":
+            item = {"type": kind, "strength": max(0.0, min(1.0, float(value)))}
         elif kind == "median":
             item = {"type": "median", "size": max(3, int(float(value)) | 1)}
+        elif kind == "high_pass":
+            item = {"type": kind, "radius": max(0.1, float(value))}
         elif kind == "edge":
             item = {"type": "edge", "strength": max(0.0, min(1.0, float(value)))}
         else:
@@ -134,12 +144,20 @@ class FilterMasksMixin:
         kind = str(item.get("type", "")).lower()
         if kind == "blur":
             return float(item.get("radius", 3))
+        if kind == "motion_blur":
+            return float(item.get("distance", 16))
         if kind == "sharpen":
+            return float(item.get("amount", 1.0))
+        if kind in {"unsharp_mask", "smart_sharpen"}:
             return float(item.get("amount", 1.0))
         if kind == "noise":
             return float(item.get("amount", 0.03))
         if kind == "median":
             return float(item.get("size", 3))
+        if kind == "reduce_noise":
+            return float(item.get("strength", 0.35))
+        if kind == "high_pass":
+            return float(item.get("radius", 4.0))
         if kind in {"edge", "emboss"}:
             return float(item.get("strength", 1.0))
         return 1.0
@@ -180,18 +198,8 @@ class FilterMasksMixin:
         parts = []
         for item in filters:
             kind = str(item.get("type", "")).lower()
-            if kind == "blur":
-                parts.append(self.filter_text_chunk("blur", item.get("radius", 3), item))
-            elif kind == "sharpen":
-                parts.append(self.filter_text_chunk("sharpen", item.get("amount", 1.0), item))
-            elif kind == "noise":
-                parts.append(self.filter_text_chunk("noise", item.get("amount", 0.03), item))
-            elif kind == "median":
-                parts.append(self.filter_text_chunk("median", item.get("size", 3), item))
-            elif kind == "edge":
-                parts.append(self.filter_text_chunk("edge", item.get("strength", 1.0), item))
-            elif kind == "emboss":
-                parts.append(self.filter_text_chunk("emboss", item.get("strength", 1.0), item))
+            if kind in FILTER_TYPES:
+                parts.append(self.filter_text_chunk(kind, self.filter_primary_value(item), item))
         return ";".join(parts)
 
     @staticmethod
@@ -217,18 +225,7 @@ class FilterMasksMixin:
             if len(parts) == 4:
                 metadata["opacity"] = max(0.0, min(1.0, float(parts[2])))
                 metadata["blend_mode"] = parts[3] if parts[3] in BLEND_MODES else "Normal"
-            if kind == "blur":
-                filters.append(self.make_filter_item("blur", max(1, int(float(parts[1]))), metadata))
-            elif kind == "sharpen":
-                filters.append(self.make_filter_item("sharpen", max(0.0, float(parts[1])), metadata))
-            elif kind == "noise":
-                filters.append(self.make_filter_item("noise", max(0.0, min(1.0, float(parts[1]))), metadata))
-            elif kind == "median":
-                filters.append(self.make_filter_item("median", max(3, int(float(parts[1])) | 1), metadata))
-            elif kind == "edge":
-                filters.append(self.make_filter_item("edge", max(0.0, min(1.0, float(parts[1]))), metadata))
-            elif kind == "emboss":
-                filters.append(self.make_filter_item("emboss", max(0.0, min(1.0, float(parts[1]))), metadata))
-            else:
+            if kind not in FILTER_TYPES:
                 raise ValueError
+            filters.append(self.make_filter_item(kind, float(parts[1]), metadata))
         return filters

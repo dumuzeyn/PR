@@ -12,18 +12,8 @@ class FilterDialogsMixin:
 
     def edit_layer_styles(self) -> None:
         layer = self.doc.layer
-        initial = self.effects_to_text(layer.effects)
-        raw = simpledialog.askstring(
-            "Layer styles",
-            "Use semicolon-separated styles:\nstroke,size,opacity\nshadow,x,y,blur,opacity\nglow,blur,opacity\nempty clears styles",
-            initialvalue=initial,
-        )
-        if raw is None:
-            return
-        try:
-            effects = self.parse_effects(raw)
-        except ValueError:
-            messagebox.showerror("Layer styles", "Invalid style string.")
+        effects = self.layer_styles_dialog(layer)
+        if effects is None:
             return
         self.set_layer_property("Layer styles", "effects", effects, preserve_render_cache=False)
 
@@ -36,6 +26,10 @@ class FilterDialogsMixin:
 
     def clear_layer_filters(self) -> None:
         self.set_layer_property("Clear layer filters", "filters", [], preserve_render_cache=False)
+
+    def add_smart_filter(self, kind: str) -> None:
+        item = self.make_filter_item(kind, self.filter_primary_value({"type": kind}))
+        self.set_layer_property(f"Smart filter: {FILTER_LABELS.get(kind, kind)}", "filters", [*self.doc.layer.filters, item], preserve_render_cache=False)
 
     def layer_filters_dialog(self, initial_filters: list[dict], pixels: np.ndarray, selection_mask: np.ndarray | None = None) -> list[dict] | None:
         filters = []
@@ -52,7 +46,7 @@ class FilterDialogsMixin:
         dialog.grab_set()
 
         preview = ttk.Label(dialog)
-        preview.grid(row=0, column=0, rowspan=13, padx=12, pady=12, sticky="n")
+        preview.grid(row=0, column=0, rowspan=14, padx=12, pady=12, sticky="n")
         listbox = tk.Listbox(dialog, height=8, width=26, exportselection=False)
         listbox.grid(row=0, column=1, rowspan=6, padx=(0, 8), pady=12, sticky="ns")
 
@@ -71,33 +65,50 @@ class FilterDialogsMixin:
         value_var = tk.DoubleVar(value=3.0)
         value_spin = ttk.Spinbox(controls, textvariable=value_var, from_=0.0, to=500.0, increment=1.0, width=12)
         value_spin.grid(row=3, column=1, sticky="ew", pady=(0, 8))
+        extra_frame = ttk.Frame(controls)
+        extra_frame.grid(row=4, column=0, columnspan=2, sticky="ew")
+        extra_frame.columnconfigure(1, weight=1)
+        angle_var = tk.DoubleVar(value=0.0)
+        radius_var = tk.DoubleVar(value=2.0)
+        threshold_var = tk.DoubleVar(value=0.0)
+        extra_controls: dict[str, tuple[ttk.Label, ttk.Spinbox]] = {}
+        for row, (key, label, variable, low, high, step) in enumerate([
+            ("angle", "Угол", angle_var, -180.0, 180.0, 1.0),
+            ("radius", "Радиус", radius_var, 0.1, 100.0, 0.1),
+            ("threshold", "Порог", threshold_var, 0.0, 255.0, 1.0),
+        ]):
+            field_label = ttk.Label(extra_frame, text=label)
+            field_spin = ttk.Spinbox(extra_frame, textvariable=variable, from_=low, to=high, increment=step, width=12)
+            field_label.grid(row=row, column=0, sticky="w")
+            field_spin.grid(row=row, column=1, sticky="ew", pady=(0, 6))
+            extra_controls[key] = field_label, field_spin
         enabled_var = tk.BooleanVar(value=True)
         enabled_check = ttk.Checkbutton(controls, text="Включен", variable=enabled_var)
-        enabled_check.grid(row=4, column=0, columnspan=2, sticky="w", pady=(0, 6))
-        ttk.Label(controls, text="Opacity").grid(row=5, column=0, sticky="w")
+        enabled_check.grid(row=5, column=0, columnspan=2, sticky="w", pady=(0, 6))
+        ttk.Label(controls, text="Opacity").grid(row=6, column=0, sticky="w")
         opacity_var = tk.DoubleVar(value=100.0)
         opacity_spin = ttk.Spinbox(controls, textvariable=opacity_var, from_=0.0, to=100.0, increment=5.0, width=12)
-        opacity_spin.grid(row=5, column=1, sticky="ew", pady=(0, 8))
-        ttk.Label(controls, text="Режим").grid(row=6, column=0, sticky="w")
+        opacity_spin.grid(row=6, column=1, sticky="ew", pady=(0, 8))
+        ttk.Label(controls, text="Режим").grid(row=7, column=0, sticky="w")
         filter_blend_mode = tk.StringVar(value="Normal")
         filter_blend_box = ttk.Combobox(controls, textvariable=filter_blend_mode, values=BLEND_MODES, state="readonly", width=14)
-        filter_blend_box.grid(row=6, column=1, sticky="ew", pady=(0, 8))
-        ttk.Label(controls, text="Канал").grid(row=7, column=0, sticky="w")
+        filter_blend_box.grid(row=7, column=1, sticky="ew", pady=(0, 8))
+        ttk.Label(controls, text="Канал").grid(row=8, column=0, sticky="w")
         filter_channel = tk.StringVar(value="RGB")
         filter_channel_box = ttk.Combobox(controls, textvariable=filter_channel, values=list(CHANNEL_VALUES), state="readonly", width=14)
-        filter_channel_box.grid(row=7, column=1, sticky="ew", pady=(0, 8))
+        filter_channel_box.grid(row=8, column=1, sticky="ew", pady=(0, 8))
         mask_inverted = tk.BooleanVar(value=False)
-        ttk.Checkbutton(controls, text="Инвертировать маску", variable=mask_inverted).grid(row=8, column=0, columnspan=2, sticky="w", pady=(0, 6))
-        ttk.Label(controls, text="Плотность маски").grid(row=9, column=0, sticky="w")
+        ttk.Checkbutton(controls, text="Инвертировать маску", variable=mask_inverted).grid(row=9, column=0, columnspan=2, sticky="w", pady=(0, 6))
+        ttk.Label(controls, text="Плотность маски").grid(row=10, column=0, sticky="w")
         mask_density = tk.DoubleVar(value=100.0)
         mask_density_spin = ttk.Spinbox(controls, textvariable=mask_density, from_=0, to=100, increment=5, width=12)
-        mask_density_spin.grid(row=9, column=1, sticky="ew", pady=(0, 6))
-        ttk.Label(controls, text="Растушёвка").grid(row=10, column=0, sticky="w")
+        mask_density_spin.grid(row=10, column=1, sticky="ew", pady=(0, 6))
+        ttk.Label(controls, text="Растушёвка").grid(row=11, column=0, sticky="w")
         mask_feather = tk.DoubleVar(value=0.0)
         mask_feather_spin = ttk.Spinbox(controls, textvariable=mask_feather, from_=0, to=500, increment=1, width=12)
-        mask_feather_spin.grid(row=10, column=1, sticky="ew", pady=(0, 8))
+        mask_feather_spin.grid(row=11, column=1, sticky="ew", pady=(0, 8))
         hint = ttk.Label(controls, text="", wraplength=190, justify=tk.LEFT)
-        hint.grid(row=11, column=0, columnspan=2, sticky="w", pady=(0, 8))
+        hint.grid(row=12, column=0, columnspan=2, sticky="w", pady=(0, 8))
 
         buttons = ttk.Frame(dialog)
         buttons.grid(row=6, column=1, columnspan=2, sticky="ew", padx=(0, 12), pady=(0, 8))
@@ -139,15 +150,31 @@ class FilterDialogsMixin:
             update_preview()
 
         def update_value_controls(kind: str) -> None:
+            visible_extras = {
+                "motion_blur": {"angle"},
+                "unsharp_mask": {"radius", "threshold"},
+                "smart_sharpen": {"radius"},
+            }.get(kind, set())
+            for key, widgets in extra_controls.items():
+                for widget in widgets:
+                    widget.grid() if key in visible_extras else widget.grid_remove()
             if kind == "blur":
                 value_spin.configure(from_=1, to=500, increment=1)
                 hint.configure(text="Радиус размытия в пикселях.")
+            elif kind == "motion_blur":
+                value_spin.configure(from_=1, to=300, increment=1); hint.configure(text="Длина размытия; угол хранится в параметрах фильтра.")
             elif kind == "sharpen":
                 value_spin.configure(from_=0, to=10, increment=0.1)
                 hint.configure(text="Сила повышения резкости.")
+            elif kind in {"unsharp_mask", "smart_sharpen"}:
+                value_spin.configure(from_=0, to=5, increment=0.05); hint.configure(text="Сила повышения резкости без изменения исходного слоя.")
             elif kind == "noise":
                 value_spin.configure(from_=0, to=1, increment=0.01)
                 hint.configure(text="Количество детерминированного шума 0..1.")
+            elif kind == "reduce_noise":
+                value_spin.configure(from_=0, to=1, increment=0.01); hint.configure(text="Сила шумоподавления с сохранением границ.")
+            elif kind == "high_pass":
+                value_spin.configure(from_=0.1, to=100, increment=0.1); hint.configure(text="Радиус выделения деталей на нейтральном сером.")
             elif kind == "median":
                 value_spin.configure(from_=3, to=101, increment=2)
                 hint.configure(text="Нечетный размер медианного окна.")
@@ -167,6 +194,9 @@ class FilterDialogsMixin:
             filter_type.set(FILTER_LABELS.get(kind, FILTER_LABELS["blur"]))
             update_value_controls(selected_filter_kind())
             value_var.set(self.filter_primary_value(item))
+            angle_var.set(float(item.get("angle", 0.0)))
+            radius_var.set(float(item.get("radius", 2.0 if kind == "unsharp_mask" else 1.2)))
+            threshold_var.set(float(item.get("threshold", 0.0)))
             enabled_var.set(bool(item.get("enabled", True)))
             opacity_var.set(float(item.get("opacity", 1.0)) * 100.0)
             blend_mode = str(item.get("blend_mode", "Normal"))
@@ -186,6 +216,9 @@ class FilterDialogsMixin:
             metadata["mask_inverted"] = bool(mask_inverted.get())
             metadata["mask_density"] = float(mask_density.get()) / 100.0
             metadata["mask_feather"] = float(mask_feather.get())
+            metadata["angle"] = float(angle_var.get())
+            metadata["radius"] = float(radius_var.get())
+            metadata["threshold"] = float(threshold_var.get())
             return self.make_filter_item(selected_filter_kind(), value_var.get(), metadata)
 
         def apply_current(_event=None) -> None:
@@ -358,6 +391,9 @@ class FilterDialogsMixin:
         filter_blend_box.bind("<<ComboboxSelected>>", apply_current)
         filter_channel_box.bind("<<ComboboxSelected>>", apply_current)
         value_var.trace_add("write", lambda *_args: apply_current())
+        angle_var.trace_add("write", lambda *_args: apply_current())
+        radius_var.trace_add("write", lambda *_args: apply_current())
+        threshold_var.trace_add("write", lambda *_args: apply_current())
         enabled_var.trace_add("write", lambda *_args: apply_current())
         opacity_var.trace_add("write", lambda *_args: apply_current())
         filter_blend_mode.trace_add("write", lambda *_args: apply_current())
@@ -370,6 +406,8 @@ class FilterDialogsMixin:
         self._filter_dialog_mask_inverted = mask_inverted
         self._filter_dialog_mask_density = mask_density
         self._filter_dialog_mask_feather = mask_feather
+        self._filter_dialog_extra_values = {"angle": angle_var, "radius": radius_var, "threshold": threshold_var}
+        self._filter_dialog_extra_controls = extra_controls
         self._filter_dialog_accept = accept
         refresh_list(0 if filters else None)
         if not filters:

@@ -26,6 +26,8 @@ from .app_mixins.text_layers import TextLayersMixin
 from .app_mixins.free_transform import FreeTransformMixin
 from .app_mixins.transform_workspace import TransformWorkspaceMixin
 from .app_mixins.transform_commands import TransformCommandsMixin
+from .app_mixins.layer_styles import LayerStylesMixin
+from .app_mixins.destructive_filters import DestructiveFiltersMixin
 from .app_mixins.filter_dialogs import FilterDialogsMixin
 from .app_mixins.filter_masks import FilterMasksMixin
 from .app_mixins.layer_masks import LayerMasksMixin
@@ -46,7 +48,7 @@ from .app_mixins.content_aware import ContentAwareMixin
 from .app_mixins.plugins_view import PluginsViewMixin
 
 
-class PhotoRedactorApp(StartupSettingsMixin, StartupScreenMixin, ShortcutsMixin, MenusToolsMixin, ColorsCanvasMixin, CommandsMixin, ActionWorkflowsMixin, RenderingViewMixin, ObjectPropertiesMixin, PointerSupportMixin, SourceOverlayMixin, PathEditingMixin, PointerEventsMixin, PaintingMixin, PatchInteractionMixin, GradientEditorMixin, TextGradientMixin, CropOverlaysMixin, SelectMaskMixin, ColorRangeMixin, AutomaticSelectionMixin, DocumentsMixin, PSDFileMixin, SmartFilesMixin, TextLayersMixin, FreeTransformMixin, TransformWorkspaceMixin, TransformCommandsMixin, FilterDialogsMixin, FilterMasksMixin, LayerMasksMixin, TextVectorMixin, ShapeVectorMixin, BooleanShapesMixin, ModelWorkspaceMixin, GenerativeHistoryMixin, GenerativeWorkspaceMixin, ImageGeometryMixin, ColorWorkspaceMixin, PrintSpotWorkspaceMixin, AdjustmentsMixin, RetouchMixin, AdvancedRetouchMixin, ContentAwareMixin, PluginsViewMixin, tk.Tk):
+class PhotoRedactorApp(StartupSettingsMixin, StartupScreenMixin, ShortcutsMixin, MenusToolsMixin, ColorsCanvasMixin, CommandsMixin, ActionWorkflowsMixin, RenderingViewMixin, ObjectPropertiesMixin, PointerSupportMixin, SourceOverlayMixin, PathEditingMixin, PointerEventsMixin, PaintingMixin, PatchInteractionMixin, GradientEditorMixin, TextGradientMixin, CropOverlaysMixin, SelectMaskMixin, ColorRangeMixin, AutomaticSelectionMixin, DocumentsMixin, PSDFileMixin, SmartFilesMixin, TextLayersMixin, FreeTransformMixin, TransformWorkspaceMixin, TransformCommandsMixin, LayerStylesMixin, FilterDialogsMixin, FilterMasksMixin, LayerMasksMixin, TextVectorMixin, ShapeVectorMixin, BooleanShapesMixin, ModelWorkspaceMixin, GenerativeHistoryMixin, GenerativeWorkspaceMixin, ImageGeometryMixin, ColorWorkspaceMixin, PrintSpotWorkspaceMixin, AdjustmentsMixin, DestructiveFiltersMixin, RetouchMixin, AdvancedRetouchMixin, ContentAwareMixin, PluginsViewMixin, tk.Tk):
     pass
 
 

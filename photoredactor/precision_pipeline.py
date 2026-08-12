@@ -9,7 +9,7 @@ from .color_management import normalize_rgba
 from .core_shared import blend_rgb, blank_rgba
 from .filter_ops import apply_filter_stack
 from .geometry_ops import checker_background
-from .render_ops import render_layer_effects
+from .render_ops import render_layer_style
 from .selection_ops import effective_layer_mask
 
 
@@ -126,9 +126,11 @@ def composite_precision(document, checker: bool = False) -> np.ndarray:
             clipping = _document_alpha_to_layer(previous_alpha, layer)
             alpha_mask = clipping if alpha_mask is None else np.minimum(alpha_mask, clipping)
         display_pixels = np.rint(pixels * 255.0).astype(np.uint8)
-        for effect, x, y, opacity, blend_mode in render_layer_effects(layer, display_pixels):
+        effects, styled_pixels = render_layer_style(layer, display_pixels)
+        for effect, x, y, opacity, blend_mode in effects:
             alpha_blend_precision(output, normalize_rgba(effect), x, y, opacity, None, 1.0, blend_mode)
-        alpha_blend_precision(output, pixels, layer.x, layer.y, layer.opacity, alpha_mask, layer.mask_density, layer.blend_mode)
+        styled = pixels if np.array_equal(styled_pixels, display_pixels) else normalize_rgba(styled_pixels)
+        alpha_blend_precision(output, styled, layer.x, layer.y, layer.opacity, alpha_mask, layer.mask_density, layer.blend_mode)
         previous_alpha = _layer_alpha_canvas(document, layer, pixels, alpha_mask)
     return np.ascontiguousarray(output.astype(np.float32))
 

@@ -398,12 +398,17 @@ SELECT_MASK_PREVIEW_MODES = [
     SELECT_MASK_PREVIEW_OVERLAY, SELECT_MASK_PREVIEW_CUTOUT, SELECT_MASK_PREVIEW_EDGE_CONFIDENCE,
 ]
 
-FILTER_TYPES = ["blur", "sharpen", "noise", "median", "edge", "emboss"]
+FILTER_TYPES = ["blur", "motion_blur", "sharpen", "unsharp_mask", "smart_sharpen", "noise", "reduce_noise", "median", "high_pass", "edge", "emboss"]
 FILTER_LABELS = {
     "blur": "Размытие",
+    "motion_blur": "Размытие в движении",
     "sharpen": "Резкость",
+    "unsharp_mask": "Контурная резкость",
+    "smart_sharpen": "Умная резкость",
     "noise": "Шум",
+    "reduce_noise": "Уменьшение шума",
     "median": "Медиана",
+    "high_pass": "Цветовой контраст",
     "edge": "Края",
     "emboss": "Тиснение",
 }
@@ -444,7 +449,7 @@ ADJUSTMENT_TYPES = [
     "threshold",
     "posterize",
     "invert",
-    "grayscale",
+    "black_white",
 ]
 ADJUSTMENT_LABELS = {
     "brightness_contrast": "\u042f\u0440\u043a\u043e\u0441\u0442\u044c/\u041a\u043e\u043d\u0442\u0440\u0430\u0441\u0442",
@@ -459,7 +464,7 @@ ADJUSTMENT_LABELS = {
     "threshold": "\u041f\u043e\u0440\u043e\u0433",
     "posterize": "\u041f\u043e\u0441\u0442\u0435\u0440\u0438\u0437\u0430\u0446\u0438\u044f",
     "invert": "\u0418\u043d\u0432\u0435\u0440\u0441\u0438\u044f",
-    "grayscale": "\u0427\u0435\u0440\u043d\u043e-\u0431\u0435\u043b\u043e\u0435",
+    "black_white": "Чёрно-белое",
 }
 ADJUSTMENT_VALUES = {label: value for value, label in ADJUSTMENT_LABELS.items()}
 
@@ -469,7 +474,7 @@ ADJUSTMENT_PRESETS = {
     "Кино-контраст": {"type": "curves", "shadows": 48, "midtones": 128, "highlights": 210},
     "Мягкая экспозиция": {"type": "exposure", "exposure": 0.25, "offset": 0.0, "gamma": 1.08},
     "Холодные тени": {"type": "color_balance", "red": -8, "green": 0, "blue": 14},
-    "Чистый черно-белый": {"type": "grayscale"},
+    "Чистый чёрно-белый": {"type": "black_white", "red": 0.299, "green": 0.587, "blue": 0.114},
 }
 
 
