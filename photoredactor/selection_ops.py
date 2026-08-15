@@ -3,6 +3,7 @@ from __future__ import annotations
 from .core_shared import *
 from .layer import Layer
 from .geometry_ops import *
+from .selection_refinement import refine_soft_selection, signed_distance_field
 
 
 def paste_mask(dst: np.ndarray, src: np.ndarray, x: int, y: int) -> None:
@@ -25,28 +26,7 @@ def shifted_mask(mask: np.ndarray, old_width: int, old_height: int, new_width: i
     return out
 
 def refine_selection_mask(mask: np.ndarray, smooth: int = 0, feather: int = 0, contrast: float = 1.0, shift: int = 0) -> np.ndarray:
-    out = mask.copy()
-    if shift > 0:
-        kernel = np.ones((int(shift) * 2 + 1, int(shift) * 2 + 1), dtype=np.uint8)
-        out = cv2.dilate(out, kernel)
-    elif shift < 0:
-        amount = abs(int(shift))
-        kernel = np.ones((amount * 2 + 1, amount * 2 + 1), dtype=np.uint8)
-        out = cv2.erode(out, kernel)
-    if smooth > 0:
-        radius = int(smooth)
-        k = radius * 2 + 1
-        out = cv2.GaussianBlur(out, (k, k), radius)
-        out = np.where(out >= 128, 255, 0).astype(np.uint8)
-    if feather > 0:
-        radius = int(feather)
-        k = radius * 2 + 1
-        out = cv2.GaussianBlur(out, (k, k), radius)
-    if abs(float(contrast) - 1.0) > 0.001:
-        work = out.astype(np.float32)
-        work = (work - 127.5) * max(0.0, float(contrast)) + 127.5
-        out = np.clip(work, 0, 255).astype(np.uint8)
-    return out
+    return refine_soft_selection(mask, smooth, feather, contrast, shift)
 
 def refine_layer_mask(
     mask: np.ndarray,
@@ -147,11 +127,12 @@ def cleanup_selection_edges(mask: np.ndarray, image: np.ndarray, radius: int = 3
         return np.zeros_like(mask, dtype=np.uint8)
     radius = max(1, int(radius))
     strength = float(np.clip(strength, 0.0, 1.0))
-    binary = np.where(mask > 0, 255, 0).astype(np.uint8)
+    source = np.asarray(mask, dtype=np.uint8)
+    binary = np.where(source >= 128, 255, 0).astype(np.uint8)
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (radius * 2 + 1, radius * 2 + 1))
     cleaned = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
     cleaned = cv2.morphologyEx(cleaned, cv2.MORPH_OPEN, kernel)
-    soft = cv2.GaussianBlur(cleaned, (radius * 2 + 1, radius * 2 + 1), radius).astype(np.float32)
+    soft = refine_soft_selection(cleaned, max(1, radius // 2), max(1, radius // 2), 1.0 + strength, 0).astype(np.float32)
 
     gray = cv2.cvtColor(image[:, :, :3], cv2.COLOR_RGB2GRAY)
     gray = np.where(image[:, :, 3] > 0, gray, 0).astype(np.uint8)
@@ -160,9 +141,9 @@ def cleanup_selection_edges(mask: np.ndarray, image: np.ndarray, radius: int = 3
     boundary = cv2.subtract(cv2.dilate(binary, kernel), cv2.erode(binary, kernel))
     preserve = (edge_band.astype(np.float32) / 255.0) * (boundary.astype(np.float32) / 255.0) * strength
 
-    mixed = soft * (1.0 - preserve) + binary.astype(np.float32) * preserve
-    mixed = (mixed - 127.5) * (1.0 + strength * 1.5) + 127.5
-    return np.where(np.clip(mixed, 0, 255) >= 128, 255, 0).astype(np.uint8)
+    target = soft * (1.0 - preserve) + source.astype(np.float32) * preserve
+    mixed = source.astype(np.float32) * (1.0 - strength) + target * strength
+    return np.rint(np.clip(mixed, 0, 255)).astype(np.uint8)
 
 def selection_edge_confidence(mask: np.ndarray, image: np.ndarray, radius: int = 3) -> np.ndarray:
     if mask is None or mask.size == 0:
@@ -199,26 +180,25 @@ def correct_selection_edges(mask: np.ndarray, image: np.ndarray, radius: int = 3
     radius = max(1, int(radius))
     strength = float(np.clip(strength, 0.0, 1.0))
     threshold = int(np.clip(threshold, 0, 255))
-    binary = np.where(mask > 0, 255, 0).astype(np.uint8)
+    source = np.asarray(mask, dtype=np.uint8)
+    binary = np.where(source >= 128, 255, 0).astype(np.uint8)
     confidence = selection_edge_confidence(binary, image, radius)
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (radius * 2 + 1, radius * 2 + 1))
     outer = cv2.dilate(binary, kernel)
     inner = cv2.erode(binary, kernel)
     boundary = cv2.subtract(outer, inner)
     if not np.any(boundary):
-        return binary
+        return source.copy()
 
     trusted = (confidence >= threshold) & (boundary > 0)
     weak = (confidence < threshold) & (boundary > 0)
-    edge_locked = np.where(trusted, binary, 0).astype(np.uint8)
     candidate = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
     candidate = cv2.morphologyEx(candidate, cv2.MORPH_OPEN, kernel)
-    relaxed = cv2.GaussianBlur(candidate, (radius * 2 + 1, radius * 2 + 1), radius)
-    relaxed = np.where(relaxed >= 128, 255, 0).astype(np.uint8)
-    mixed = np.where(weak, relaxed, binary).astype(np.uint8)
-    sharpened = np.where(edge_locked > 0, 255, mixed).astype(np.uint8)
-    blend = binary.astype(np.float32) * (1.0 - strength) + sharpened.astype(np.float32) * strength
-    return np.where(blend >= 128, 255, 0).astype(np.uint8)
+    relaxed = refine_soft_selection(candidate, max(1, radius // 2), max(1, radius // 3), 1.0, 0)
+    target = np.where(weak, relaxed, source).astype(np.float32)
+    target[trusted] = source[trusted]
+    blend = source.astype(np.float32) * (1.0 - strength) + target * strength
+    return np.rint(np.clip(blend, 0, 255)).astype(np.uint8)
 
 def smart_radius_refine(mask: np.ndarray, image: np.ndarray, radius: int = 5, strength: float = 0.7) -> np.ndarray:
     """Refine uncertain boundaries while retaining the mask's fractional alpha."""

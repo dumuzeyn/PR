@@ -139,12 +139,24 @@ class SelectMaskMixin:
                 mask = smart_radius_refine(mask, composite, int(edge_radius.get()), float(edge_strength.get()))
             return mask
 
+        def preview_mask(reduced_size: tuple[int, int], reduced_composite: np.ndarray, scale: float) -> np.ndarray:
+            if reduced_size == (self.doc.width, self.doc.height):
+                return current_mask()
+            reduced_working = cv2.resize(working, reduced_size, interpolation=cv2.INTER_AREA)
+            mask = refine_selection_mask(
+                reduced_working,
+                round(int(smooth.get()) * scale),
+                round(int(feather.get()) * scale),
+                float(contrast.get()),
+                round(int(shift.get()) * scale),
+            )
+            if bool(smart_radius.get()):
+                radius = max(1, round(int(edge_radius.get()) * scale))
+                mask = smart_radius_refine(mask, reduced_composite, radius, float(edge_strength.get()))
+            return mask
+
         def update_preview(*_args) -> None:
             preview_after[0] = None
-            try:
-                mask = current_mask()
-            except (tk.TclError, ValueError):
-                return
             preview.update_idletasks()
             available = max(300, min(preview.winfo_width(), preview.winfo_height()))
             size = min(720, available)
@@ -157,14 +169,18 @@ class SelectMaskMixin:
             if reduced_composite is None:
                 reduced_composite = composite if reduced_size == (self.doc.width, self.doc.height) else cv2.resize(composite, reduced_size, interpolation=cv2.INTER_AREA)
                 reduced_composite_cache[reduced_size] = reduced_composite
-            reduced_mask = mask if reduced_size == (self.doc.width, self.doc.height) else cv2.resize(mask, reduced_size, interpolation=cv2.INTER_AREA)
+            try:
+                reduced_mask = preview_mask(reduced_size, reduced_composite, scale)
+            except (tk.TclError, ValueError):
+                return
             canvas = self.render_select_mask_preview(reduced_composite, reduced_mask, preview_mode.get(), size)
             self._select_mask_preview_image = ImageTk.PhotoImage(canvas)
             preview.delete("preview")
             preview.create_image(preview.winfo_width() / 2.0, preview.winfo_height() / 2.0, image=self._select_mask_preview_image, tags="preview")
             preview.tag_lower("preview")
-            selected = int(np.count_nonzero(mask))
-            soft = int(np.count_nonzero((mask > 0) & (mask < 255)))
+            area_scale = max(scale * scale, 1e-9)
+            selected = round(np.count_nonzero(reduced_mask) / area_scale)
+            soft = round(np.count_nonzero((reduced_mask > 0) & (reduced_mask < 255)) / area_scale)
             stats.configure(text=f"Выбрано: {selected} px  |  Полупрозрачных: {soft} px")
 
         def schedule_preview(*_args) -> None:
