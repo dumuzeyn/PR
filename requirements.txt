@@ -1,6 +1,6 @@
 numpy
 opencv-python
-Pillow
+Pillow==10.4.0
 rawpy
 tifffile
 pyinstaller
