@@ -29,12 +29,16 @@ class AutomaticSelectionMixin:
         dialog.grab_set()
         dialog.minsize(820, 590)
         target = tk.StringVar(value="Объект")
+        quality_mode = tk.StringVar(value="Точный")
         sensitivity = tk.DoubleVar(value=0.55)
         preview_mode = tk.StringVar(value=SELECT_MASK_PREVIEW_OVERLAY)
         output = tk.StringVar(value="Уточнить в «Выделить и маска»")
         result: dict[str, object] | None = None
         composite = self.render_engine.render(self.doc, checker=False)
-        service = SegmentationService.from_local_resources()
+        services = {
+            "Быстрый": SegmentationService.from_local_resources("fast"),
+            "Точный": SegmentationService.from_local_resources("accurate"),
+        }
         roi_doc: list[tuple[int, int, int, int] | None] = [None]
         roi_start: list[tuple[int, int] | None] = [None]
 
@@ -55,6 +59,8 @@ class AutomaticSelectionMixin:
         ttk.Label(controls, text="Что выделить", style="PanelTitle.TLabel").pack(anchor=tk.W, pady=(4, 3))
         target_box = ttk.Combobox(controls, textvariable=target, values=["Объект", "Объект в области", "Фон", "Небо"], state="readonly")
         target_box.pack(fill=tk.X)
+        ttk.Label(controls, text="Качество", style="PanelTitle.TLabel").pack(anchor=tk.W, pady=(14, 3))
+        ttk.Combobox(controls, textvariable=quality_mode, values=["Быстрый", "Точный"], state="readonly").pack(fill=tk.X)
         ttk.Label(controls, text="Чувствительность", style="PanelTitle.TLabel").pack(anchor=tk.W, pady=(14, 3))
         sensitivity_value = ttk.Label(controls, text="55%", style="Secondary.TLabel")
         sensitivity_value.pack(anchor=tk.E)
@@ -66,11 +72,11 @@ class AutomaticSelectionMixin:
         ttk.Combobox(controls, textvariable=output, values=["Применить выделение", "Уточнить в «Выделить и маска»"], state="readonly").pack(fill=tk.X)
         description = ttk.Label(controls, wraplength=230, justify=tk.LEFT, style="Secondary.TLabel")
         description.pack(fill=tk.X, pady=(16, 0))
-        backend_status = ttk.Label(controls, text=f"Движок: {service.backend_name}", wraplength=230, justify=tk.LEFT, style="Secondary.TLabel")
+        backend_status = ttk.Label(controls, text=f"Движок: {services['Точный'].backend_name}", wraplength=230, justify=tk.LEFT, style="Secondary.TLabel")
         backend_status.pack(fill=tk.X, pady=(14, 3))
 
         def open_model_folder() -> None:
-            folder = service.model_folder()
+            folder = services["Точный"].model_folder()
             folder.mkdir(parents=True, exist_ok=True)
             if os.name == "nt":
                 os.startfile(folder)
@@ -78,9 +84,9 @@ class AutomaticSelectionMixin:
         ttk.Button(controls, text="Папка модели сегментации", command=open_model_folder).pack(fill=tk.X)
 
         latest_mask: list[np.ndarray | None] = [None]
-        latest_signature: list[tuple[str, float, tuple[int, int, int, int] | None] | None] = [None]
+        latest_signature: list[tuple[str, str, float, tuple[int, int, int, int] | None] | None] = [None]
         preview_after: list[str | None] = [None]
-        latest_backend: list[str] = [service.backend_name]
+        latest_backend: list[str] = [services["Точный"].backend_name]
 
         def calculate_mask() -> np.ndarray:
             local_box = None
@@ -89,7 +95,7 @@ class AutomaticSelectionMixin:
                 local_box = (x1 - layer.x, y1 - layer.y, x2 - layer.x, y2 - layer.y)
             if target.get() == "Объект в области" and local_box is None:
                 local_box = (0, 0, layer.pixels.shape[1], layer.pixels.shape[0])
-            selection = service.select(layer.pixels, target.get(), float(sensitivity.get()), local_box)
+            selection = services[quality_mode.get()].select(layer.pixels, target.get(), float(sensitivity.get()), local_box)
             latest_backend[0] = selection.backend + (" (fallback)" if selection.fallback else "")
             return self.doc._layer_mask_to_document(layer, selection.mask)
 
@@ -100,7 +106,7 @@ class AutomaticSelectionMixin:
             except (tk.TclError, ValueError):
                 return
             latest_mask[0] = mask
-            latest_signature[0] = (target.get(), round(float(sensitivity.get()), 4), roi_doc[0])
+            latest_signature[0] = (target.get(), quality_mode.get(), round(float(sensitivity.get()), 4), roi_doc[0])
             size = 520
             image = self.render_select_mask_preview(composite, mask, preview_mode.get(), size)
             if target.get() == "Объект в области" and roi_doc[0] is not None:
@@ -162,7 +168,7 @@ class AutomaticSelectionMixin:
 
         def accept() -> None:
             nonlocal result
-            signature = (target.get(), round(float(sensitivity.get()), 4), roi_doc[0])
+            signature = (target.get(), quality_mode.get(), round(float(sensitivity.get()), 4), roi_doc[0])
             mask = latest_mask[0] if latest_mask[0] is not None and latest_signature[0] == signature else calculate_mask()
             result = {"mask": mask.copy(), "target": target.get(), "sensitivity": float(sensitivity.get()), "output": output.get()}
             dialog.destroy()
@@ -170,12 +176,13 @@ class AutomaticSelectionMixin:
         ttk.Label(footer, text="Результат можно сразу доработать кистями сложного края", style="Secondary.TLabel").pack(side=tk.LEFT)
         ttk.Button(footer, text="Применить", command=accept, style="Primary.TButton").pack(side=tk.RIGHT, padx=(6, 0))
         ttk.Button(footer, text="Отмена", command=dialog.destroy).pack(side=tk.RIGHT)
-        for variable in (target, sensitivity, preview_mode):
+        for variable in (target, quality_mode, sensitivity, preview_mode):
             variable.trace_add("write", schedule_preview)
         preview.bind("<ButtonPress-1>", roi_press)
         preview.bind("<B1-Motion>", roi_drag)
         preview.bind("<ButtonRelease-1>", roi_release)
         self._automatic_selection_target = target
+        self._automatic_selection_quality = quality_mode
         self._automatic_selection_sensitivity = sensitivity
         self._automatic_selection_output = output
         self._automatic_selection_accept = accept
@@ -195,7 +202,7 @@ class AutomaticSelectionMixin:
         self.semantic_select("Небо", "Выделить небо")
 
     def semantic_select(self, target: str, command_name: str) -> None:
-        service = SegmentationService.from_local_resources()
+        service = SegmentationService.from_local_resources("accurate")
         result = service.select(self.doc.layer.pixels, target, 0.55)
         mask = self.doc._layer_mask_to_document(self.doc.layer, result.mask)
         self.run_selection_command(command_name, lambda: setattr(self.doc, "selection_mask", mask.copy()))

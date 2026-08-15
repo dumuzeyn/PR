@@ -317,7 +317,22 @@ def sky_selection_mask(pixels: np.ndarray, sensitivity: float = 0.5) -> np.ndarr
     sensitivity = float(np.clip(sensitivity, 0.0, 1.0))
     blue_sky = (hue >= 78 + round((1.0 - sensitivity) * 12)) & (hue <= 138 - round((1.0 - sensitivity) * 6)) & (saturation >= max(8, 38 - round(sensitivity * 28))) & (value >= max(45, 95 - round(sensitivity * 45)))
     pale_sky = (saturation < 40 + round(sensitivity * 35)) & (value >= 195 - round(sensitivity * 48)) & (rgb[:, :, 2] >= rgb[:, :, 0] - round(2 + sensitivity * 16))
-    candidates = (blue_sky | pale_sky) & upper_weight & visible
+    lab = cv2.cvtColor(rgb, cv2.COLOR_RGB2LAB).astype(np.float32)
+    top_height = max(2, h // 18)
+    top_visible = visible[:top_height]
+    continuity = np.zeros((h, w), dtype=bool)
+    if np.count_nonzero(top_visible) >= max(8, w // 6):
+        top_values = lab[:top_height][top_visible]
+        top_color = np.median(top_values, axis=0)
+        top_spread = float(np.percentile(np.linalg.norm(top_values - top_color, axis=1), 75))
+        if top_spread <= 38.0:
+            distance = np.linalg.norm(lab - top_color, axis=2)
+            # A clean top strip should produce a strict colour model.  Widen it
+            # only when the strip itself contains real variation (clouds/noise).
+            continuity_limit = 6.0 + sensitivity * 8.0 + min(20.0, top_spread * 1.6)
+            continuity = distance <= continuity_limit
+            continuity &= value >= max(8, round(28 - sensitivity * 18))
+    candidates = (blue_sky | pale_sky | continuity) & upper_weight & visible
     connected = top_connected_mask(candidates)
     if not np.any(connected):
         return np.zeros(alpha.shape, dtype=np.uint8)
