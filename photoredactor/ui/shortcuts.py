@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import sys
 
 
 @dataclass(frozen=True)
@@ -98,7 +99,8 @@ def event_key(event) -> str:
 
 def command_for_event(event) -> str | None:
     state = int(getattr(event, "state", 0))
-    if state & (0x0008 | 0x20000):
+    alt_mask = 0x20000 if sys.platform == "win32" else 0x0008
+    if state & alt_mask:
         return None
     shift = bool(state & 0x0001)
     return COMMAND_BY_GESTURE.get((event_key(event), shift))

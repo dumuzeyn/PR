@@ -21,6 +21,7 @@ def test_shortcut_registry_has_no_conflicts() -> None:
 
 def test_control_commands_use_physical_keys_and_shift() -> None:
     assert command_for_event(event(90, "Cyrillic_ya")) == "undo"
+    assert command_for_event(event(90, "Cyrillic_ya", 0x000E)) == "undo"
     assert command_for_event(event(90, "Cyrillic_ya", 0x0005)) == "redo"
     assert command_for_event(event(83, "Cyrillic_yeru", 0x0005)) == "save_as"
     assert command_for_event(event(73, "Cyrillic_sha", 0x0005)) == "invert_selection"

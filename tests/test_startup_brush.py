@@ -85,7 +85,7 @@ class BrushStartupTests(unittest.TestCase):
         )
         option.focus_force()
         self.app.update()
-        option.event_generate("<Control-KeyPress-z>", state=0x0004, keycode=90)
+        option.event_generate("<Control-KeyPress-z>", state=0x000E, keycode=90)
         self.app.update()
 
         np.testing.assert_array_equal(self.app.doc.layer.pixels, before)
