@@ -25,22 +25,24 @@ jobs:
           architecture: x64
 
       - name: Install dependencies
+        shell: powershell
         run: |
-          python -m pip install --disable-pip-version-check --no-cache-dir -r requirements.txt
-          python -m pip install --disable-pip-version-check --no-cache-dir --force-reinstall "https://files.pythonhosted.org/packages/74/0a/d4ce3c44bca8635bd29a2eab5aa181b654a734a29b263ca8efe013beea98/pillow-10.4.0-cp312-cp312-win_amd64.whl#sha256=1d846aea995ad352d4bdcc847535bd56e0fd88d36829d2c90be880ef1ee4668a"
+          python -m venv .venv
+          .\.venv\Scripts\python.exe -m pip install --disable-pip-version-check --no-cache-dir -r requirements.txt
+          .\.venv\Scripts\python.exe -m pip install --disable-pip-version-check --no-cache-dir --force-reinstall "https://files.pythonhosted.org/packages/74/0a/d4ce3c44bca8635bd29a2eab5aa181b654a734a29b263ca8efe013beea98/pillow-10.4.0-cp312-cp312-win_amd64.whl#sha256=1d846aea995ad352d4bdcc847535bd56e0fd88d36829d2c90be880ef1ee4668a"
 
       - name: Verify text shaping engine
         shell: powershell
         run: |
-          python -c "import struct, PIL; from PIL import features; assert struct.calcsize('P') * 8 == 64; assert features.check('raqm'); assert features.check('fribidi'); assert features.check('harfbuzz'); print('Pillow', PIL.__version__, 'RAQM/FriBidi/HarfBuzz: OK')"
+          .\.venv\Scripts\python.exe -c "import struct, PIL; from PIL import features; assert struct.calcsize('P') * 8 == 64; assert features.check('raqm'); assert features.check('fribidi'); assert features.check('harfbuzz'); print('Pillow', PIL.__version__, 'RAQM/FriBidi/HarfBuzz: OK')"
 
       - name: Run tests
         shell: powershell
-        run: .\run_tests.ps1 -Python python
+        run: .\run_tests.ps1 -Python .\.venv\Scripts\python.exe
 
       - name: Build executable
         shell: powershell
-        run: .\build_exe.ps1
+        run: .\build_exe.ps1 -Python .\.venv\Scripts\python.exe
 
       - name: Verify executable
         shell: powershell
