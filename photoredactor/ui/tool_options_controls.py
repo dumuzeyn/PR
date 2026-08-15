@@ -6,7 +6,7 @@ from .tool_options_shared import *
 class ToolOptionsControlsMixin:
     def _add_brush_engine_options(self, tool: str) -> None:
         self._add_scale("Поток", self.brush_flow, 0.01, 1.0, "%", percent=True)
-        self._add_scale("Интервал", self.brush_spacing, 0.01, 1.0, "%", percent=True)
+        self._add_scale("Интервал", self.brush_spacing, 0.0, 1.0, "%", percent=True)
         self._add_scale("Сглаживание", self.brush_smoothing, 0.0, 1.0, "%", percent=True)
         if tool == "brush":
             ttk.Label(self.body, text="Режим наложения").pack(anchor=tk.W, padx=8, pady=(6, 0))

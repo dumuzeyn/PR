@@ -336,7 +336,7 @@ RETOUCH_PRESETS = {
 }
 
 TOOL_SETTINGS_DEFAULTS = {
-    "brush": {"size": 28, "hardness": 0.5, "opacity": 1.0, "flow": 1.0, "spacing": 0.25, "smoothing": 0.15, "blend_mode": "Normal", "pressure_size": False, "pressure_opacity": False, "pressure_flow": False},
+    "brush": {"size": 28, "hardness": 1.0, "opacity": 1.0, "flow": 1.0, "spacing": 0.0, "smoothing": 0.15, "blend_mode": "Normal", "pressure_size": False, "pressure_opacity": False, "pressure_flow": False},
     "eraser": {"size": 28, "hardness": 0.5, "opacity": 1.0, "flow": 1.0, "spacing": 0.25, "smoothing": 0.15, "pressure_size": False, "pressure_opacity": False, "pressure_flow": False},
     "blur_tool": {"size": 32, "hardness": 0.5, "strength": 0.25, "flow": 0.35, "spacing": 0.2, "smoothing": 0.15, "pressure_size": False, "pressure_opacity": False, "pressure_flow": False},
     "sharpen_tool": {"size": 28, "hardness": 0.5, "strength": 0.2, "flow": 0.3, "spacing": 0.2, "smoothing": 0.15, "pressure_size": False, "pressure_opacity": False, "pressure_flow": False},
@@ -349,7 +349,7 @@ TOOL_SETTINGS_DEFAULTS = {
 
 BRUSH_PRESET_DEFAULTS = {
     "Мягкая кисть": {"size": 80, "hardness": 0.0, "opacity": 1.0, "flow": 0.25, "spacing": 0.12, "smoothing": 0.25, "blend_mode": "Normal"},
-    "Круглая кисть": {"size": 28, "hardness": 0.8, "opacity": 1.0, "flow": 1.0, "spacing": 0.25, "smoothing": 0.15, "blend_mode": "Normal"},
+    "Круглая кисть": {"size": 28, "hardness": 1.0, "opacity": 1.0, "flow": 1.0, "spacing": 0.0, "smoothing": 0.15, "blend_mode": "Normal"},
     "Точная ретушь": {"size": 16, "hardness": 0.45, "opacity": 1.0, "flow": 0.2, "spacing": 0.15, "smoothing": 0.35, "blend_mode": "Normal"},
 }
 

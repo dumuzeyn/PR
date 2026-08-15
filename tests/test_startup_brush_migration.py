@@ -9,6 +9,31 @@ from photoredactor.app import PhotoRedactorApp
 
 
 class BrushSettingsMigrationTests(unittest.TestCase):
+    def test_previous_factory_brush_is_updated_to_new_defaults(self) -> None:
+        settings_path = Path(os.environ["LOCALAPPDATA"]) / "PhotoRedactor" / "settings.json"
+        settings_path.parent.mkdir(parents=True)
+        settings_path.write_text(json.dumps({
+            "tool_settings": {"brush": {
+                "size": 28, "hardness": 0.5, "opacity": 1.0, "flow": 1.0,
+                "spacing": 0.25, "smoothing": 0.15, "blend_mode": "Normal",
+            }},
+            "brush_presets": {"Круглая кисть": {
+                "size": 28, "hardness": 0.8, "opacity": 1.0, "flow": 1.0,
+                "spacing": 0.25, "smoothing": 0.15, "blend_mode": "Normal",
+            }},
+        }), encoding="utf-8")
+        original = PhotoRedactorApp.read_clipboard_image
+        PhotoRedactorApp.read_clipboard_image = staticmethod(lambda: None)
+        app = PhotoRedactorApp()
+        try:
+            self.assertAlmostEqual(app.hardness.get(), 1.0)
+            self.assertAlmostEqual(app.brush_spacing.get(), 0.0)
+            self.assertAlmostEqual(app.brush_presets["Круглая кисть"]["hardness"], 1.0)
+            self.assertAlmostEqual(app.brush_presets["Круглая кисть"]["spacing"], 0.0)
+        finally:
+            app.destroy()
+            PhotoRedactorApp.read_clipboard_image = staticmethod(original)
+
     def test_polluted_ui_test_profile_is_replaced_with_writable_defaults(self) -> None:
         settings_path = Path(os.environ["LOCALAPPDATA"]) / "PhotoRedactor" / "settings.json"
         settings_path.parent.mkdir(parents=True)
@@ -25,6 +50,8 @@ class BrushSettingsMigrationTests(unittest.TestCase):
         try:
             self.assertEqual(app.brush_size.get(), 28)
             self.assertEqual(app.brush_blend_mode.get(), "Normal")
+            self.assertAlmostEqual(app.hardness.get(), 1.0)
+            self.assertAlmostEqual(app.brush_spacing.get(), 0.0)
             self.assertAlmostEqual(app.opacity.get(), 1.0)
             self.assertAlmostEqual(app.brush_flow.get(), 1.0)
             self.assertEqual(app.brush_advanced["angle"], 0.0)

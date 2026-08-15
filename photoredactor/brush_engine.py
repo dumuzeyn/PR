@@ -72,7 +72,7 @@ class BrushSettings:
             hardness=float(np.clip(self.hardness, 0.0, 1.0)),
             opacity=float(np.clip(self.opacity, 0.0, 1.0)),
             flow=float(np.clip(self.flow, 0.0, 1.0)),
-            spacing=float(np.clip(self.spacing, 0.01, 1.0)),
+            spacing=float(np.clip(self.spacing, 0.0, 1.0)),
             smoothing=float(np.clip(self.smoothing, 0.0, 1.0)),
             blend_mode=self.blend_mode if self.blend_mode in BRUSH_BLEND_MODES else "Normal",
             pressure_size=bool(self.pressure_size),
@@ -128,7 +128,9 @@ class BrushPathSampler:
 
     def __init__(self, settings: BrushSettings) -> None:
         self.settings = settings.normalized()
-        self.step = max(1.0, self.settings.radius * 2.0 * self.settings.spacing)
+        requested_step = self.settings.radius * 2.0 * self.settings.spacing
+        continuous_step = self.settings.radius * 0.2
+        self.step = max(1.0, continuous_step if self.settings.spacing <= 0.0 else requested_step)
         self._raw: tuple[float, float] | None = None
         self._filtered: tuple[float, float] | None = None
         self._sample = TabletSample()

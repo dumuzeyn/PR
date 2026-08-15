@@ -119,18 +119,23 @@ class ShortcutsMixin:
         return "canvas"
 
     def shortcut_undo(self, _event=None):
-        if self.shortcut_context() == "text":
+        if self._text_editor_has_focus():
             return None
         if self._editor_active:
             self.undo()
         return "break"
 
     def shortcut_redo(self, _event=None):
-        if self.shortcut_context() == "text":
+        if self._text_editor_has_focus():
             return None
         if self._editor_active:
             self.redo()
         return "break"
+
+    def _text_editor_has_focus(self) -> bool:
+        editor = getattr(self, "_text_editor", None)
+        focus = self.focus_get()
+        return editor is not None and focus is not None and self._widget_is_descendant(focus, editor)
 
     def shortcut_save(self, _event=None):
         if self._editor_active:

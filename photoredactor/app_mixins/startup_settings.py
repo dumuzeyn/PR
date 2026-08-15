@@ -54,9 +54,9 @@ class StartupSettingsMixin:
         self.zoom = tk.DoubleVar(value=1.0)
         self.brush_size = tk.IntVar(value=28)
         self.opacity = tk.DoubleVar(value=1.0)
-        self.hardness = tk.DoubleVar(value=0.5)
+        self.hardness = tk.DoubleVar(value=1.0)
         self.brush_flow = tk.DoubleVar(value=1.0)
-        self.brush_spacing = tk.DoubleVar(value=0.25)
+        self.brush_spacing = tk.DoubleVar(value=0.0)
         self.brush_smoothing = tk.DoubleVar(value=0.15)
         self.brush_blend_mode = tk.StringVar(value="Normal")
         self.pressure_size = tk.BooleanVar(value=False)
@@ -359,6 +359,20 @@ class StartupSettingsMixin:
                     self.tool_settings["brush"] = copy.deepcopy(TOOL_SETTINGS_DEFAULTS["brush"])
                     self.brush_advanced.clear()
                     self.brush_advanced.update(default_brush_config())
+                elif int(data.get("brush_default_version", 1)) < 2:
+                    brush = self.tool_settings.get("brush", {})
+                    old_defaults = {
+                        "hardness": 0.5,
+                        "spacing": 0.25,
+                        "opacity": 1.0,
+                        "flow": 1.0,
+                        "blend_mode": "Normal",
+                    }
+                    if all(brush.get(key) == value for key, value in old_defaults.items()):
+                        brush.update(hardness=1.0, spacing=0.0)
+                    round_brush = self.brush_presets.get("Круглая кисть", {})
+                    if round_brush.get("hardness") == 0.8 and round_brush.get("spacing") == 0.25:
+                        round_brush.update(hardness=1.0, spacing=0.0)
                 shape_settings = data.get("shape_settings", {})
                 if isinstance(shape_settings, dict):
                     self.shape_stroke_width.set(max(0, min(100, int(shape_settings.get("stroke_width", 2)))))
@@ -425,6 +439,7 @@ class StartupSettingsMixin:
                         "tool_settings": self.tool_settings,
                         "brush_presets": self.brush_presets,
                         "brush_advanced": self.brush_advanced,
+                        "brush_default_version": 2,
                         "shape_settings": {
                             "stroke_width": int(self.shape_stroke_width.get()),
                             "polygon_sides": int(self.polygon_sides.get()),

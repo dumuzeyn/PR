@@ -109,6 +109,19 @@ def test_stabilizer_and_pulled_string_have_distinct_behavior() -> None:
         assert sampled(settings, 6) == sampled(settings, 101)
 
 
+def test_zero_spacing_uses_bounded_continuous_sampling() -> None:
+    settings = BrushSettings(28, hardness=1.0, spacing=0.0, smoothing=0.0)
+    sampler = BrushPathSampler(settings)
+    dabs = sampler.begin((100, 80)) + sampler.extend((1600, 80))
+    assert 250 <= len(dabs) <= 300
+    assert abs(sampler.step - 5.6) < 1e-9
+    layer = Layer("Непрерывная линия", np.zeros((160, 1700, 4), dtype=np.uint8))
+    stroke = PixelBrushStroke(layer, settings, (25, 120, 240, 255))
+    for dab in dabs:
+        stroke.dab(dab.x, dab.y, dab.pressure, dab)
+    assert np.all(layer.pixels[80, 100:1601, 3] == 255)
+
+
 def test_tablet_adapter_normalizes_optional_channels() -> None:
     sample = EventTabletBackend().sample(SimpleNamespace(pressure=32768, tilt_x=45, tilt_y=-90, rotation=450, eraser=True))
     assert 0.49 < sample.pressure < 0.51

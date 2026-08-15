@@ -25,6 +25,7 @@ _checker_cache: dict[tuple[int, int, int], np.ndarray] = {}
 _brush_mask_cache: dict[int, np.ndarray] = {}
 _retouch_mask_cache: dict[tuple[int, int], np.ndarray] = {}
 _filter_mask_cache: dict[str, np.ndarray] = {}
+_gradient_lookup_cache: dict[tuple[Any, ...], np.ndarray] = {}
 BLEND_MODES = [
     "Normal",
     "Multiply",
@@ -203,20 +204,41 @@ class GradientEngine:
         noise: dict[str, Any] | None = None,
     ) -> np.ndarray:
         normalized = cls.normalize_stops(stops)
-        positions = np.array([item[0] for item in normalized], dtype=np.float32)
-        colors = np.array([item[1] for item in normalized], dtype=np.float32) / 255.0
-        axis = np.arange(65537, dtype=np.float32) / 65536.0
-        interpolation_axis = cls.midpoint_axis(axis, stops, positions)
-        lookup = color_lookup(interpolation_axis, positions, colors, interpolation_space)
-        opacity = cls.normalize_opacity_stops(opacity_stops)
-        opacity_positions = np.array([item[0] for item in opacity], dtype=np.float32)
-        opacity_values = np.array([item[1] for item in opacity], dtype=np.float32)
-        alpha = np.interp(axis, opacity_positions, opacity_values)
-        lookup[:, 3] = np.clip(lookup[:, 3] * alpha, 0.0, 1.0)
-        if not transparency:
-            lookup[:, 3] = 1.0
-        if noise and bool(noise.get("enabled", False)):
-            lookup = noise_lookup(lookup, noise)
+        noise_enabled = bool(noise and noise.get("enabled", False))
+        source_stops = stops or []
+        midpoints = tuple(
+            float(np.clip(
+                source_stops[index].get("midpoint", 0.5)
+                if index < len(source_stops) and isinstance(source_stops[index], dict) else 0.5,
+                0.01,
+                0.99,
+            ))
+            for index in range(len(normalized) - 1)
+        )
+        cache_key = None
+        if opacity_stops is None and not noise_enabled:
+            cache_key = (tuple(normalized), midpoints, interpolation_space, bool(transparency))
+        lookup = _gradient_lookup_cache.get(cache_key) if cache_key is not None else None
+        if lookup is None:
+            positions = np.array([item[0] for item in normalized], dtype=np.float32)
+            colors = np.array([item[1] for item in normalized], dtype=np.float32) / 255.0
+            axis = np.arange(65537, dtype=np.float32) / 65536.0
+            interpolation_axis = cls.midpoint_axis(axis, stops, positions)
+            lookup = color_lookup(interpolation_axis, positions, colors, interpolation_space)
+            opacity = cls.normalize_opacity_stops(opacity_stops)
+            opacity_positions = np.array([item[0] for item in opacity], dtype=np.float32)
+            opacity_values = np.array([item[1] for item in opacity], dtype=np.float32)
+            alpha = np.interp(axis, opacity_positions, opacity_values)
+            lookup[:, 3] = np.clip(lookup[:, 3] * alpha, 0.0, 1.0)
+            if not transparency:
+                lookup[:, 3] = 1.0
+            if noise_enabled:
+                lookup = noise_lookup(lookup, noise)
+            if cache_key is not None:
+                if len(_gradient_lookup_cache) >= 32:
+                    _gradient_lookup_cache.pop(next(iter(_gradient_lookup_cache)))
+                lookup.setflags(write=False)
+                _gradient_lookup_cache[cache_key] = lookup
         dtype = {8: np.uint8, 16: np.uint16, 32: np.float32}.get(output_depth)
         if dtype is None:
             raise ValueError("Bit depth must be 8, 16 or 32")

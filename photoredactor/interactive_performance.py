@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gc
 import time
 
 import numpy as np
@@ -18,9 +19,16 @@ INTERACTIVE_TARGETS_MS = {
 
 
 def _elapsed_ms(operation) -> float:
-    started = time.perf_counter()
-    operation()
-    return (time.perf_counter() - started) * 1000.0
+    gc.collect()
+    gc_was_enabled = gc.isenabled()
+    gc.disable()
+    try:
+        started = time.perf_counter()
+        operation()
+        return (time.perf_counter() - started) * 1000.0
+    finally:
+        if gc_was_enabled:
+            gc.enable()
 
 
 def _best_ms(operation, repeats: int = 3) -> float:

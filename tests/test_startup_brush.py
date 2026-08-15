@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+import tkinter as tk
+from tkinter import ttk
 import unittest
 
 import numpy as np
@@ -48,6 +50,8 @@ class BrushStartupTests(unittest.TestCase):
 
     def test_fresh_install_default_brush_makes_a_visible_mark(self) -> None:
         self.assertEqual(self.app.brush_blend_mode.get(), "Normal")
+        self.assertAlmostEqual(self.app.hardness.get(), 1.0)
+        self.assertAlmostEqual(self.app.brush_spacing.get(), 0.0)
         self.assertAlmostEqual(self.app.opacity.get(), 1.0)
         self.assertAlmostEqual(self.app.brush_flow.get(), 1.0)
         self.assertFalse(self.app.pressure_opacity.get())
@@ -64,6 +68,53 @@ class BrushStartupTests(unittest.TestCase):
         self.assertFalse(np.array_equal(before, self.app.doc.layer.pixels))
         self.assertTrue(np.any(self.app.doc.layer.pixels[:, :, :3] != 255))
         self.assertEqual(len(self.app.history.undo_stack), 1)
+
+    def test_ctrl_z_undoes_brush_when_option_field_keeps_focus(self) -> None:
+        before = self.app.doc.layer.pixels.copy()
+        center_x = self.app.canvas.winfo_width() // 2
+        center_y = self.app.canvas.winfo_height() // 2
+        self.app.pointer_down(SimpleNamespace(x=center_x - 30, y=center_y, state=0))
+        self.app.pointer_drag(SimpleNamespace(x=center_x + 30, y=center_y, state=0))
+        self.app.pointer_up(SimpleNamespace(x=center_x + 30, y=center_y, state=0))
+        self.app.update()
+        self.assertEqual(len(self.app.history.undo_stack), 1)
+
+        option = next(
+            widget for widget in self._descendants(self.app.tool_options_panel)
+            if isinstance(widget, (ttk.Entry, ttk.Spinbox))
+        )
+        option.focus_force()
+        self.app.update()
+        option.event_generate("<Control-KeyPress-z>", state=0x0004, keycode=90)
+        self.app.update()
+
+        np.testing.assert_array_equal(self.app.doc.layer.pixels, before)
+        self.assertEqual(len(self.app.history.undo_stack), 0)
+        self.assertEqual(len(self.app.history.redo_stack), 1)
+
+    def test_ctrl_z_stays_local_inside_canvas_text_editor(self) -> None:
+        self.app.begin_text_editor((20, 25), (180, 90))
+        editor = self.app._text_editor
+        self.assertIsNotNone(editor)
+        editor.focus_force()
+        editor.insert("1.0", "тест")
+        editor.edit_separator()
+        editor.insert(tk.END, " ввод")
+        self.app.update()
+
+        calls: list[str] = []
+        self.app.undo = lambda: calls.append("document undo")
+        self.assertIsNone(self.app.shortcut_undo())
+        editor.edit_undo()
+
+        self.assertEqual(editor.get("1.0", "end-1c"), "тест")
+        self.assertEqual(calls, [])
+
+    @staticmethod
+    def _descendants(widget):
+        for child in widget.winfo_children():
+            yield child
+            yield from BrushStartupTests._descendants(child)
 
     def test_brush_settings_remain_independent_between_tools(self) -> None:
         self.app.tool.set("brush")
