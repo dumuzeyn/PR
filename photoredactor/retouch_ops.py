@@ -310,6 +310,8 @@ def apply_gradient(
         options.get("opacity_stops"), bool(options.get("reverse", False)),
         bool(options.get("dither", False)), bool(options.get("transparency", True)),
         output_depth,
+        str(options.get("interpolation_space", "srgb")),
+        options.get("noise") if isinstance(options.get("noise"), dict) else None,
     )
     if output_depth == 8:
         if selection_mask is None:

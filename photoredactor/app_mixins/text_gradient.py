@@ -276,6 +276,8 @@ class TextGradientMixin:
         definition.setdefault("reverse", False)
         definition.setdefault("dither", False)
         definition.setdefault("transparency", True)
+        definition.setdefault("interpolation_space", "srgb")
+        definition.setdefault("noise", {"enabled": False, "roughness": 0.5, "color_model": "rgb", "seed": 0, "restrict_colors": False})
         return definition
 
     def gradient_render_options(self) -> dict[str, object]:
@@ -285,6 +287,8 @@ class TextGradientMixin:
             "reverse": definition["reverse"],
             "dither": definition["dither"],
             "transparency": definition["transparency"],
+            "interpolation_space": definition["interpolation_space"],
+            "noise": definition["noise"],
         }
 
     def pick_gradient_mid(self) -> None:

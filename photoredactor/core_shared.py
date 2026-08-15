@@ -17,6 +17,8 @@ from PIL import ExifTags, Image, ImageDraw, ImageFont
 
 from .performance import profiled, profiler
 from .color_management import BIT_DEPTHS, COLOR_MODELS, color_settings, convert_icc, display_rgba, normalize_rgba, profile_bytes, profile_name, quantize_rgba, rgb_to_cmyk, rgb_to_lab, rgba_to_working, working_to_rgba
+from .gradient_color import INTERPOLATION_SPACES, color_lookup, ordered_dither
+from .gradient_noise import noise_lookup
 
 
 _checker_cache: dict[tuple[int, int, int], np.ndarray] = {}
@@ -89,6 +91,7 @@ class SourceAnchor:
 
 class GradientEngine:
     TYPES = ("linear", "radial", "reflected", "diamond", "angular")
+    INTERPOLATION_SPACES = INTERPOLATION_SPACES
 
     @staticmethod
     def normalize_stops(stops: list[Any] | None) -> list[tuple[float, tuple[int, int, int, int]]]:
@@ -196,6 +199,8 @@ class GradientEngine:
         dither: bool = False,
         transparency: bool = True,
         output_depth: int = 8,
+        interpolation_space: str = "srgb",
+        noise: dict[str, Any] | None = None,
     ) -> np.ndarray:
         values = cls.coordinates(width, height, start, end, kind, origin)
         if reverse:
@@ -205,9 +210,7 @@ class GradientEngine:
         colors = np.array([item[1] for item in normalized], dtype=np.float32) / 255.0
         axis = np.arange(65537, dtype=np.float32) / 65536.0
         interpolation_axis = cls.midpoint_axis(axis, stops, positions)
-        lookup = np.empty((65537, 4), dtype=np.float32)
-        for channel in range(4):
-            lookup[:, channel] = np.interp(interpolation_axis, positions, colors[:, channel])
+        lookup = color_lookup(interpolation_axis, positions, colors, interpolation_space)
         opacity = cls.normalize_opacity_stops(opacity_stops)
         opacity_positions = np.array([item[0] for item in opacity], dtype=np.float32)
         opacity_values = np.array([item[1] for item in opacity], dtype=np.float32)
@@ -215,13 +218,12 @@ class GradientEngine:
         lookup[:, 3] = np.clip(lookup[:, 3] * alpha, 0.0, 1.0)
         if not transparency:
             lookup[:, 3] = 1.0
+        if noise and bool(noise.get("enabled", False)):
+            lookup = noise_lookup(lookup, noise)
         indices = np.clip(values * 65536.0, 0.0, 65536.0).astype(np.uint32)
         output = lookup[indices]
         if dither and width > 1 and height > 1:
-            bayer = np.array([[0, 2], [3, 1]], dtype=np.float32) / 4.0 - 0.375
-            noise = np.tile(bayer, ((height + 1) // 2, (width + 1) // 2))[:height, :width, None]
-            output = output.copy()
-            output[:, :, :3] = np.clip(output[:, :, :3] + noise / 255.0, 0.0, 1.0)
+            output = ordered_dither(output, output_depth, origin)
         return np.ascontiguousarray(quantize_rgba(output, output_depth))
 
 

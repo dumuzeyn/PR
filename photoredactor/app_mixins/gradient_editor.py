@@ -42,6 +42,17 @@ class GradientEditorMixin:
         working.setdefault("reverse", False)
         working.setdefault("dither", False)
         working.setdefault("transparency", True)
+        working.setdefault("interpolation_space", "srgb")
+        working.setdefault("noise", {"enabled": False, "roughness": 0.5, "color_model": "rgb", "seed": 0, "restrict_colors": False})
+        noise_options = working["noise"]
+        if not isinstance(noise_options, dict):
+            noise_options = {"enabled": False}
+            working["noise"] = noise_options
+        noise_options.setdefault("roughness", 0.5)
+        noise_options.setdefault("color_model", "rgb")
+        noise_options.setdefault("seed", 0)
+        noise_options.setdefault("restrict_colors", False)
+        noise_options.setdefault("channels", [[0.0, 1.0], [0.0, 1.0], [0.0, 1.0]])
         dialog = tk.Toplevel(self)
         dialog.title("Редактор градиента")
         dialog.transient(self)
@@ -57,6 +68,20 @@ class GradientEditorMixin:
         reverse = tk.BooleanVar(value=bool(working["reverse"]))
         dither = tk.BooleanVar(value=bool(working["dither"]))
         transparency = tk.BooleanVar(value=bool(working["transparency"]))
+        generation_mode = tk.StringVar(value="Шумовой" if bool(noise_options.get("enabled", False)) else "Обычный")
+        interpolation = tk.StringVar(value={"srgb": "sRGB", "linear_rgb": "Linear RGB", "oklab": "OKLab"}.get(str(working["interpolation_space"]), "sRGB"))
+        noise_model = tk.StringVar(value={"rgb": "RGB", "hsv": "HSV", "grayscale": "Оттенки серого"}.get(str(noise_options["color_model"]), "RGB"))
+        roughness = tk.DoubleVar(value=round(float(noise_options["roughness"]) * 100.0))
+        noise_seed = tk.IntVar(value=int(noise_options["seed"]))
+        restrict_colors = tk.BooleanVar(value=bool(noise_options["restrict_colors"]))
+        channel_values = noise_options.get("channels", [[0.0, 1.0]] * 3)
+        channel_vars = [
+            (
+                tk.DoubleVar(value=round(float(channel_values[index][0]) * 100.0)),
+                tk.DoubleVar(value=round(float(channel_values[index][1]) * 100.0)),
+            )
+            for index in range(3)
+        ]
         dragging: list[tuple[str, int] | None] = [None]
         syncing = [False]
 
@@ -69,6 +94,43 @@ class GradientEditorMixin:
         ttk.Checkbutton(header, text="Обратить", variable=reverse).pack(side=tk.RIGHT, padx=(8, 0))
         ttk.Checkbutton(header, text="Дизеринг", variable=dither).pack(side=tk.RIGHT, padx=(8, 0))
         ttk.Checkbutton(header, text="Прозрачность", variable=transparency).pack(side=tk.RIGHT)
+
+        mode_bar = ttk.Frame(dialog, padding=(12, 2, 12, 4))
+        mode_bar.pack(fill=tk.X)
+        ttk.Label(mode_bar, text="Режим").pack(side=tk.LEFT)
+        ttk.Combobox(mode_bar, textvariable=generation_mode, values=("Обычный", "Шумовой"), state="readonly", width=14).pack(side=tk.LEFT, padx=(8, 18))
+        standard_settings = ttk.Frame(mode_bar)
+        ttk.Label(standard_settings, text="Интерполяция").pack(side=tk.LEFT)
+        ttk.Combobox(
+            standard_settings, textvariable=interpolation,
+            values=("sRGB", "Linear RGB", "OKLab"), state="readonly", width=14,
+        ).pack(side=tk.LEFT, padx=(8, 0))
+        noise_settings = ttk.Frame(mode_bar)
+        ttk.Label(noise_settings, text="Цветовая модель").grid(row=0, column=0, sticky="w")
+        ttk.Combobox(
+            noise_settings, textvariable=noise_model,
+            values=("RGB", "HSV", "Оттенки серого"), state="readonly", width=16,
+        ).grid(row=0, column=1, padx=(6, 14))
+        ttk.Label(noise_settings, text="Шероховатость, %").grid(row=0, column=2, sticky="w")
+        ttk.Spinbox(noise_settings, textvariable=roughness, from_=0, to=100, increment=1, width=6).grid(row=0, column=3, padx=(6, 14))
+        ttk.Label(noise_settings, text="Seed").grid(row=0, column=4, sticky="w")
+        ttk.Spinbox(noise_settings, textvariable=noise_seed, from_=0, to=2147483647, increment=1, width=10).grid(row=0, column=5, padx=(6, 8))
+
+        channel_bar = ttk.Frame(dialog, padding=(12, 0, 12, 4))
+        ttk.Label(channel_bar, text="Диапазоны каналов:").grid(row=0, column=0, sticky="w", padx=(0, 8))
+        channel_rows = []
+        for index, (low, high) in enumerate(channel_vars):
+            label = ttk.Label(channel_bar, width=3)
+            low_box = ttk.Spinbox(channel_bar, textvariable=low, from_=0, to=100, increment=1, width=5)
+            separator = ttk.Label(channel_bar, text="-")
+            high_box = ttk.Spinbox(channel_bar, textvariable=high, from_=0, to=100, increment=1, width=5)
+            column = 1 + index * 4
+            label.grid(row=0, column=column)
+            low_box.grid(row=0, column=column + 1)
+            separator.grid(row=0, column=column + 2, padx=3)
+            high_box.grid(row=0, column=column + 3, padx=(0, 12))
+            channel_rows.append((label, low_box, separator, high_box))
+        ttk.Checkbutton(channel_bar, text="Ограничить цвета", variable=restrict_colors).grid(row=0, column=13, padx=(4, 0))
 
         ramp = tk.Canvas(dialog, height=145, background=TOKENS.SURFACE, highlightthickness=1, highlightbackground=TOKENS.BORDER, cursor="hand2")
         ramp.pack(fill=tk.X, padx=12, pady=(6, 8))
@@ -127,6 +189,8 @@ class GradientEditorMixin:
                 width, 70, (0, 0), (width - 1, 0), working["stops"], "linear",
                 opacity_stops=working["opacity_stops"], reverse=reverse.get(),
                 dither=dither.get(), transparency=transparency.get(),
+                interpolation_space={"sRGB": "srgb", "Linear RGB": "linear_rgb", "OKLab": "oklab"}[interpolation.get()],
+                noise=current_noise_options(),
             )
             checker = np.zeros((70, width, 4), dtype=np.uint8)
             yy, xx = np.indices((70, width))
@@ -147,6 +211,39 @@ class GradientEditorMixin:
                 color = self.color_hex(tuple(stop["color"]))
                 ramp.create_polygon(x - 7, 115, x + 7, 115, x, 106, fill=color, outline="#111318", tags=("marker", f"color:{index}"))
             refresh_lists()
+
+        def current_noise_options() -> dict[str, object]:
+            return {
+                "enabled": generation_mode.get() == "Шумовой",
+                "roughness": float(np.clip(roughness.get() / 100.0, 0.0, 1.0)),
+                "color_model": {"RGB": "rgb", "HSV": "hsv", "Оттенки серого": "grayscale"}[noise_model.get()],
+                "seed": int(noise_seed.get()),
+                "restrict_colors": bool(restrict_colors.get()),
+                "channels": [
+                    [float(np.clip(low.get() / 100.0, 0.0, 1.0)), float(np.clip(high.get() / 100.0, 0.0, 1.0))]
+                    for low, high in channel_vars
+                ],
+            }
+
+        def refresh_mode(*_args) -> None:
+            standard_settings.pack_forget()
+            noise_settings.pack_forget()
+            channel_bar.pack_forget()
+            if generation_mode.get() == "Шумовой":
+                noise_settings.pack(side=tk.LEFT, fill=tk.X, expand=True)
+                channel_bar.pack(fill=tk.X, before=ramp)
+                names = ("R", "G", "B") if noise_model.get() == "RGB" else (("H", "S", "V") if noise_model.get() == "HSV" else ("Y",))
+                for index, row in enumerate(channel_rows):
+                    if index < len(names):
+                        row[0].configure(text=names[index])
+                        for widget in row:
+                            widget.grid()
+                    else:
+                        for widget in row:
+                            widget.grid_remove()
+            else:
+                standard_settings.pack(side=tk.LEFT)
+            draw_ramp()
 
         def refresh_lists() -> None:
             current_kind, current_index = selected_kind.get(), selected_index.get()
@@ -263,6 +360,8 @@ class GradientEditorMixin:
             working["reverse"] = bool(reverse.get())
             working["dither"] = bool(dither.get())
             working["transparency"] = bool(transparency.get())
+            working["interpolation_space"] = {"sRGB": "srgb", "Linear RGB": "linear_rgb", "OKLab": "oklab"}[interpolation.get()]
+            working["noise"] = current_noise_options()
             if on_apply is None:
                 self.gradient_definition = copy.deepcopy(working)
             else:
@@ -281,12 +380,23 @@ class GradientEditorMixin:
             variable.trace_add("write", update_selected)
         for variable in (reverse, dither, transparency):
             variable.trace_add("write", draw_ramp)
+        generation_mode.trace_add("write", refresh_mode)
+        noise_model.trace_add("write", refresh_mode)
+        for variable in (interpolation, roughness, noise_seed, restrict_colors):
+            variable.trace_add("write", draw_ramp)
+        for low, high in channel_vars:
+            low.trace_add("write", draw_ramp)
+            high.trace_add("write", draw_ramp)
         ttk.Button(footer, text="Применить", command=accept, style="Primary.TButton").pack(side=tk.RIGHT, padx=(6, 0))
         ttk.Button(footer, text="Отмена", command=dialog.destroy).pack(side=tk.RIGHT)
         self._gradient_editor_ramp = ramp
         self._gradient_editor_color_list = color_list
         self._gradient_editor_opacity_list = opacity_list
         self._gradient_editor_apply = accept
+        self._gradient_editor_mode = generation_mode
+        self._gradient_editor_standard_settings = standard_settings
+        self._gradient_editor_noise_settings = noise_settings
+        self._gradient_editor_channel_bar = channel_bar
         self.center_toplevel(dialog, 820, 620)
         select_stop("color", 0)
-        draw_ramp()
+        refresh_mode()

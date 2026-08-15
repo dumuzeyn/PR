@@ -53,6 +53,8 @@ def render_shape_layer(layer: Layer) -> None:
             reverse=bool(gradient.get("reverse", False)),
             dither=bool(gradient.get("dither", False)),
             transparency=bool(gradient.get("transparency", True)),
+            interpolation_space=str(gradient.get("interpolation_space", "srgb")),
+            noise=gradient.get("noise") if isinstance(gradient.get("noise"), dict) else None,
         )
         opacity = float(np.clip(gradient.get("opacity", 1.0), 0.0, 1.0))
         pixels[:, :, 3] = np.clip(pixels[:, :, 3].astype(np.float32) * (mask.astype(np.float32) / 255.0) * opacity, 0, 255).astype(np.uint8)
