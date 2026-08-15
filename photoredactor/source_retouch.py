@@ -88,6 +88,7 @@ class CloneHealingStroke:
         heal: bool = False,
         selection_mask: np.ndarray | None = None,
         transform: SourceTransform | None = None,
+        diffusion: int = 4,
     ) -> None:
         self.layer = layer
         self.settings = settings.normalized()
@@ -95,6 +96,7 @@ class CloneHealingStroke:
         self.source_origin = source_origin
         self.heal = bool(heal)
         self.transform = (transform or SourceTransform()).normalized()
+        self.diffusion = max(1, min(7, int(diffusion)))
         self.buffer = StrokeBuffer(layer.pixels, selection_mask)
         self.before_tiles = self.buffer.before_tiles
 
@@ -134,6 +136,8 @@ class CloneHealingStroke:
         dab_mask *= valid
         if self.buffer.selection_mask is not None:
             dab_mask *= self.buffer.selection_mask[y1:y2, x1:x2].astype(np.float32) / 255.0
+        if self.layer.mask_enabled and self.layer.mask is not None:
+            dab_mask *= self.layer.mask[y1:y2, x1:x2].astype(np.float32) / 255.0
         if not np.any(dab_mask > 0.0):
             return None
 
@@ -152,20 +156,27 @@ class CloneHealingStroke:
         current = self.layer.pixels[y1:y2, x1:x2].astype(np.float32)
         edited = sampled.astype(np.float32)
         if self.heal:
-            edited = self._heal_patch(edited, current, radius)
+            edited = self._heal_patch(edited, current, radius, self.diffusion)
         mixed = current * (1.0 - incremental[:, :, None]) + edited * incremental[:, :, None]
         self.layer.pixels[y1:y2, x1:x2] = np.clip(mixed, 0, 255).astype(np.uint8)
         return rect
 
     @staticmethod
-    def _heal_patch(source: np.ndarray, target: np.ndarray, radius: int) -> np.ndarray:
-        sigma = max(1.0, min(12.0, radius * 0.22))
-        source_rgb = source[:, :, :3]
-        target_rgb = target[:, :, :3]
-        source_low = cv2.GaussianBlur(source_rgb, (0, 0), sigma, borderType=cv2.BORDER_REFLECT_101)
-        target_low = cv2.GaussianBlur(target_rgb, (0, 0), sigma, borderType=cv2.BORDER_REFLECT_101)
+    def _heal_patch(source: np.ndarray, target: np.ndarray, radius: int, diffusion: int = 4) -> np.ndarray:
+        diffusion = max(1, min(7, int(diffusion)))
+        sigma_space = max(1.0, min(24.0, radius * (0.08 + diffusion * 0.035)))
+        source_rgb = np.clip(source[:, :, :3], 0, 255).astype(np.uint8)
+        target_rgb = np.clip(target[:, :, :3], 0, 255).astype(np.uint8)
+        source_low = cv2.bilateralFilter(source_rgb, 0, 140.0, sigma_space).astype(np.float32)
+        target_low = cv2.bilateralFilter(target_rgb, 0, 25.0 + diffusion * 10.0, sigma_space).astype(np.float32)
+        source_detail = source_rgb.astype(np.float32) - source_low
+        texture_weight = 1.0 - (diffusion - 1) * 0.13
+        adapted = target_low + source_detail * texture_weight
+        if diffusion >= 6:
+            softened = cv2.bilateralFilter(np.clip(adapted, 0, 255).astype(np.uint8), 0, 60.0 + diffusion * 7.0, max(1.0, sigma_space * 0.55))
+            adapted = adapted * 0.72 + softened.astype(np.float32) * 0.28
         result = source.copy()
-        result[:, :, :3] = np.clip(target_low + source_rgb - source_low, 0, 255)
+        result[:, :, :3] = np.clip(adapted, 0, 255)
         result[:, :, 3] = target[:, :, 3]
         return result
 

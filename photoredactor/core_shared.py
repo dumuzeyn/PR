@@ -54,6 +54,12 @@ class SourceAnchor:
         self.stroke_target = None
         self.offset = None
 
+    def reset(self) -> None:
+        self.point = None
+        self.stroke_source = None
+        self.stroke_target = None
+        self.offset = None
+
     def begin_stroke(self, target: tuple[int, int]) -> bool:
         if self.point is None:
             return False

@@ -368,6 +368,7 @@ class MenusToolsMixin:
             clone_flip_vertical=self.clone_flip_vertical,
             clone_overlay_visible=self.clone_overlay_visible,
             clone_overlay_opacity=self.clone_overlay_opacity,
+            healing_diffusion=self.healing_diffusion,
             spot_healing_mode=self.spot_healing_mode,
             patch_structure=self.patch_structure,
             patch_color_adaptation=self.patch_color_adaptation,

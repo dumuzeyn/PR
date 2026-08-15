@@ -254,13 +254,14 @@ class PointerSupportMixin:
                 px, py = math.cos(phase) * current_radius, math.sin(phase) * current_radius * roundness
                 points.extend((cx + px * math.cos(angle) - py * math.sin(angle), cy + px * math.sin(angle) + py * math.cos(angle)))
             return points
-        coords = ellipse_coords(radius)
+        shape_coords = ellipse_coords(radius)
+        coords = [cx - radius, cy - radius, cx + radius, cy + radius]
         hardness_radius = max(1.0, radius * float(np.clip(self.hardness.get(), 0.0, 1.0)))
-        hardness_coords = ellipse_coords(hardness_radius)
+        hardness_coords = [cx - hardness_radius, cy - hardness_radius, cx + hardness_radius, cy + hardness_radius]
         if not self._brush_preview_ids:
-            fill_id = self.canvas.create_polygon(*coords, outline="", fill=outline, stipple="gray25", smooth=True)
-            ring_id = self.canvas.create_polygon(*coords, outline=outline, fill="", width=2, smooth=True)
-            hardness_id = self.canvas.create_polygon(*hardness_coords, outline=outline, fill="", dash=(2, 3), width=1, smooth=True)
+            fill_id = self.canvas.create_oval(*coords, outline="", fill=outline, stipple="gray25")
+            ring_id = self.canvas.create_oval(*coords, outline=outline, width=2)
+            hardness_id = self.canvas.create_oval(*hardness_coords, outline=outline, dash=(2, 3), width=1)
             cross_h = self.canvas.create_line(cx - 6, cy, cx + 6, cy, fill=outline, width=1)
             cross_v = self.canvas.create_line(cx, cy - 6, cx, cy + 6, fill=outline, width=1)
             text_id = self.canvas.create_text(cx, cy + radius + 12, text=label, fill=outline, font=("Segoe UI", 9, "bold"))
@@ -280,6 +281,18 @@ class PointerSupportMixin:
         self.canvas.itemconfigure(cross_h, fill=outline)
         self.canvas.itemconfigure(cross_v, fill=outline)
         self.canvas.itemconfigure(text_id, text=label, fill=outline, state=tk.NORMAL if tool == "quick_selection" or choosing_source else tk.HIDDEN)
+        transformed_tip = tool in {"brush", "eraser"} and (roundness < 0.999 or abs(float(advanced.get("angle", 0.0))) > 0.01)
+        tip_id = getattr(self, "_brush_tip_shape_id", None)
+        if transformed_tip:
+            if tip_id is None:
+                tip_id = self.canvas.create_polygon(*shape_coords, fill="", outline=outline, dash=(3, 2), width=1, smooth=True)
+                self._brush_tip_shape_id = tip_id
+            else:
+                self.canvas.coords(tip_id, *shape_coords)
+                self.canvas.itemconfigure(tip_id, outline=outline, state=tk.NORMAL)
+            self.canvas.tag_raise(tip_id)
+        elif tip_id is not None:
+            self.canvas.itemconfigure(tip_id, state=tk.HIDDEN)
         for item_id in self._brush_preview_ids:
             self.canvas.tag_raise(item_id)
         self.update_clone_overlay(point)
@@ -288,6 +301,9 @@ class PointerSupportMixin:
         for item_id in self._brush_preview_ids:
             self.canvas.delete(item_id)
         self._brush_preview_ids.clear()
+        if getattr(self, "_brush_tip_shape_id", None) is not None:
+            self.canvas.delete(self._brush_tip_shape_id)
+            self._brush_tip_shape_id = None
         self.clear_clone_overlay()
 
     def update_quick_selection_preview(self, force: bool = False) -> None:

@@ -7,6 +7,7 @@ from .selection_ops import *
 from .render_ops import *
 from .brush_engine import BrushSettings, StrokeBuffer
 from .source_retouch import CloneHealingStroke, SourceTransform
+from .exemplar_inpaint import exemplar_inpaint
 
 
 class RetouchStroke:
@@ -189,6 +190,7 @@ def clone_or_heal(
     transform: SourceTransform | None = None,
     flow: float = 1.0,
     pressure: float = 1.0,
+    diffusion: int = 4,
 ) -> tuple[int, int, int, int] | None:
     settings = BrushSettings(radius, hardness, opacity, flow)
     stroke = CloneHealingStroke(
@@ -199,6 +201,7 @@ def clone_or_heal(
         heal=heal,
         selection_mask=selection_mask,
         transform=transform,
+        diffusion=diffusion,
     )
     return stroke.dab(target_x, target_y, source_x, source_y, pressure)
 
@@ -216,8 +219,13 @@ def spot_heal(
     if layer.locked:
         return None
     radius = max(2, int(radius))
+    mode_key = str(mode).strip().lower().replace("-", "_").replace(" ", "_")
+    fast_mode = mode_key in {
+        "proximity", "proximity_match", "fast_telea", "быстрый_telea", "соответствие_окружению",
+        "fast_navier_stokes", "быстрый_navier_stokes", "navier_stokes",
+    }
     lx, ly = int(x) - layer.x, int(y) - layer.y
-    margin = max(5, radius)
+    margin = max(5, radius if fast_mode else radius * 3)
     x1 = max(0, lx - radius - margin)
     y1 = max(0, ly - radius - margin)
     x2 = min(layer.pixels.shape[1], lx + radius + margin + 1)
@@ -237,23 +245,21 @@ def spot_heal(
         ]
     if selection_mask is not None:
         falloff *= selection_mask[y1:y2, x1:x2].astype(np.float32) / 255.0
+    if layer.mask_enabled and layer.mask is not None:
+        falloff *= layer.mask[y1:y2, x1:x2].astype(np.float32) / 255.0
+    falloff *= layer.pixels[y1:y2, x1:x2, 3].astype(np.float32) / 255.0
     target_mask = (falloff > 0.04).astype(np.uint8) * 255
     if not np.any(target_mask > 0):
         return None
 
     patch = layer.pixels[y1:y2, x1:x2].copy()
-    mode_key = str(mode).strip().lower().replace("-", "_").replace(" ", "_")
-    proximity = mode_key in {"proximity", "proximity_match", "приближение", "соответствие_окружению"}
-    inpaint_radius = max(2.0, min(12.0, radius * (0.38 if proximity else 0.72)))
-    method = cv2.INPAINT_TELEA if proximity else cv2.INPAINT_NS
-    healed_rgb = cv2.inpaint(patch[:, :, :3], target_mask, inpaint_radius, method)
-    if not proximity:
-        sigma = max(0.8, min(4.0, radius * 0.16))
-        healed_low = cv2.GaussianBlur(healed_rgb, (0, 0), sigma, borderType=cv2.BORDER_REFLECT_101)
-        source_low = cv2.GaussianBlur(patch[:, :, :3], (0, 0), sigma, borderType=cv2.BORDER_REFLECT_101)
-        detail = patch[:, :, :3].astype(np.float32) - source_low.astype(np.float32)
-        detail_mask = cv2.inpaint(np.clip(detail + 128.0, 0, 255).astype(np.uint8), target_mask, inpaint_radius, cv2.INPAINT_NS)
-        healed_rgb = np.clip(healed_low.astype(np.float32) + detail_mask.astype(np.float32) - 128.0, 0, 255).astype(np.uint8)
+    telea = mode_key in {"proximity", "proximity_match", "fast_telea", "быстрый_telea", "соответствие_окружению"}
+    navier = mode_key in {"fast_navier_stokes", "быстрый_navier_stokes", "navier_stokes"}
+    inpaint_radius = max(2.0, min(12.0, radius * 0.5))
+    if telea or navier:
+        healed_rgb = cv2.inpaint(patch[:, :, :3], target_mask, inpaint_radius, cv2.INPAINT_TELEA if telea else cv2.INPAINT_NS)
+    else:
+        healed_rgb = exemplar_inpaint(patch[:, :, :3], target_mask, seed=radius * 7919 + lx * 31 + ly)
     feather = falloff * float(np.clip(strength, 0.0, 1.0))
     mixed = patch[:, :, :3].astype(np.float32) * (1.0 - feather[:, :, None]) + healed_rgb.astype(np.float32) * feather[:, :, None]
     layer.pixels[y1:y2, x1:x2, :3] = np.clip(mixed, 0, 255).astype(np.uint8)

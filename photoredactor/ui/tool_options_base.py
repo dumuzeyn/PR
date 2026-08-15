@@ -69,6 +69,7 @@ class ToolOptionsBaseMixin:
         clone_flip_vertical: tk.BooleanVar,
         clone_overlay_visible: tk.BooleanVar,
         clone_overlay_opacity: tk.DoubleVar,
+        healing_diffusion: tk.IntVar,
         spot_healing_mode: tk.StringVar,
         patch_structure: tk.IntVar,
         patch_color_adaptation: tk.DoubleVar,
@@ -169,6 +170,7 @@ class ToolOptionsBaseMixin:
         self.clone_flip_vertical = clone_flip_vertical
         self.clone_overlay_visible = clone_overlay_visible
         self.clone_overlay_opacity = clone_overlay_opacity
+        self.healing_diffusion = healing_diffusion
         self.spot_healing_mode = spot_healing_mode
         self.patch_structure = patch_structure
         self.patch_color_adaptation = patch_color_adaptation
@@ -273,6 +275,7 @@ class ToolOptionsBaseMixin:
             self._add_scale("Размер", self.brush_size, 1, 220, "px", integer=True)
             self._add_scale("Жёсткость", self.hardness, 0.0, 1.0, "%", percent=True)
             self._add_scale("Сила", self.retouch_strength, 0.01, 1.0, "%", percent=True)
+            self._add_scale("Диффузия", self.healing_diffusion, 1, 7, integer=True)
             self._add_source_transform_options()
             self._add_brush_engine_options(tool)
             shown = True
@@ -290,7 +293,7 @@ class ToolOptionsBaseMixin:
             ttk.Combobox(
                 self.body,
                 textvariable=self.spot_healing_mode,
-                values=["Соответствие окружению", "С учётом содержимого"],
+                values=["Быстрый Telea", "Быстрый Navier-Stokes", "С учётом содержимого"],
                 state="readonly",
             ).pack(fill=tk.X, padx=8)
             self._add_brush_engine_options(tool)
@@ -366,7 +369,7 @@ class ToolOptionsBaseMixin:
             if tool in BRUSH_TOOLS:
                 self._compact_percent(primary, "Поток", self.brush_flow)
             if tool == "spot_healing":
-                self._compact_combo(primary, "Режим", self.spot_healing_mode, ["Соответствие окружению", "С учётом содержимого"], 22)
+                self._compact_combo(primary, "Режим", self.spot_healing_mode, ["Быстрый Telea", "Быстрый Navier-Stokes", "С учётом содержимого"], 24)
             if tool in {"brush", "eraser"}:
                 self._compact_single_color(primary, self.pick_foreground, 0, "Основной цвет")
         elif tool in SHAPE_TOOLS:

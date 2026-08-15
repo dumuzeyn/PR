@@ -86,6 +86,7 @@ class PaintingMixin:
                 heal=tool == "healing",
                 selection_mask=self._stroke_selection_mask,
                 transform=self.current_source_transform(),
+                diffusion=int(self.healing_diffusion.get()),
             )
             self._retouch_stroke = None
         else:
@@ -355,13 +356,19 @@ class PaintingMixin:
         self.drag_start = None
         self.last_point = None
         self.update_clone_source_marker()
+        self.prepare_clone_sample()
         self.status_text(f"Источник выбран: {point[0]}, {point[1]}. Теперь проведите кистью по цели.")
 
     def prepare_clone_sample(self) -> None:
+        snapshot = self.active_clone_snapshot()
+        if snapshot is not None:
+            self._clone_sample_pixels, self._clone_sample_origin = snapshot
+            return
         mode = self.clone_sampling.get()
         if mode == "Текущий слой":
             self._clone_sample_pixels = self.doc.layer.pixels.copy()
             self._clone_sample_origin = (self.doc.layer.x, self.doc.layer.y)
+            self.store_active_clone_snapshot(self._clone_sample_pixels, self._clone_sample_origin)
             return
         temporary = copy.copy(self.doc)
         if mode == "Текущий и ниже":
@@ -371,6 +378,7 @@ class PaintingMixin:
             temporary.layers = list(self.doc.layers)
         self._clone_sample_pixels = temporary.composite(False).copy()
         self._clone_sample_origin = (0, 0)
+        self.store_active_clone_snapshot(self._clone_sample_pixels, self._clone_sample_origin)
 
     def update_clone_source_marker(self) -> None:
         for item_id in self._clone_source_marker_ids:

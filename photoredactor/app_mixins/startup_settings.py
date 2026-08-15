@@ -96,6 +96,7 @@ class StartupSettingsMixin:
         self.clone_flip_vertical = tk.BooleanVar(value=False)
         self.clone_overlay_visible = tk.BooleanVar(value=True)
         self.clone_overlay_opacity = tk.DoubleVar(value=0.45)
+        self.healing_diffusion = tk.IntVar(value=4)
         self.spot_healing_mode = tk.StringVar(value="С учётом содержимого")
         self.patch_structure = tk.IntVar(value=5)
         self.patch_color_adaptation = tk.DoubleVar(value=8.0)
@@ -363,19 +364,7 @@ class StartupSettingsMixin:
                         self.custom_shape_preset.set(preset)
                 source_settings = data.get("source_retouch", {})
                 if isinstance(source_settings, dict):
-                    self.clone_aligned.set(bool(source_settings.get("aligned", True)))
-                    self.clone_sampling.set(str(source_settings.get("sampling", self.clone_sampling.get())))
-                    self.clone_scale_x.set(float(np.clip(source_settings.get("scale_x", 100.0), 5.0, 2000.0)))
-                    self.clone_scale_y.set(float(np.clip(source_settings.get("scale_y", 100.0), 5.0, 2000.0)))
-                    self.clone_rotation.set(float(np.clip(source_settings.get("rotation", 0.0), -180.0, 180.0)))
-                    self.clone_flip_horizontal.set(bool(source_settings.get("flip_horizontal", False)))
-                    self.clone_flip_vertical.set(bool(source_settings.get("flip_vertical", False)))
-                    self.clone_overlay_visible.set(bool(source_settings.get("overlay_visible", True)))
-                    self.clone_overlay_opacity.set(float(np.clip(source_settings.get("overlay_opacity", 0.45), 0.05, 1.0)))
-                    self.spot_healing_mode.set(str(source_settings.get("spot_mode", self.spot_healing_mode.get())))
-                    self.patch_structure.set(max(1, min(7, int(source_settings.get("patch_structure", 5)))))
-                    self.patch_color_adaptation.set(float(np.clip(source_settings.get("patch_color", 8.0), 0.0, 10.0)))
-                    self.patch_sample_all_layers.set(bool(source_settings.get("patch_all_layers", False)))
+                    self.load_source_retouch_settings(source_settings)
                 custom_canvas = data.get("custom_canvas", {})
                 self.custom_canvas_width = max(1, min(50000, int(custom_canvas.get("width", self.custom_canvas_width))))
                 self.custom_canvas_height = max(1, min(50000, int(custom_canvas.get("height", self.custom_canvas_height))))
@@ -437,21 +426,7 @@ class StartupSettingsMixin:
                             "star_inner_ratio": float(self.star_inner_ratio.get()),
                             "custom_shape_preset": self.custom_shape_preset.get(),
                         },
-                        "source_retouch": {
-                            "aligned": bool(self.clone_aligned.get()),
-                            "sampling": self.clone_sampling.get(),
-                            "scale_x": float(self.clone_scale_x.get()),
-                            "scale_y": float(self.clone_scale_y.get()),
-                            "rotation": float(self.clone_rotation.get()),
-                            "flip_horizontal": bool(self.clone_flip_horizontal.get()),
-                            "flip_vertical": bool(self.clone_flip_vertical.get()),
-                            "overlay_visible": bool(self.clone_overlay_visible.get()),
-                            "overlay_opacity": float(self.clone_overlay_opacity.get()),
-                            "spot_mode": self.spot_healing_mode.get(),
-                            "patch_structure": int(self.patch_structure.get()),
-                            "patch_color": float(self.patch_color_adaptation.get()),
-                            "patch_all_layers": bool(self.patch_sample_all_layers.get()),
-                        },
+                        "source_retouch": self.source_retouch_settings_payload(),
                         "custom_canvas": {
                             "width": self.custom_canvas_width,
                             "height": self.custom_canvas_height,
