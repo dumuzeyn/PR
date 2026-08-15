@@ -326,6 +326,7 @@ class MenusToolsMixin:
             save_brush_preset=self.save_brush_preset,
             delete_brush_preset=self.delete_brush_preset,
             reset_brush_presets=self.reset_brush_presets,
+            open_brush_engine_panel=self.open_brush_engine_panel,
             retouch_strength=self.retouch_strength,
             exposure=self.exposure,
             tonal_range=self.tonal_range,

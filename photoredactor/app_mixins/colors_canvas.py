@@ -125,6 +125,9 @@ class ColorsCanvasMixin:
         for key, variable in mapping.items():
             if key in values:
                 variable.set(values[key])
+        advanced = values.get("advanced")
+        if isinstance(advanced, dict):
+            self.brush_advanced.update({key: advanced[key] for key in self.brush_advanced if key in advanced})
         self.save_active_tool_settings()
         if hasattr(self, "tool_options_panel"):
             self.tool_options_panel.render()
@@ -152,6 +155,7 @@ class ColorsCanvasMixin:
             "pressure_size": bool(self.pressure_size.get()),
             "pressure_opacity": bool(self.pressure_opacity.get()),
             "pressure_flow": bool(self.pressure_flow.get()),
+            "advanced": copy.deepcopy(self.brush_advanced),
         }
         self.brush_preset.set(name)
         self.save_settings()

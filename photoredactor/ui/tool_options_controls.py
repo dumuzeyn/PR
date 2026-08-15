@@ -21,6 +21,7 @@ class ToolOptionsControlsMixin:
         ttk.Checkbutton(pressure, text="Нажим изменяет размер", variable=self.pressure_size).pack(anchor=tk.W)
         ttk.Checkbutton(pressure, text="Нажим изменяет непрозрачность", variable=self.pressure_opacity).pack(anchor=tk.W)
         ttk.Checkbutton(pressure, text="Нажим изменяет поток", variable=self.pressure_flow).pack(anchor=tk.W)
+        ttk.Button(self.body, text="Движок кисти...", command=self.open_brush_engine_panel).pack(fill=tk.X, padx=8, pady=(8, 0))
         self._add_brush_presets()
 
     def _add_brush_presets(self) -> None:

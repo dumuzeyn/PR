@@ -244,13 +244,23 @@ class PointerSupportMixin:
         choosing_source = tool in {"clone", "healing"} and getattr(event, "state", 0) & 0x0008
         outline = "#ffb000" if choosing_source else color_by_mode.get(mode, "#50e3ff")
         label = "Источник" if choosing_source else label_by_mode.get(mode, "")
-        coords = [cx - radius, cy - radius, cx + radius, cy + radius]
+        advanced = getattr(self, "brush_advanced", {}) if tool in {"brush", "eraser"} else {}
+        roundness = float(np.clip(advanced.get("roundness", 1.0), 0.01, 1.0))
+        angle = math.radians(float(advanced.get("angle", 0.0)))
+        def ellipse_coords(current_radius: float) -> list[float]:
+            points: list[float] = []
+            for step in range(48):
+                phase = math.tau * step / 48.0
+                px, py = math.cos(phase) * current_radius, math.sin(phase) * current_radius * roundness
+                points.extend((cx + px * math.cos(angle) - py * math.sin(angle), cy + px * math.sin(angle) + py * math.cos(angle)))
+            return points
+        coords = ellipse_coords(radius)
         hardness_radius = max(1.0, radius * float(np.clip(self.hardness.get(), 0.0, 1.0)))
-        hardness_coords = [cx - hardness_radius, cy - hardness_radius, cx + hardness_radius, cy + hardness_radius]
+        hardness_coords = ellipse_coords(hardness_radius)
         if not self._brush_preview_ids:
-            fill_id = self.canvas.create_oval(*coords, outline="", fill=outline, stipple="gray25")
-            ring_id = self.canvas.create_oval(*coords, outline=outline, width=2)
-            hardness_id = self.canvas.create_oval(*hardness_coords, outline=outline, dash=(2, 3), width=1)
+            fill_id = self.canvas.create_polygon(*coords, outline="", fill=outline, stipple="gray25", smooth=True)
+            ring_id = self.canvas.create_polygon(*coords, outline=outline, fill="", width=2, smooth=True)
+            hardness_id = self.canvas.create_polygon(*hardness_coords, outline=outline, fill="", dash=(2, 3), width=1, smooth=True)
             cross_h = self.canvas.create_line(cx - 6, cy, cx + 6, cy, fill=outline, width=1)
             cross_v = self.canvas.create_line(cx, cy - 6, cx, cy + 6, fill=outline, width=1)
             text_id = self.canvas.create_text(cx, cy + radius + 12, text=label, fill=outline, font=("Segoe UI", 9, "bold"))

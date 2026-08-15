@@ -27,6 +27,7 @@ class ToolOptionsBaseMixin:
         save_brush_preset,
         delete_brush_preset,
         reset_brush_presets,
+        open_brush_engine_panel,
         retouch_strength: tk.DoubleVar,
         exposure: tk.DoubleVar,
         tonal_range: tk.StringVar,
@@ -126,6 +127,7 @@ class ToolOptionsBaseMixin:
         self.save_brush_preset = save_brush_preset
         self.delete_brush_preset = delete_brush_preset
         self.reset_brush_presets = reset_brush_presets
+        self.open_brush_engine_panel = open_brush_engine_panel
         self.retouch_strength = retouch_strength
         self.exposure = exposure
         self.tonal_range = tonal_range
@@ -433,6 +435,7 @@ class ToolOptionsBaseMixin:
             if tool == "brush":
                 self._compact_combo(parent, "Режим", self.brush_blend_mode, list(BRUSH_BLEND_MODES), 10)
             self._compact_brush_presets(parent)
+            ttk.Button(parent, text="Движок кисти...", command=self.open_brush_engine_panel).pack(side=tk.LEFT, padx=3)
         if tool in {"clone", "healing"}:
             ttk.Checkbutton(parent, text="Выровненный", variable=self.clone_aligned).pack(side=tk.LEFT, padx=3)
             ttk.Button(parent, text="Источник...", command=self.open_clone_source_panel).pack(side=tk.LEFT, padx=3)

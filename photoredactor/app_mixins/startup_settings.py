@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from ..app_shared import *
+from ..brush_config import default_brush_config, normalize_brush_config
 
 
 class StartupSettingsMixin:
@@ -64,6 +65,7 @@ class StartupSettingsMixin:
         self.brush_preset = tk.StringVar(value="Круглая кисть")
         self.brush_preset_name = tk.StringVar(value="Мой пресет")
         self.brush_presets = copy.deepcopy(BRUSH_PRESET_DEFAULTS)
+        self.brush_advanced = default_brush_config()
         self.retouch_strength = tk.DoubleVar(value=0.25)
         self.exposure = tk.DoubleVar(value=0.15)
         self.tonal_range = tk.StringVar(value="Средние тона")
@@ -349,6 +351,7 @@ class StartupSettingsMixin:
                     for name, values in saved_brush_presets.items():
                         if isinstance(name, str) and name.strip() and isinstance(values, dict):
                             self.brush_presets[name.strip()] = dict(values)
+                self.brush_advanced.update(normalize_brush_config(data.get("brush_advanced")))
                 shape_settings = data.get("shape_settings", {})
                 if isinstance(shape_settings, dict):
                     self.shape_stroke_width.set(max(0, min(100, int(shape_settings.get("stroke_width", 2)))))
@@ -426,6 +429,7 @@ class StartupSettingsMixin:
                         "tool_pane_position": self.tool_pane_position,
                         "tool_settings": self.tool_settings,
                         "brush_presets": self.brush_presets,
+                        "brush_advanced": self.brush_advanced,
                         "shape_settings": {
                             "stroke_width": int(self.shape_stroke_width.get()),
                             "polygon_sides": int(self.polygon_sides.get()),
