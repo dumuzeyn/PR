@@ -99,11 +99,16 @@ def event_key(event) -> str:
 
 def command_for_event(event) -> str | None:
     state = int(getattr(event, "state", 0))
-    alt_mask = 0x20000 if sys.platform == "win32" else 0x0008
-    if state & alt_mask:
+    if event_alt_down(state):
         return None
     shift = bool(state & 0x0001)
     return COMMAND_BY_GESTURE.get((event_key(event), shift))
+
+
+def event_alt_down(event_or_state, platform: str | None = None) -> bool:
+    state = int(event_or_state if isinstance(event_or_state, int) else getattr(event_or_state, "state", 0))
+    alt_mask = 0x20000 if (platform or sys.platform) == "win32" else 0x0008
+    return bool(state & alt_mask)
 
 
 def accelerator(command: str) -> str:

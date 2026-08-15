@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from ..app_shared import *
+from ..brush_config import default_brush_config
 
 
 class ColorsCanvasMixin:
@@ -125,6 +126,8 @@ class ColorsCanvasMixin:
         for key, variable in mapping.items():
             if key in values:
                 variable.set(values[key])
+        self.brush_advanced.clear()
+        self.brush_advanced.update(default_brush_config())
         advanced = values.get("advanced")
         if isinstance(advanced, dict):
             self.brush_advanced.update({key: advanced[key] for key in self.brush_advanced if key in advanced})
@@ -132,6 +135,33 @@ class ColorsCanvasMixin:
         if hasattr(self, "tool_options_panel"):
             self.tool_options_panel.render()
         self.status_text(f"Пресет кисти: {self.brush_preset.get()}")
+
+    def import_custom_brush(self) -> None:
+        path = filedialog.askopenfilename(
+            parent=self,
+            title="Добавить свою кисть",
+            filetypes=[("Изображения", "*.png *.jpg *.jpeg *.bmp *.tif *.tiff"), ("Все файлы", "*.*")],
+        )
+        if not path:
+            return
+        try:
+            with Image.open(path) as source:
+                source.verify()
+        except (OSError, ValueError):
+            messagebox.showerror("Кисть", "Не удалось прочитать изображение кисти.", parent=self)
+            return
+        base_name = Path(path).stem.strip() or "Своя кисть"
+        name = base_name
+        suffix = 2
+        while name in self.brush_presets:
+            name = f"{base_name} {suffix}"
+            suffix += 1
+        self.brush_advanced.clear()
+        self.brush_advanced.update(default_brush_config())
+        self.brush_advanced["custom_tip_path"] = str(Path(path).resolve())
+        self.brush_preset_name.set(name)
+        self.save_brush_preset()
+        self.status_text(f"Добавлена кисть «{name}»")
 
     def save_brush_preset(self, automatic_name: bool = False) -> None:
         name = self.brush_preset_name.get().strip()
@@ -289,6 +319,8 @@ class ColorsCanvasMixin:
         self.canvas.bind("<B1-Motion>", self.pointer_drag)
         self.canvas.bind("<ButtonRelease-1>", self.pointer_up)
         self.canvas.bind("<ButtonPress-3>", self.selection_right_click)
+        self.canvas.bind("<B3-Motion>", self.patch_selection_drag)
+        self.canvas.bind("<ButtonRelease-3>", self.patch_selection_up)
         self.canvas.bind("<Double-Button-1>", self.pointer_double_click)
         self.canvas.bind("<ButtonPress-2>", self.pan_down)
         self.canvas.bind("<B2-Motion>", self.pan_drag)
@@ -299,6 +331,9 @@ class ColorsCanvasMixin:
         self.canvas.bind("<MouseWheel>", self.mouse_wheel)
 
     def selection_right_click(self, event) -> str | None:
+        if self.tool.get() == "patch":
+            self.patch_selection_down(event)
+            return "break"
         selection_tools = {
             "select", "ellipse_select", "lasso", "magnetic_lasso", "polygon_lasso",
             "quick_selection", "magic_wand", "color_range",
@@ -306,9 +341,7 @@ class ColorsCanvasMixin:
         mask = self.doc.selection_mask
         if self.tool.get() not in selection_tools or mask is None:
             return None
-        x, y = self.canvas_to_doc(event)
-        inside = 0 <= x < self.doc.width and 0 <= y < self.doc.height and bool(mask[y, x] > 0)
-        if not inside:
+        if self.selection_mode.get() != "subtract":
             self.run_selection_command("Снять выделение", self.doc.clear_selection)
         return "break"
 
@@ -373,11 +406,14 @@ class ColorsCanvasMixin:
         down = ttk.Button(buttons, image=self._panel_icons["down"], width=3, command=lambda: self.move_layer(-1))
         for button in (add, delete, duplicate, up, down):
             button.pack(side=tk.LEFT, padx=(0, 3))
+        solo = ttk.Button(buttons, text="Только", command=self.toggle_layer_solo)
+        solo.pack(side=tk.RIGHT)
         ToolTip(add, "Новый слой")
         ToolTip(delete, "Удалить выбранные слои")
         ToolTip(duplicate, "Дублировать слой")
         ToolTip(up, "Поднять слой")
         ToolTip(down, "Опустить слой")
+        ToolTip(solo, "Показать только активный слой; повторный клик вернёт прежнюю видимость")
 
         thumbs = ttk.Frame(layers_tab)
         thumbs.pack(fill=tk.X, padx=8, pady=(0, 8))

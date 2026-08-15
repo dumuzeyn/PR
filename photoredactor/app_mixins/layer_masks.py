@@ -217,20 +217,9 @@ class LayerMasksMixin:
             return "break"
         active_index = self.doc.active_layer
         layer = self.doc.layers[layer_index]
-        if bool(getattr(event, "state", 0) & 0x0008):
-            saved = getattr(self, "_visibility_solo_state", None)
-            if saved is not None and saved[0] == layer.id:
-                states = saved[1]
-                self.run_document_command("Восстановить видимость слоёв", lambda: [setattr(item, "visible", states.get(item.id, item.visible)) for item in self.doc.layers])
-                self._visibility_solo_state = None
-            else:
-                if saved is not None:
-                    for item in self.doc.layers:
-                        item.visible = saved[1].get(item.id, item.visible)
-                states = {item.id: bool(item.visible) for item in self.doc.layers}
-                self._visibility_solo_state = (layer.id, states)
-                self.run_document_command("Показать только выбранный слой", lambda: [setattr(item, "visible", item.id == layer.id) for item in self.doc.layers])
-            self.doc.active_layer = active_index; self.refresh(preserve_render_cache=True)
+        if event_alt_down(event):
+            self.toggle_layer_solo(layer)
+            self.doc.active_layer = active_index
             return "break"
         self._visibility_solo_state = None
         before = bool(layer.visible)
@@ -240,6 +229,28 @@ class LayerMasksMixin:
         self.doc.active_layer = active_index
         self.refresh(preserve_render_cache=True)
         return "break"
+
+    def toggle_layer_solo(self, layer=None) -> None:
+        layer = layer or self.doc.layer
+        saved = getattr(self, "_visibility_solo_state", None)
+        if saved is not None and saved[0] == layer.id:
+            states = saved[1]
+            self.run_document_command(
+                "Восстановить видимость слоёв",
+                lambda: [setattr(item, "visible", states.get(item.id, item.visible)) for item in self.doc.layers],
+            )
+            self._visibility_solo_state = None
+        else:
+            if saved is not None:
+                for item in self.doc.layers:
+                    item.visible = saved[1].get(item.id, item.visible)
+            states = {item.id: bool(item.visible) for item in self.doc.layers}
+            self._visibility_solo_state = (layer.id, states)
+            self.run_document_command(
+                "Показать только выбранный слой",
+                lambda: [setattr(item, "visible", item.id == layer.id) for item in self.doc.layers],
+            )
+        self.refresh(preserve_render_cache=True)
 
     def begin_layer_opacity_change(self, _event) -> None:
         self._opacity_layer_id = self.doc.layer.id

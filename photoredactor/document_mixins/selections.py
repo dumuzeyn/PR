@@ -74,8 +74,11 @@ class SelectionsDocumentMixin:
         soft = perceptual_color_mask(source, [seed], tolerance, antialias)
         candidates = (soft > 0).astype(np.uint8)
         if contiguous:
-            _, labels, _, _ = cv2.connectedComponentsWithStats(candidates, 4)
-            local = np.where(labels == labels[ly, lx], soft, 0).astype(np.uint8)
+            if candidates[ly, lx] == 0:
+                local = np.zeros_like(soft)
+            else:
+                cv2.floodFill(candidates, None, (lx, ly), 2, flags=4)
+                local = np.where(candidates == 2, soft, 0).astype(np.uint8)
         else:
             local = soft
         mask = local if sample_all_layers else self._layer_mask_to_document(layer, local)
@@ -110,12 +113,18 @@ class SelectionsDocumentMixin:
         local_union = np.zeros(layer.pixels.shape[:2], dtype=np.uint8)
         radius = max(1, int(radius))
         tolerance = max(0, int(tolerance))
-        rgb = layer.pixels[:, :, :3].astype(np.float32) / 255.0
-        lab = cv2.cvtColor(rgb, cv2.COLOR_RGB2LAB)
-        gray = cv2.cvtColor(layer.pixels[:, :, :3], cv2.COLOR_RGB2GRAY)
-        gradient_x = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
-        gradient_y = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
-        edge_map = cv2.magnitude(gradient_x, gradient_y)
+        cache_key = (layer.id, layer.pixels_revision, layer.pixels.shape[:2])
+        cache = getattr(self, "_quick_selection_analysis", None)
+        if cache is None or cache[0] != cache_key:
+            rgb = layer.pixels[:, :, :3]
+            lab = cv2.cvtColor(rgb, cv2.COLOR_RGB2LAB)
+            gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+            gradient_x = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
+            gradient_y = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
+            edge_map = cv2.convertScaleAbs(cv2.magnitude(gradient_x, gradient_y))
+            self._quick_selection_analysis = (cache_key, lab, edge_map)
+        else:
+            _key, lab, edge_map = cache
         edge_limit = 110.0 - float(np.clip(edge_strength, 0.0, 1.0)) * 78.0
         for x, y in points:
             lx, ly = int(x) - layer.x, int(y) - layer.y
@@ -134,8 +143,9 @@ class SelectionsDocumentMixin:
             gx2 = min(layer.pixels.shape[1], lx + gate_radius + 1)
             gy2 = min(layer.pixels.shape[0], ly + gate_radius + 1)
             region = layer.pixels[gy1:gy2, gx1:gx2]
-            color_distance = np.linalg.norm(lab[gy1:gy2, gx1:gx2] - seed, axis=2)
-            perceptual_limit = max(1.0, float(tolerance) * 0.9)
+            color_delta = lab[gy1:gy2, gx1:gx2].astype(np.int16) - seed.astype(np.int16)
+            color_distance = np.sqrt(np.sum(color_delta.astype(np.float32) ** 2, axis=2))
+            perceptual_limit = max(1.0, float(tolerance) * 1.8)
             local_edges = edge_map[gy1:gy2, gx1:gx2]
             candidates = ((color_distance <= perceptual_limit) & (local_edges <= edge_limit) & (region[:, :, 3] > 0)).astype(np.uint8)
             candidates[ly - gy1, lx - gx1] = 1

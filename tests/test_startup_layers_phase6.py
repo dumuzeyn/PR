@@ -89,7 +89,7 @@ class Phase6LayerUiTests(unittest.TestCase):
         expected = [True, False, True]
         self.app.show_editor(); self.app.refresh(); self.app.update()
         bounds = self.app.layer_list.bbox(0)
-        event = SimpleNamespace(x=8, y=bounds[1] + bounds[3] // 2, state=0x0008)
+        event = SimpleNamespace(x=8, y=bounds[1] + bounds[3] // 2, state=0x20000)
         self.assertEqual(self.app.layer_list_click(event), "break")
         self.assertEqual([layer.visible for layer in self.app.doc.layers], [False, False, True])
         self.app.layer_list_click(event)

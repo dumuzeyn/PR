@@ -391,7 +391,7 @@ class TransformWorkspaceMixin:
             x, y, width, height, angle = current_free_values()
             shift = bool(event.state & 0x0001)
             control = bool(event.state & 0x0004)
-            alt = bool(event.state & 0x0008)
+            alt = event_alt_down(event)
             if kind == "move":
                 dx, dy = current[0] - last[0], current[1] - last[1]
                 if shift:

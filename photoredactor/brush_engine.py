@@ -372,6 +372,8 @@ class PixelBrushStroke:
         output = original.copy()
         if self.erase:
             output[:, :, 3] = np.rint(original[:, :, 3].astype(np.float32) * (1.0 - coverage)).astype(np.uint8)
+            fully_erased = output[:, :, 3] == 0
+            output[:, :, :3][fully_erased] = 0
         else:
             dst = original.astype(np.float32)
             paint = np.empty_like(dst)

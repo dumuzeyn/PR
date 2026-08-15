@@ -3,7 +3,6 @@ from __future__ import annotations
 from ..app_shared import *
 from ..brush_config import default_brush_config, is_test_polluted_brush_settings, normalize_brush_config
 
-
 class StartupSettingsMixin:
     def __init__(self) -> None:
         super().__init__()
@@ -72,6 +71,7 @@ class StartupSettingsMixin:
         self.tool_settings = copy.deepcopy(TOOL_SETTINGS_DEFAULTS)
         self._active_settings_tool = "brush"
         self.shape_stroke_width = tk.IntVar(value=2)
+        self.shape_from_center = tk.BooleanVar(value=False)
         self.polygon_sides = tk.IntVar(value=5)
         self.star_points_count = tk.IntVar(value=5)
         self.star_inner_ratio = tk.DoubleVar(value=0.5)
@@ -141,6 +141,9 @@ class StartupSettingsMixin:
         self._move_group_starts: dict[str, tuple[int, int]] = {}
         self._move_group_masks: dict[str, np.ndarray | None] = {}
         self._move_last_bounds: tuple[int, int, int, int] | None = None
+        self._move_selection_start: tuple[int, int] | None = None
+        self._move_selection_bounds: tuple[int, int, int, int] | None = None
+        self._move_selection_delta = (0, 0)
         self._object_resize_handle: str | None = None
         self._object_resize_before: dict | None = None
         self._object_resize_layer_id: str | None = None
@@ -215,6 +218,7 @@ class StartupSettingsMixin:
         self._clone_sample_origin = (0, 0)
         self._clone_source_marker_ids: list[int] = []
         self._source_retouch_stroke = None
+        self._spot_last_point: tuple[int, int] | None = None
         self._clone_overlay_id: int | None = None
         self._clone_overlay_image: ImageTk.PhotoImage | None = None
         self._clone_source_dialog: tk.Toplevel | None = None
@@ -301,10 +305,8 @@ class StartupSettingsMixin:
         self.show_start_screen()
         self.deiconify()
         self.schedule_autosave()
-
     def destroy(self) -> None:
         from ..local_generative import shutdown_local_servers
-
         if self._selection_animation_id is not None:
             try:
                 self.after_cancel(self._selection_animation_id)
@@ -373,9 +375,17 @@ class StartupSettingsMixin:
                     round_brush = self.brush_presets.get("Круглая кисть", {})
                     if round_brush.get("hardness") == 0.8 and round_brush.get("spacing") == 0.25:
                         round_brush.update(hardness=1.0, spacing=0.0)
+                if int(data.get("brush_default_version", 1)) < 3:
+                    for tool_id, defaults in TOOL_SETTINGS_DEFAULTS.items():
+                        settings = self.tool_settings.get(tool_id, {})
+                        if "hardness" in defaults:
+                            settings["hardness"] = 1.0
+                        if "spacing" in defaults:
+                            settings["spacing"] = 0.0
                 shape_settings = data.get("shape_settings", {})
                 if isinstance(shape_settings, dict):
                     self.shape_stroke_width.set(max(0, min(100, int(shape_settings.get("stroke_width", 2)))))
+                    self.shape_from_center.set(bool(shape_settings.get("from_center", False)))
                     self.polygon_sides.set(max(3, min(64, int(shape_settings.get("polygon_sides", 5)))))
                     self.star_points_count.set(max(3, min(64, int(shape_settings.get("star_points", 5)))))
                     self.star_inner_ratio.set(float(np.clip(shape_settings.get("star_inner_ratio", 0.5), 0.05, 0.95)))
@@ -421,7 +431,6 @@ class StartupSettingsMixin:
             self.recent_files = []
             self.tool_order = normalize_tool_order(None, TOOL_DEFINITIONS)
             self.visible_tools = normalize_visible_tools(None, self.tool_order)
-
     def save_settings(self) -> None:
         try:
             self.app_data_dir.mkdir(parents=True, exist_ok=True)
@@ -439,9 +448,10 @@ class StartupSettingsMixin:
                         "tool_settings": self.tool_settings,
                         "brush_presets": self.brush_presets,
                         "brush_advanced": self.brush_advanced,
-                        "brush_default_version": 2,
+                        "brush_default_version": 3,
                         "shape_settings": {
                             "stroke_width": int(self.shape_stroke_width.get()),
+                            "from_center": bool(self.shape_from_center.get()),
                             "polygon_sides": int(self.polygon_sides.get()),
                             "star_points": int(self.star_points_count.get()),
                             "star_inner_ratio": float(self.star_inner_ratio.get()),
@@ -463,7 +473,6 @@ class StartupSettingsMixin:
             )
         except Exception:
             pass
-
     def add_recent_file(self, path: str) -> None:
         resolved = str(Path(path))
         self.recent_files = [item for item in self.recent_files if item.lower() != resolved.lower()]
@@ -471,7 +480,6 @@ class StartupSettingsMixin:
         self.recent_files = self.recent_files[:12]
         self.save_settings()
         self.refresh_recent_menu()
-
     def refresh_recent_menu(self) -> None:
         if not hasattr(self, "recent_menu"):
             return
@@ -486,7 +494,6 @@ class StartupSettingsMixin:
         self.recent_menu.add_separator()
         self.recent_menu.add_command(label="Очистить список", command=self.clear_recent_files)
         self.refresh_startup_recent()
-
     def clear_recent_files(self) -> None:
         self.recent_files.clear()
         self.save_settings()

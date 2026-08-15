@@ -27,6 +27,7 @@ class ToolOptionsBaseMixin:
         save_brush_preset,
         delete_brush_preset,
         reset_brush_presets,
+        import_custom_brush,
         open_brush_engine_panel,
         retouch_strength: tk.DoubleVar,
         exposure: tk.DoubleVar,
@@ -45,6 +46,7 @@ class ToolOptionsBaseMixin:
         set_paint_target,
         apply_retouch_preset,
         shape_stroke_width: tk.IntVar,
+        shape_from_center: tk.BooleanVar,
         polygon_sides: tk.IntVar,
         star_points: tk.IntVar,
         star_inner_ratio: tk.DoubleVar,
@@ -128,6 +130,7 @@ class ToolOptionsBaseMixin:
         self.save_brush_preset = save_brush_preset
         self.delete_brush_preset = delete_brush_preset
         self.reset_brush_presets = reset_brush_presets
+        self.import_custom_brush = import_custom_brush
         self.open_brush_engine_panel = open_brush_engine_panel
         self.retouch_strength = retouch_strength
         self.exposure = exposure
@@ -146,6 +149,7 @@ class ToolOptionsBaseMixin:
         self.set_paint_target = set_paint_target
         self.apply_retouch_preset = apply_retouch_preset
         self.shape_stroke_width = shape_stroke_width
+        self.shape_from_center = shape_from_center
         self.polygon_sides = polygon_sides
         self.star_points = star_points
         self.star_inner_ratio = star_inner_ratio
@@ -247,6 +251,7 @@ class ToolOptionsBaseMixin:
             self._add_color_buttons()
             shown = True
         if tool in {"brush", "eraser"}:
+            self._add_brush_presets()
             self._add_scale("Размер", self.brush_size, 1, 220, "px", integer=True)
             self._add_scale("Жёсткость", self.hardness, 0.0, 1.0, "%", percent=True)
             self._add_scale("Непрозрачность", self.opacity, 0.01, 1.0, "%", percent=True)
@@ -363,6 +368,16 @@ class ToolOptionsBaseMixin:
             ttk.Label(primary, text="Автовыбор", style="Topbar.TLabel").pack(side=tk.LEFT, padx=(6, 2))
             ttk.Combobox(primary, textvariable=self.auto_select, values=("Слой", "Группа", "Выкл"), state="readonly", width=8).pack(side=tk.LEFT, padx=(0, 4), pady=4)
         elif tool in BRUSH_TOOLS:
+            if tool in {"brush", "eraser"}:
+                ttk.Label(primary, text="Кисть", style="Topbar.TLabel").pack(side=tk.LEFT, padx=(5, 2))
+                preset_box = ttk.Combobox(primary, textvariable=self.brush_preset, values=list(self.brush_presets), width=20, state="readonly")
+                preset_box.pack(side=tk.LEFT, padx=(0, 4), pady=4)
+                preset_box.bind("<<ComboboxSelected>>", lambda _event: self.apply_brush_preset())
+                add_brush = ttk.Button(primary, text="+", width=2, command=self.import_custom_brush)
+                add_brush.pack(side=tk.LEFT, padx=(0, 5), pady=4)
+                if self.tooltip_factory is not None:
+                    self.tooltip_factory(preset_box, "Форма и поведение кисти")
+                    self.tooltip_factory(add_brush, "Добавить свою кисть из изображения")
             self._compact_spin(primary, "Размер", self.brush_size, 1, 220, 5)
             variable = self.opacity if tool in {"brush", "eraser", "clone"} else self.exposure if tool in {"dodge", "burn"} else self.retouch_strength
             self._compact_percent(primary, "Непрозрачность" if tool in {"brush", "eraser", "clone", "healing", "spot_healing"} else "Сила", variable)
@@ -375,6 +390,10 @@ class ToolOptionsBaseMixin:
         elif tool in SHAPE_TOOLS:
             self._compact_color_pair(primary, "Заливка", "Обводка")
             self._compact_spin(primary, "Толщина", self.shape_stroke_width, 0, 100, 4)
+            center = ttk.Checkbutton(primary, text="Из центра", variable=self.shape_from_center)
+            center.pack(side=tk.LEFT, padx=4)
+            if self.tooltip_factory is not None:
+                self.tooltip_factory(center, "Выключено: тяните от одного угла фигуры к другому. Включено: тяните от центра.")
             if tool == "polygon_shape":
                 self._compact_spin(primary, "Стороны", self.polygon_sides, 3, 64, 4)
             elif tool == "star_shape":

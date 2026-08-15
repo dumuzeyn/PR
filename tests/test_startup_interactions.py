@@ -113,7 +113,7 @@ class StartupTests(unittest.TestCase):
         self.assertIsInstance(self.app.history.undo_stack[-1], LayerMoveCommand)
         self.assertFalse(any(isinstance(command, DocumentStateCommand) for command in self.app.history.undo_stack))
 
-    def test_right_click_outside_selection_clears_it_for_selection_tools(self) -> None:
+    def test_right_click_clears_selection_even_when_clicked_inside(self) -> None:
         self.app.doc = self.app.doc.new(180, 120, (0, 0, 0, 0))
         mask = np.zeros((120, 180), dtype=np.uint8)
         mask[20:70, 30:90] = 255
@@ -124,11 +124,6 @@ class StartupTests(unittest.TestCase):
 
         inside_x, inside_y = self.app.doc_to_canvas(50, 40)
         self.assertEqual(self.app.selection_right_click(SimpleNamespace(x=inside_x, y=inside_y)), "break")
-        self.assertIsNotNone(self.app.doc.selection_mask)
-        self.assertEqual(len(self.app.history.undo_stack), 0)
-
-        outside_x, outside_y = self.app.doc_to_canvas(130, 95)
-        self.assertEqual(self.app.selection_right_click(SimpleNamespace(x=outside_x, y=outside_y)), "break")
         self.assertIsNone(self.app.doc.selection_mask)
         self.assertEqual(len(self.app.history.undo_stack), 1)
         self.assertIsInstance(self.app.history.undo_stack[-1], SelectionMaskCommand)
@@ -227,9 +222,42 @@ class StartupTests(unittest.TestCase):
         row = 2
         bounds = self.app.layer_list.bbox(row)
         self.assertIsNotNone(bounds)
-        self.app.layer_list_click(SimpleNamespace(x=8, y=bounds[1] + bounds[3] // 2))
+        self.app.layer_list_click(SimpleNamespace(x=8, y=bounds[1] + bounds[3] // 2, state=0x0008))
         self.assertFalse(self.app.doc.layers[0].visible)
+        self.assertTrue(self.app.doc.layers[1].visible)
+        self.assertTrue(self.app.doc.layers[2].visible)
         self.assertEqual(self.app.doc.active_layer, active)
+
+    def test_shape_drag_ignores_windows_num_lock_and_uses_alt_for_center(self) -> None:
+        corner = self.app.shape_geometry_for_drag("ellipse_shape", (50, 40), (80, 70), 0x0008)
+        centered = self.app.shape_geometry_for_drag("ellipse_shape", (50, 40), (80, 70), 0x20000)
+        self.assertEqual(corner["box"], (50, 40, 80, 70))
+        self.assertEqual(centered["box"], (20, 10, 80, 70))
+
+    def test_selection_right_click_clears_except_in_subtract_mode(self) -> None:
+        self.app.doc.set_rect_selection((4, 4, 20, 20))
+        self.app.tool.set("select")
+        self.app.selection_mode.set("replace")
+        self.assertEqual(self.app.selection_right_click(SimpleNamespace(x=0, y=0, state=0)), "break")
+        self.assertIsNone(self.app.doc.selection_mask)
+        self.app.doc.set_rect_selection((4, 4, 20, 20))
+        self.app.selection_mode.set("subtract")
+        self.app.selection_right_click(SimpleNamespace(x=0, y=0, state=0))
+        self.assertIsNotNone(self.app.doc.selection_mask)
+
+    def test_move_tool_moves_pixels_inside_selection(self) -> None:
+        self.app.create_document_from_settings(
+            {"width": 40, "height": 30, "dpi": 72, "background": (0, 0, 0, 0), "include_clipboard": False}
+        )
+        self.app.doc.layer.pixels[6:12, 5:11] = (230, 40, 20, 255)
+        self.app.doc.layer.touch_pixels()
+        self.app.doc.set_rect_selection((5, 6, 11, 12))
+        self.app._move_selection_start = (7, 8)
+        self.app._move_selection_bounds = self.app.doc.selection_bounds()
+        self.app._move_selection_delta = (12, 5)
+        self.app.end_move_selection()
+        self.assertEqual(int(self.app.doc.layer.pixels[8, 7, 3]), 0)
+        self.assertEqual(tuple(self.app.doc.layer.pixels[13, 19]), (230, 40, 20, 255))
 
     def test_shape_preview_reuses_one_canvas_item(self) -> None:
         self.app.create_document_from_settings(

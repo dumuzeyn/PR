@@ -4,6 +4,36 @@ from ..app_shared import *
 
 
 class PatchInteractionMixin:
+    def patch_selection_down(self, event) -> None:
+        self.clear_patch_preview()
+        self._patch_right_start = self.canvas_to_doc(event)
+        self.drag_start = self._patch_right_start
+        self.draw_selection(self._patch_right_start, self._patch_right_start)
+        self.status_text("Проведите правой кнопкой, чтобы задать прямоугольник заплатки")
+
+    def patch_selection_drag(self, event) -> str | None:
+        start = getattr(self, "_patch_right_start", None)
+        if self.tool.get() != "patch" or start is None:
+            return None
+        self.draw_selection(start, self.canvas_to_doc(event))
+        return "break"
+
+    def patch_selection_up(self, event) -> str | None:
+        start = getattr(self, "_patch_right_start", None)
+        if self.tool.get() != "patch" or start is None:
+            return None
+        end = self.canvas_to_doc(event)
+        self._patch_right_start = None
+        self.drag_start = None
+        self.clear_drag_preview()
+        if abs(end[0] - start[0]) < 2 or abs(end[1] - start[1]) < 2:
+            return "break"
+        box = (*start, *end)
+        feather = int(self.selection_feather.get())
+        self.run_selection_command("Область заплатки", lambda: self.doc.set_rect_selection(box, "replace", feather))
+        self.status_text("Область заплатки готова. Перетащите её левой кнопкой на источник")
+        return "break"
+
     def begin_patch_drag(self, point: tuple[int, int]) -> None:
         self.clear_patch_preview()
         if self.doc.layer.locked:

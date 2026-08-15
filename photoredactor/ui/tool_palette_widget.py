@@ -24,6 +24,7 @@ class ToolPalette(ttk.Frame):
         self.select_tool = select_tool
         self.tooltip_factory = tooltip_factory
         self._images: dict[str, tk.PhotoImage] = {}
+        self._group_choice = {name: values[0] for name, values in COMBINED_TOOL_GROUPS.items()}
         header = ttk.Frame(self)
         header.pack(fill=tk.X, padx=8, pady=(8, 5))
         ttk.Label(header, text="Инструменты", style="PanelTitle.TLabel").pack(side=tk.LEFT)
@@ -57,10 +58,22 @@ class ToolPalette(ttk.Frame):
         settings_image = self._images.get("settings")
         self._images = {"settings": settings_image} if settings_image is not None else {}
         by_id = {value: (label, value, description) for label, value, description in self.definitions}
+        group_by_tool = {value: group for group, values in COMBINED_TOOL_GROUPS.items() for value in values}
+        consumed_groups: set[str] = set()
         previous_group: str | None = None
         for value in self.order:
             if value not in self.visible or value not in by_id:
                 continue
+            combined_group = group_by_tool.get(value)
+            if combined_group is not None:
+                if combined_group in consumed_groups:
+                    continue
+                consumed_groups.add(combined_group)
+                variants = [item for item in COMBINED_TOOL_GROUPS[combined_group] if item in self.visible and item in by_id]
+                if len(variants) > 1:
+                    self._render_combined_tool(combined_group, variants, by_id, previous_group)
+                    previous_group = combined_group
+                    continue
             label, _value, description = by_id[value]
             group = TOOL_GROUPS.get(value, value)
             top_pad = 7 if previous_group is not None and group != previous_group else 1
@@ -84,5 +97,46 @@ class ToolPalette(ttk.Frame):
                 title = f"{label} ({shortcut})" if shortcut else label
                 self.tooltip_factory(button, f"{title}\n{description}", demo=value)
             self.buttons[value] = button
+
+    def _render_combined_tool(self, group: str, variants: list[str], by_id: dict, previous_group: str | None) -> None:
+        active = self.tool_var.get()
+        if active in variants:
+            self._group_choice[group] = active
+        selected = self._group_choice.get(group, variants[0])
+        if selected not in variants:
+            selected = variants[0]
+            self._group_choice[group] = selected
+        label, _value, description = by_id[selected]
+        row = ttk.Frame(self.scroller.content)
+        row.pack(fill=tk.X, padx=3, pady=(7 if previous_group is not None else 1, 1))
+        image = tool_icon(self, selected, TOKENS.ICON_SIZE)
+        self._images[f"group:{group}"] = image
+        button = ttk.Radiobutton(
+            row, image=image, text=label, compound=tk.LEFT, value=selected,
+            variable=self.tool_var, command=lambda value=selected: self.select_tool(value),
+            style="Tool.TRadiobutton", takefocus=True,
+        )
+        button.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        picker = ttk.Menubutton(row, text="▾", width=2)
+        menu = tk.Menu(picker, tearoff=False)
+        for value in variants:
+            item_label, _item, item_description = by_id[value]
+            menu.add_radiobutton(
+                label=item_label, value=value, variable=self.tool_var,
+                command=lambda chosen=value, group_name=group: self._choose_group_tool(group_name, chosen),
+            )
+            self.buttons[value] = button
+        picker.configure(menu=menu)
+        picker.pack(side=tk.RIGHT, padx=(2, 0))
+        if self.tooltip_factory is not None:
+            shortcut = SHORTCUTS.get(selected)
+            title = f"{label} ({shortcut})" if shortcut else label
+            self.tooltip_factory(button, f"{title}\n{description}", demo=selected)
+            self.tooltip_factory(picker, "Выбрать вариант инструмента")
+
+    def _choose_group_tool(self, group: str, value: str) -> None:
+        self._group_choice[group] = value
+        self.select_tool(value)
+        self.render()
 
 __all__ = [name for name in globals() if not name.startswith("__")]

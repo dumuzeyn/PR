@@ -88,7 +88,7 @@ class Phase8UiTests(unittest.TestCase):
         self.app.canvas_to_doc = lambda _event: (40, 30)
         for tool in ("clone", "healing"):
             self.app.tool.set(tool)
-            self.app.pointer_motion(SimpleNamespace(x=0, y=0, state=0x0008))
+            self.app.pointer_motion(SimpleNamespace(x=0, y=0, state=0x20000))
             self.assertEqual(str(self.app.canvas.cget("cursor")), "target")
             label = self.app._brush_preview_ids[-1]
             self.assertEqual(str(self.app.canvas.itemcget(label, "text")), "Источник")

@@ -3,6 +3,25 @@ from __future__ import annotations
 from .tool_options_shared import *
 
 
+OPTION_HINTS = {
+    "Размер": "Диаметр отпечатка инструмента в пикселях.",
+    "Жёсткость": "Резкость края отпечатка: 100% даёт чёткий край, меньшие значения делают его мягче.",
+    "Непрозрачность": "Максимальная заметность результата одного штриха.",
+    "Поток": "Сколько краски наносится каждым отпечатком во время непрерывного штриха.",
+    "Интервал": "Расстояние между отпечатками кисти. 0% создаёт непрерывную линию.",
+    "Сглаживание": "Стабилизирует траекторию указателя и уменьшает дрожание линии.",
+    "Сила": "Интенсивность воздействия инструмента на изображение.",
+    "Экспозиция": "Сила осветления или затемнения за один проход.",
+    "Допуск": "Насколько цвет может отличаться от выбранного и всё ещё попадать в область.",
+    "Допуск области": "Допустимое отличие цвета внутри связанной области градиентной заливки.",
+    "Структура": "Насколько заплатка сохраняет детали и текстуру источника.",
+    "Цветовая адаптация": "Насколько цвет источника подстраивается под место назначения.",
+    "Диффузия": "Скорость смешивания восстановленной текстуры с окружением.",
+    "Толщина": "Толщина контура создаваемой фигуры.",
+    "Внутренний радиус": "Отношение внутреннего радиуса звезды к внешнему.",
+}
+
+
 class ToolOptionsControlsMixin:
     def _add_brush_engine_options(self, tool: str) -> None:
         self._add_scale("Поток", self.brush_flow, 0.01, 1.0, "%", percent=True)
@@ -22,13 +41,13 @@ class ToolOptionsControlsMixin:
         ttk.Checkbutton(pressure, text="Нажим изменяет непрозрачность", variable=self.pressure_opacity).pack(anchor=tk.W)
         ttk.Checkbutton(pressure, text="Нажим изменяет поток", variable=self.pressure_flow).pack(anchor=tk.W)
         ttk.Button(self.body, text="Движок кисти...", command=self.open_brush_engine_panel).pack(fill=tk.X, padx=8, pady=(8, 0))
-        self._add_brush_presets()
 
     def _add_brush_presets(self) -> None:
         ttk.Label(self.body, text="Пресет кисти").pack(anchor=tk.W, padx=8, pady=(8, 0))
         box = ttk.Combobox(self.body, textvariable=self.brush_preset, values=list(self.brush_presets), state="readonly")
         box.pack(fill=tk.X, padx=8)
         box.bind("<<ComboboxSelected>>", lambda _event: self.apply_brush_preset())
+        ttk.Button(self.body, text="Добавить свою кисть...", command=self.import_custom_brush).pack(fill=tk.X, padx=8, pady=(5, 0))
         self._brush_preset_editor(self.body, compact=False)
 
     def _compact_brush_presets(self, parent: ttk.Frame) -> None:
@@ -46,6 +65,7 @@ class ToolOptionsControlsMixin:
                 command=self.apply_brush_preset,
             )
         menu.add_separator()
+        menu.add_command(label="Добавить кисть из изображения...", command=self.import_custom_brush)
         menu.add_command(label="Сохранить новый пресет", command=lambda: self.save_brush_preset(True))
         menu.add_command(label="Удалить выбранный", command=self.delete_brush_preset)
         menu.add_command(label="Восстановить стандартные", command=self.reset_brush_presets)
@@ -70,23 +90,37 @@ class ToolOptionsControlsMixin:
             if self.tooltip_factory is not None:
                 self.tooltip_factory(button, hint)
 
-    @staticmethod
-    def _compact_spin(parent: ttk.Frame, label: str, variable: tk.Variable, start: int, end: int, width: int) -> None:
-        ttk.Label(parent, text=label, style="Topbar.TLabel").pack(side=tk.LEFT, padx=(5, 2))
-        ttk.Spinbox(parent, textvariable=variable, from_=start, to=end, width=width).pack(side=tk.LEFT, padx=(0, 4), pady=4)
+    def _compact_spin(self, parent: ttk.Frame, label: str, variable: tk.Variable, start: int, end: int, width: int) -> None:
+        caption = ttk.Label(parent, text=label, style="Topbar.TLabel")
+        caption.pack(side=tk.LEFT, padx=(5, 2))
+        control = ttk.Spinbox(parent, textvariable=variable, from_=start, to=end, width=width)
+        control.pack(side=tk.LEFT, padx=(0, 4), pady=4)
+        self._attach_option_hint((caption, control), label)
 
-    @staticmethod
-    def _compact_percent(parent: ttk.Frame, label: str, variable: tk.Variable) -> None:
-        ttk.Label(parent, text=label, style="Topbar.TLabel").pack(side=tk.LEFT, padx=(5, 2))
+    def _compact_percent(self, parent: ttk.Frame, label: str, variable: tk.Variable) -> None:
+        caption = ttk.Label(parent, text=label, style="Topbar.TLabel")
+        caption.pack(side=tk.LEFT, padx=(5, 2))
         value = ttk.Label(parent, width=5, style="Topbar.TLabel")
         value.pack(side=tk.LEFT)
-        ttk.Scale(parent, variable=variable, from_=0.0, to=1.0, length=90, command=lambda raw: value.configure(text=f"{round(float(raw) * 100)}%")).pack(side=tk.LEFT, padx=(0, 4))
+        scale = ttk.Scale(parent, variable=variable, from_=0.0, to=1.0, length=90, command=lambda raw: value.configure(text=f"{round(float(raw) * 100)}%"))
+        scale.pack(side=tk.LEFT, padx=(0, 4))
         value.configure(text=f"{round(float(variable.get()) * 100)}%")
+        self._attach_option_hint((caption, value, scale), label)
 
-    @staticmethod
-    def _compact_combo(parent: ttk.Frame, label: str, variable: tk.Variable, values: list[str], width: int, readonly: bool = True) -> None:
-        ttk.Label(parent, text=label, style="Topbar.TLabel").pack(side=tk.LEFT, padx=(5, 2))
-        ttk.Combobox(parent, textvariable=variable, values=values, width=width, state="readonly" if readonly else "normal").pack(side=tk.LEFT, padx=(0, 4), pady=4)
+    def _compact_combo(self, parent: ttk.Frame, label: str, variable: tk.Variable, values: list[str], width: int, readonly: bool = True) -> None:
+        caption = ttk.Label(parent, text=label, style="Topbar.TLabel")
+        caption.pack(side=tk.LEFT, padx=(5, 2))
+        control = ttk.Combobox(parent, textvariable=variable, values=values, width=width, state="readonly" if readonly else "normal")
+        control.pack(side=tk.LEFT, padx=(0, 4), pady=4)
+        self._attach_option_hint((caption, control), label)
+
+    def _attach_option_hint(self, widgets, label: str) -> None:
+        if self.tooltip_factory is None:
+            return
+        hint = OPTION_HINTS.get(label) or next((text for key, text in OPTION_HINTS.items() if label.startswith(key)), None)
+        if hint:
+            for widget in widgets:
+                self.tooltip_factory(widget, hint)
 
     def _compact_single_color(self, parent: ttk.Frame, command, index: int, tooltip: str) -> None:
         colors = self.color_provider() if self.color_provider is not None else ((0, 0, 0, 255), (255, 255, 255, 255))
@@ -123,7 +157,8 @@ class ToolOptionsControlsMixin:
     ) -> None:
         row = ttk.Frame(self.body)
         row.pack(fill=tk.X, padx=8, pady=(6, 0))
-        ttk.Label(row, text=label).pack(side=tk.LEFT)
+        caption = ttk.Label(row, text=label)
+        caption.pack(side=tk.LEFT)
         value_label = ttk.Label(row, width=8, anchor=tk.E)
         value_label.pack(side=tk.RIGHT)
 
@@ -139,13 +174,17 @@ class ToolOptionsControlsMixin:
 
         scale = ttk.Scale(self.body, from_=start, to=end, variable=variable, orient=tk.HORIZONTAL, command=show)
         scale.pack(fill=tk.X, padx=8)
+        self._attach_option_hint((caption, value_label, scale), label)
         show()
 
     def _add_spinbox(self, label: str, variable: tk.Variable, start: int, end: int) -> None:
         row = ttk.Frame(self.body)
         row.pack(fill=tk.X, padx=8, pady=(6, 0))
-        ttk.Label(row, text=label).pack(side=tk.LEFT)
-        ttk.Spinbox(row, textvariable=variable, from_=start, to=end, increment=1, width=7).pack(side=tk.RIGHT)
+        caption = ttk.Label(row, text=label)
+        caption.pack(side=tk.LEFT)
+        control = ttk.Spinbox(row, textvariable=variable, from_=start, to=end, increment=1, width=7)
+        control.pack(side=tk.RIGHT)
+        self._attach_option_hint((caption, control), label)
 
     def _add_tonal_range(self) -> None:
         ttk.Label(self.body, text="Диапазон").pack(anchor=tk.W, padx=8, pady=(6, 0))
@@ -238,6 +277,8 @@ class ToolOptionsControlsMixin:
                 values=["Линейный", "Радиальный", "Отраженный", "Ромб", "Угловой"],
                 state="readonly",
             ).pack(fill=tk.X, padx=8)
+            if self.gradient_mode.get() == "Заливка":
+                self._add_spinbox("Допуск области", self.tolerance, 0, 128)
             ttk.Button(self.body, text="Редактор градиента...", command=self.open_gradient_editor).pack(fill=tk.X, padx=8, pady=(8, 2))
         else:
             ttk.Label(self.body, text="Текстура").pack(anchor=tk.W, padx=8, pady=(6, 0))
@@ -285,6 +326,10 @@ class ToolOptionsControlsMixin:
         ttk.Button(self.body, text="Готово", command=self.finish_text_edit).pack(fill=tk.X, padx=8, pady=(2, 2))
 
     def _add_shape_options(self, tool: str) -> None:
+        center = ttk.Checkbutton(self.body, text="Строить из центра", variable=self.shape_from_center)
+        center.pack(anchor=tk.W, padx=8, pady=(0, 6))
+        if self.tooltip_factory is not None:
+            self.tooltip_factory(center, "Выключено: первая точка является углом фигуры. Включено: первая точка является центром. Alt временно меняет режим.")
         if tool in {"line_shape", "bezier_shape"}:
             ttk.Button(self.body, text="Цвет линии", command=self.pick_foreground).pack(fill=tk.X, padx=8, pady=(0, 6))
         else:

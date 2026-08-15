@@ -75,6 +75,7 @@ from .core import (
     encode_png,
     edge_aware_cleanup,
     flood_fill,
+    contiguous_color_region,
     frequency_separation,
     generative_expand_pixels,
     image_statistics,
@@ -162,7 +163,7 @@ from .plugins import PluginRegistry
 from .ui.tool_options import ToolOptionsPanel
 from .ui.tool_palette import ToolPalette, ToolPaletteDialog, normalize_tool_order, normalize_visible_tools
 from .ui.icons import SHORTCUTS, action_icon
-from .ui.shortcuts import TOOL_SHORTCUT_GROUPS, accelerator, command_for_event, event_key
+from .ui.shortcuts import TOOL_SHORTCUT_GROUPS, accelerator, command_for_event, event_alt_down, event_key
 from .ui.scrollable_frame import ScrollableFrame
 from .ui.theme import TOKENS, configure_theme
 
@@ -337,20 +338,29 @@ RETOUCH_PRESETS = {
 
 TOOL_SETTINGS_DEFAULTS = {
     "brush": {"size": 28, "hardness": 1.0, "opacity": 1.0, "flow": 1.0, "spacing": 0.0, "smoothing": 0.15, "blend_mode": "Normal", "pressure_size": False, "pressure_opacity": False, "pressure_flow": False},
-    "eraser": {"size": 28, "hardness": 0.5, "opacity": 1.0, "flow": 1.0, "spacing": 0.25, "smoothing": 0.15, "pressure_size": False, "pressure_opacity": False, "pressure_flow": False},
-    "blur_tool": {"size": 32, "hardness": 0.5, "strength": 0.25, "flow": 0.35, "spacing": 0.2, "smoothing": 0.15, "pressure_size": False, "pressure_opacity": False, "pressure_flow": False},
-    "sharpen_tool": {"size": 28, "hardness": 0.5, "strength": 0.2, "flow": 0.3, "spacing": 0.2, "smoothing": 0.15, "pressure_size": False, "pressure_opacity": False, "pressure_flow": False},
-    "dodge": {"size": 32, "hardness": 0.45, "flow": 1.0, "spacing": 0.25, "smoothing": 0.15, "exposure": 0.15, "range": "Средние тона"},
-    "burn": {"size": 32, "hardness": 0.45, "flow": 1.0, "spacing": 0.25, "smoothing": 0.15, "exposure": 0.15, "range": "Средние тона"},
-    "clone": {"size": 28, "hardness": 0.5, "flow": 1.0, "spacing": 0.25, "smoothing": 0.15, "opacity": 0.8, "pressure_size": False, "pressure_opacity": False, "pressure_flow": False},
-    "healing": {"size": 26, "hardness": 0.45, "flow": 1.0, "spacing": 0.25, "smoothing": 0.15, "strength": 0.65, "pressure_size": False, "pressure_opacity": False, "pressure_flow": False},
-    "spot_healing": {"size": 10, "hardness": 0.4, "flow": 1.0, "spacing": 0.45, "smoothing": 0.1, "strength": 0.65, "pressure_size": False, "pressure_opacity": False, "pressure_flow": False},
+    "eraser": {"size": 28, "hardness": 1.0, "opacity": 1.0, "flow": 1.0, "spacing": 0.0, "smoothing": 0.15, "pressure_size": False, "pressure_opacity": False, "pressure_flow": False},
+    "blur_tool": {"size": 32, "hardness": 1.0, "strength": 0.25, "flow": 0.35, "spacing": 0.0, "smoothing": 0.15, "pressure_size": False, "pressure_opacity": False, "pressure_flow": False},
+    "sharpen_tool": {"size": 28, "hardness": 1.0, "strength": 0.2, "flow": 0.3, "spacing": 0.0, "smoothing": 0.15, "pressure_size": False, "pressure_opacity": False, "pressure_flow": False},
+    "dodge": {"size": 32, "hardness": 1.0, "flow": 1.0, "spacing": 0.0, "smoothing": 0.15, "exposure": 0.15, "range": "Средние тона"},
+    "burn": {"size": 32, "hardness": 1.0, "flow": 1.0, "spacing": 0.0, "smoothing": 0.15, "exposure": 0.15, "range": "Средние тона"},
+    "clone": {"size": 28, "hardness": 1.0, "flow": 1.0, "spacing": 0.0, "smoothing": 0.15, "opacity": 0.8, "pressure_size": False, "pressure_opacity": False, "pressure_flow": False},
+    "healing": {"size": 26, "hardness": 1.0, "flow": 1.0, "spacing": 0.0, "smoothing": 0.15, "strength": 0.65, "pressure_size": False, "pressure_opacity": False, "pressure_flow": False},
+    "spot_healing": {"size": 10, "hardness": 1.0, "flow": 1.0, "spacing": 0.0, "smoothing": 0.1, "strength": 0.65, "pressure_size": False, "pressure_opacity": False, "pressure_flow": False},
 }
 
 BRUSH_PRESET_DEFAULTS = {
+    "Круглая жёсткая": {"size": 28, "hardness": 1.0, "opacity": 1.0, "flow": 1.0, "spacing": 0.0, "smoothing": 0.15, "blend_mode": "Normal"},
     "Мягкая кисть": {"size": 80, "hardness": 0.0, "opacity": 1.0, "flow": 0.25, "spacing": 0.12, "smoothing": 0.25, "blend_mode": "Normal"},
     "Круглая кисть": {"size": 28, "hardness": 1.0, "opacity": 1.0, "flow": 1.0, "spacing": 0.0, "smoothing": 0.15, "blend_mode": "Normal"},
     "Точная ретушь": {"size": 16, "hardness": 0.45, "opacity": 1.0, "flow": 0.2, "spacing": 0.15, "smoothing": 0.35, "blend_mode": "Normal"},
+    "Карандаш": {"size": 4, "hardness": 1.0, "opacity": 1.0, "flow": 1.0, "spacing": 0.0, "smoothing": 0.05, "blend_mode": "Normal"},
+    "Аэрограф": {"size": 90, "hardness": 0.0, "opacity": 0.7, "flow": 0.08, "spacing": 0.08, "smoothing": 0.25, "blend_mode": "Normal"},
+    "Маркер": {"size": 34, "hardness": 0.85, "opacity": 0.7, "flow": 0.45, "spacing": 0.05, "smoothing": 0.25, "blend_mode": "Multiply", "advanced": {"angle": -18.0, "roundness": 0.35}},
+    "Плоская каллиграфия": {"size": 42, "hardness": 1.0, "opacity": 1.0, "flow": 1.0, "spacing": 0.04, "smoothing": 0.3, "blend_mode": "Normal", "advanced": {"angle": 35.0, "roundness": 0.18}},
+    "Тушь": {"size": 18, "hardness": 0.9, "opacity": 1.0, "flow": 0.8, "spacing": 0.03, "smoothing": 0.45, "blend_mode": "Normal", "pressure_size": True, "pressure_opacity": True},
+    "Мел": {"size": 36, "hardness": 0.75, "opacity": 0.75, "flow": 0.35, "spacing": 0.12, "smoothing": 0.2, "blend_mode": "Normal", "advanced": {"size_jitter": 0.12, "angle_jitter": 0.4, "opacity_jitter": 0.18}},
+    "Уголь": {"size": 52, "hardness": 0.35, "opacity": 0.68, "flow": 0.22, "spacing": 0.1, "smoothing": 0.18, "blend_mode": "Multiply", "advanced": {"size_jitter": 0.08, "roundness": 0.55, "angle_jitter": 0.25, "opacity_jitter": 0.22}},
+    "Брызги": {"size": 26, "hardness": 0.9, "opacity": 0.9, "flow": 0.65, "spacing": 0.24, "smoothing": 0.05, "blend_mode": "Normal", "advanced": {"scatter": 1.8, "scatter_both_axes": True, "scatter_count": 4, "size_jitter": 0.55, "opacity_jitter": 0.25}},
 }
 
 CUSTOM_SHAPE_PRESETS = {

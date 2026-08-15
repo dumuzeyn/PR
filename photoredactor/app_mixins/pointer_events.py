@@ -27,11 +27,15 @@ class PointerEventsMixin:
         if tool.endswith("_shape"):
             self._shape_drag_options = self.current_shape_options(tool)
             self.clear_selection_overlay()
+        if tool == "gradient" and self.gradient_mode.get() == "Заливка":
+            self._gradient_fill_mask = contiguous_color_region(
+                self.doc.layer, point[0], point[1], int(self.tolerance.get())
+            )
         if tool in {"path_select", "direct_select", "add_anchor", "delete_anchor", "convert_anchor"}:
             self.path_pointer_down(tool, point, event.state)
         elif tool in ["brush", "eraser", "blur_tool", "sharpen_tool", "dodge", "burn", "clone", "healing", "spot_healing"]:
             if tool in ["clone", "healing"]:
-                if event.state & 0x0008:
+                if event_alt_down(event):
                     self.set_clone_source(point)
                     return
                 requested_source = (int(self.clone_source_x.get()), int(self.clone_source_y.get()))
@@ -89,6 +93,13 @@ class PointerEventsMixin:
                 self.finish_text_edit()
             self.status_text("Клик создает строку текста, перетаскивание создает текстовый блок")
         elif tool == "move":
+            selection = self.doc.selection_mask
+            if selection is not None and 0 <= point[0] < self.doc.width and 0 <= point[1] < self.doc.height and selection[point[1], point[0]] > 0:
+                self._move_selection_start = point
+                self._move_selection_bounds = self.doc.selection_bounds()
+                self._move_selection_delta = (0, 0)
+                self.status_text("Перемещение пикселей внутри выделения")
+                return
             handle = self.object_handle_at(point)
             if handle is not None:
                 self.begin_object_resize(handle)
@@ -147,6 +158,15 @@ class PointerEventsMixin:
             self.last_point = point
         elif tool == "move" and self._object_resize_handle is not None:
             self.resize_selected_object_live(point, event.state)
+        elif tool == "move" and self._move_selection_start is not None:
+            dx = point[0] - self._move_selection_start[0]
+            dy = point[1] - self._move_selection_start[1]
+            self._move_selection_delta = (dx, dy)
+            bounds = self._move_selection_bounds
+            if bounds is not None:
+                x1, y1, x2, y2 = bounds
+                coords = (*self.doc_to_canvas(x1 + dx, y1 + dy), *self.doc_to_canvas(x2 + dx, y2 + dy))
+                self.update_drag_preview_item("rectangle", coords, outline=TOKENS.ACCENT, dash=(5, 4), width=2)
         elif tool == "move" and self.drag_start:
             dx, dy = point[0] - self.drag_start[0], point[1] - self.drag_start[1]
             if dx or dy:
@@ -211,6 +231,8 @@ class PointerEventsMixin:
         elif tool == "move":
             if self._object_resize_handle is not None:
                 self.finish_object_resize()
+            elif self._move_selection_start is not None:
+                self.end_move_selection()
             else:
                 self.end_move_layer()
         elif tool == "gradient" and self.drag_start:
@@ -220,6 +242,10 @@ class PointerEventsMixin:
             else:
                 kind = self.current_gradient_kind()
                 stops = self.current_gradient_stops()
+                gradient_mask = getattr(self, "_gradient_fill_mask", None)
+                selection_mask = self.doc.layer_selection_mask(self.doc.layer)
+                if gradient_mask is not None and selection_mask is not None:
+                    gradient_mask = np.minimum(gradient_mask, selection_mask)
                 self.run_pixel_delta_command(
                     "Gradient",
                     lambda: apply_gradient(
@@ -227,13 +253,14 @@ class PointerEventsMixin:
                         (*self.drag_start, *point),
                         self.foreground,
                         self.background,
-                        self.doc.layer_selection_mask(self.doc.layer),
+                        gradient_mask,
                         kind,
                         stops,
                         self.current_gradient_definition(),
                     ),
                 )
             self.clear_gradient_preview()
+            self._gradient_fill_mask = None
         elif tool == "text" and self.drag_start:
             self.begin_text_editor(self.drag_start, point)
             self.clear_crop_overlay()

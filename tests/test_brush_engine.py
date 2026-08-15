@@ -70,6 +70,18 @@ def test_eraser_changes_alpha_without_blackening_rgb() -> None:
     assert 0 < int(layer.pixels[48, 64, 3]) < 255
 
 
+def test_hard_eraser_fully_clears_alpha_and_hidden_rgb() -> None:
+    layer = opaque_layer(value=173)
+    stroke = PixelBrushStroke(
+        layer,
+        BrushSettings(radius=9, hardness=1.0, opacity=1.0, flow=1.0, spacing=0.0),
+        (0, 0, 0, 255),
+        erase=True,
+    )
+    stroke.dab(64, 48)
+    np.testing.assert_array_equal(layer.pixels[48, 64], np.zeros(4, dtype=np.uint8))
+
+
 def test_brush_respects_soft_selection_coverage() -> None:
     layer = opaque_layer(value=0)
     selection = np.zeros((96, 128), dtype=np.uint8)

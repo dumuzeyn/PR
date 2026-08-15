@@ -118,7 +118,7 @@ class PathEditingMixin:
         else:
             node = nodes[index]
             node[kind] = local
-            if state & 0x0008:
+            if event_alt_down(state):
                 node["linked"] = False
             elif bool(node.get("linked", True)):
                 opposite = "out" if kind == "in" else "in"

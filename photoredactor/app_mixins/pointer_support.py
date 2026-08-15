@@ -37,7 +37,7 @@ class PointerSupportMixin:
         if hasattr(self, "status_coords"):
             self.status_coords.configure(text=f"{point[0]}, {point[1]}")
         tool = self.tool.get()
-        if tool in {"clone", "healing"} and not self._panning and getattr(event, "state", 0) & 0x0008:
+        if tool in {"clone", "healing"} and not self._panning and event_alt_down(event):
             self.canvas.configure(cursor="target")
         elif tool in {"clone", "healing"} and not self._panning:
             self.canvas.configure(cursor="crosshair")
@@ -170,7 +170,7 @@ class PointerSupportMixin:
             self._object_resize_handle,
             point,
             keep_proportions=bool(state & 0x0001),
-            from_center=bool(state & 0x0008),
+            from_center=event_alt_down(state),
         )
         layer.shape_data = transform_shape_data_to_box(
             self._object_resize_before,
@@ -243,7 +243,7 @@ class PointerSupportMixin:
         mode = self.selection_mode_from_event(event) if tool == "quick_selection" else "replace"
         color_by_mode = {"replace": "#50e3ff", "add": "#59f28a", "subtract": "#ff6262", "intersect": "#ffd166"}
         label_by_mode = {"replace": "new", "add": "+", "subtract": "-", "intersect": "x"}
-        choosing_source = tool in {"clone", "healing"} and getattr(event, "state", 0) & 0x0008
+        choosing_source = tool in {"clone", "healing"} and event_alt_down(event)
         outline = "#ffb000" if choosing_source else color_by_mode.get(mode, "#50e3ff")
         label = "Источник" if choosing_source else label_by_mode.get(mode, "")
         advanced = getattr(self, "brush_advanced", {}) if tool in {"brush", "eraser"} else {}

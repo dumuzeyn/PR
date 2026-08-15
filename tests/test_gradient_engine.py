@@ -1,6 +1,6 @@
 import numpy as np
 
-from photoredactor.core import Document, GradientEngine, Layer, apply_gradient
+from photoredactor.core import Document, GradientEngine, Layer, apply_gradient, contiguous_color_region
 
 
 BLACK = (0, 0, 0, 255)
@@ -48,6 +48,16 @@ def test_gradient_stops_and_selection_coverage() -> None:
     assert layer.pixels[1, 2, 0] == 255
     assert layer.pixels[1, 2, 1] == 0
     assert tuple(layer.pixels[1, 4]) == BLACK
+
+
+def test_gradient_fill_region_stops_at_opaque_boundary() -> None:
+    pixels = np.full((24, 30, 4), (255, 255, 255, 255), dtype=np.uint8)
+    pixels[:, 14:16] = (0, 0, 0, 255)
+    layer = Layer("bounded", pixels.copy())
+    region = contiguous_color_region(layer, 4, 12, 0)
+    assert region is not None
+    apply_gradient(layer, (0, 12, 29, 12), BLACK, WHITE, region)
+    np.testing.assert_array_equal(layer.pixels[:, 16:], pixels[:, 16:])
 
 
 def test_gradient_preserves_high_precision_working_data() -> None:

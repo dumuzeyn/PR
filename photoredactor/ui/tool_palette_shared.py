@@ -10,6 +10,12 @@ from .theme import TOKENS
 
 ToolDefinition = tuple[str, str, str]
 
+COMBINED_TOOL_GROUPS = {
+    "selection_shape": ("select", "ellipse_select"),
+    "lasso_selection": ("lasso", "polygon_lasso", "magnetic_lasso"),
+    "path_nodes": ("path_select", "direct_select", "add_anchor", "delete_anchor", "convert_anchor"),
+}
+
 
 def normalize_tool_order(saved_order: list[str] | None, definitions: list[ToolDefinition]) -> list[str]:
     valid = [value for _label, value, _description in definitions]

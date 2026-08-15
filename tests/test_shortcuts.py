@@ -6,6 +6,7 @@ from photoredactor.ui.shortcuts import (
     TOOL_SHORTCUT_GROUPS,
     accelerator,
     command_for_event,
+    event_alt_down,
     event_key,
     validate_shortcut_registry,
 )
@@ -34,6 +35,12 @@ def test_cyrillic_keys_have_a_non_windows_fallback() -> None:
     assert event_key(event(-1, "Cyrillic_de", 0)) == "l"
     assert event_key(event(219, "Cyrillic_ha", 0)) == "["
     assert event_key(event(221, "Cyrillic_hardsign", 0)) == "]"
+
+
+def test_windows_num_lock_is_not_treated_as_alt() -> None:
+    assert not event_alt_down(0x0008, "win32")
+    assert event_alt_down(0x20000, "win32")
+    assert event_alt_down(0x0008, "linux")
 
 
 def test_every_tool_has_exactly_one_displayed_shortcut() -> None:

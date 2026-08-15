@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from ..app_shared import *
 
-
 class PaintingMixin:
     def current_brush_settings(self, *, opacity: float | None = None) -> BrushSettings:
         advanced = getattr(self, "brush_advanced", {})
@@ -42,6 +41,7 @@ class PaintingMixin:
             self._initial_brush_dabs = self._brush_path.begin(point, pressure)
         self._active_brush_stroke = None
         self._source_retouch_stroke = None
+        self._spot_last_point = None
         if kind == "pixels" and tool in {"blur_tool", "sharpen_tool", "dodge", "burn"}:
             mode = "blur" if tool == "blur_tool" else "sharpen" if tool == "sharpen_tool" else tool
             strength = float(self.exposure.get()) if tool in {"dodge", "burn"} else float(self.retouch_strength.get())
@@ -91,7 +91,6 @@ class PaintingMixin:
             self._retouch_stroke = None
         else:
             self._retouch_stroke = None
-
     def brush_local_rect(self, point: tuple[int, int]) -> tuple[int, int, int, int] | None:
         layer = self.doc.layer
         radius = int(self.brush_size.get())
@@ -106,7 +105,6 @@ class PaintingMixin:
             min(layer.pixels.shape[1], lx + radius + 1),
             min(layer.pixels.shape[0], ly + radius + 1),
         )
-
     def capture_stroke_before(self, rect: tuple[int, int, int, int] | None) -> None:
         if rect is None:
             return
@@ -176,6 +174,7 @@ class PaintingMixin:
         self._active_brush_stroke = None
         self._source_retouch_stroke = None
         self._brush_path = None
+        self._spot_last_point = None
         if self._editor_active:
             self.refresh_layer_previews()
 
@@ -198,6 +197,22 @@ class PaintingMixin:
         self._move_last_bounds = None
         self._move_group_starts.clear()
         self._move_group_masks.clear()
+
+    def end_move_selection(self) -> None:
+        bounds = self._move_selection_bounds
+        dx, dy = self._move_selection_delta
+        self._move_selection_start = None
+        self._move_selection_bounds = None
+        self._move_selection_delta = (0, 0)
+        self.clear_drag_preview()
+        if bounds is None or (dx == 0 and dy == 0):
+            return
+        x1, y1, x2, y2 = bounds
+        self.run_document_command(
+            "Переместить выделенные пиксели",
+            lambda: self.doc.transform_selected_pixels(x1 + dx, y1 + dy, x2 - x1, y2 - y1),
+        )
+        self.refresh()
 
     def paint_at(self, point: tuple[int, int], pressure: float | TabletSample = 1.0) -> None:
         self.capture_stroke_before(self.brush_local_rect(point))
@@ -261,6 +276,8 @@ class PaintingMixin:
             )
         self.doc.dirty = True
         if changed is not None:
+            if tool == "spot_healing":
+                self._spot_last_point = point
             rect = self.local_to_document_rect(changed, self.doc.layer)
             self.request_canvas_refresh(rect, self.doc.layer, self._stroke_kind)
         elif tool in {"clone", "healing"}:
@@ -278,6 +295,10 @@ class PaintingMixin:
         changed_rect = None
         for dab in dabs:
             x, y = dab.x, dab.y
+            if tool == "spot_healing" and self._spot_last_point is not None:
+                minimum_step = max(2.0, radius * 0.75)
+                if (x - self._spot_last_point[0]) ** 2 + (y - self._spot_last_point[1]) ** 2 < minimum_step ** 2:
+                    continue
             self.capture_stroke_before(self.brush_local_rect((x, y)))
             changed = None
             if tool == "spot_healing":
@@ -311,6 +332,8 @@ class PaintingMixin:
                     tool == "eraser",
                     selection_mask,
                 )
+            if changed is not None and tool == "spot_healing":
+                self._spot_last_point = (x, y)
             changed_rect = union_rect(changed_rect, changed)
         self.doc.dirty = True
         if changed_rect is not None:
@@ -416,7 +439,7 @@ class PaintingMixin:
             start,
             end,
             shift=bool(state & 0x0001),
-            alt=bool(state & 0x0008),
+            alt=bool(self.shape_from_center.get()) != event_alt_down(state),
             sides=int(options["sides"]),
             inner_ratio=float(options["inner_ratio"]),
             custom_points=options["custom_points"],

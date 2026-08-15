@@ -265,21 +265,27 @@ def spot_heal(
     layer.pixels[y1:y2, x1:x2, :3] = np.clip(mixed, 0, 255).astype(np.uint8)
     return x1, y1, x2, y2
 
-def flood_fill(layer: Layer, x: int, y: int, color: tuple[int, int, int, int], tolerance: int, selection_mask: np.ndarray | None = None) -> None:
-    if layer.locked:
-        return
+def contiguous_color_region(layer: Layer, x: int, y: int, tolerance: int) -> np.ndarray | None:
     lx, ly = x - layer.x, y - layer.y
     if lx < 0 or ly < 0 or lx >= layer.pixels.shape[1] or ly >= layer.pixels.shape[0]:
-        return
-    img = layer.pixels.copy()
+        return None
+    img = layer.pixels
     seed = img[ly, lx].astype(np.int16)
     diff = np.abs(img.astype(np.int16) - seed).max(axis=2)
     mask = (diff <= tolerance).astype(np.uint8)
-    num, labels, stats, _ = cv2.connectedComponentsWithStats(mask, 4)
-    label = labels[ly, lx]
-    if label == 0 and mask[ly, lx] == 0:
+    if mask[ly, lx] == 0:
+        return None
+    cv2.floodFill(mask, None, (lx, ly), 2, flags=4)
+    return np.where(mask == 2, 255, 0).astype(np.uint8)
+
+
+def flood_fill(layer: Layer, x: int, y: int, color: tuple[int, int, int, int], tolerance: int, selection_mask: np.ndarray | None = None) -> None:
+    if layer.locked:
         return
-    region = labels == label
+    region_mask = contiguous_color_region(layer, x, y, tolerance)
+    if region_mask is None:
+        return
+    region = region_mask > 0
     if selection_mask is not None:
         coverage = (selection_mask.astype(np.float32) / 255.0) * region.astype(np.float32)
         target = layer.pixels.astype(np.float32)
