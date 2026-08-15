@@ -29,33 +29,7 @@ jobs:
 
       - name: Run tests
         shell: powershell
-        run: |
-          $coreOutput = python -m pytest -q tests/test_architecture.py tests/test_rendering.py tests/test_interactive_performance.py tests/test_tile_history.py tests/test_retouch.py tests/test_retouch_quality.py tests/test_brush_engine.py tests/test_source_retouch_phase2.py tests/test_advanced_retouch.py tests/test_color_pipeline.py tests/test_print_spot.py tests/test_large_documents.py tests/test_gpu_acceleration.py tests/test_actions_batch_queue.py tests/test_plugins_v2.py tests/test_selection_masks.py tests/test_selection_phase3.py tests/test_select_and_mask.py tests/test_automatic_selection.py tests/test_content_aware_fill.py tests/test_transform_workspace.py tests/test_smart_objects.py tests/test_non_destructive_pipeline.py tests/test_layers_phase6.py tests/test_shape_geometry.py tests/test_boolean_shapes.py tests/test_text_path.py tests/test_vector_phase4.py tests/test_tool_smoke.py tests/test_models_and_history.py tests/test_clone_workflow.py tests/test_gradient_engine.py tests/test_generative_api.py tests/test_generative_workflow.py tests/test_local_models.py tests/test_psd_compat.py tests/test_roadmap_features.py tests/test_tool_demos.py tests/test_shortcuts.py 2>&1
-          $coreExit = $LASTEXITCODE
-          $coreOutput | Write-Output
-          if ($coreExit -ne 0) {
-            $coreDetail = ($coreOutput -join "`n").Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
-            Write-Output "::error title=Ошибка основных тестов::$coreDetail"
-            "## Ошибка основных тестов" | Add-Content $env:GITHUB_STEP_SUMMARY
-            $coreOutput | Add-Content $env:GITHUB_STEP_SUMMARY
-            exit $coreExit
-          }
-
-          # Tcl/Tk on Windows does not reliably support repeated root teardown in one process.
-          $uiTests = python -m pytest --collect-only -q tests/test_startup.py tests/test_startup_brush.py tests/test_startup_retouch_phase2.py tests/test_startup_controls.py tests/test_startup_interactions.py tests/test_startup_performance.py tests/test_startup_generative.py tests/test_startup_psd.py tests/test_startup_print_spot.py tests/test_startup_vector_phase4.py tests/test_startup_layers_phase6.py tests/test_startup_phase8.py tests/test_tool_palette.py |
-            Where-Object { $_ -like 'tests/*::*' }
-          foreach ($test in $uiTests) {
-            $uiOutput = python -m pytest -q $test 2>&1
-            $uiExit = $LASTEXITCODE
-            $uiOutput | Write-Output
-            if ($uiExit -ne 0) {
-              $uiDetail = ($uiOutput -join "`n").Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
-              Write-Output "::error title=Ошибка UI-теста ${test}::$uiDetail"
-              "## Ошибка UI-теста: $test" | Add-Content $env:GITHUB_STEP_SUMMARY
-              $uiOutput | Add-Content $env:GITHUB_STEP_SUMMARY
-              exit $uiExit
-            }
-          }
+        run: .\run_tests.ps1 -Python python
 
       - name: Build executable
         shell: powershell

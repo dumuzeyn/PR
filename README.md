@@ -12,6 +12,7 @@ This repository starts with a real working editor and an architecture intended t
 - visual new-canvas dialog with screen, social, print and remembered custom presets; clipboard images become the first size preset and can be placed immediately
 - centered medium-size startup window, maximized editor, automatic canvas centering and center-preserving zoom
 - smooth cached brush strokes, eraser, fill, gradient, editable paragraph/path text layers, crop, rectangular/elliptical/freehand/magnetic/polygon selection, persistent add/subtract/intersect modes, quick selection brush with live result-mask, cursor and image-aware edge refinement, magic wand, color range, move
+- professional gradients with sRGB, Linear RGB and OKLab interpolation, ordered dithering anchored to document coordinates, deterministic noise gradients and editable color/opacity stops
 - layer opacity, visibility, duplication, merge, flatten
 - layer locks, raster layer masks, mask thumbnails, thumbnail-click mask channel editing, red-overlay/black-white mask preview, linked/unlinked mask movement, mask painting, density/feather controls, live edge refinement with smart image-aware correction and blend modes
 - clipping masks, adjustment-layer clipping and basic layer styles: stroke, drop shadow and outer glow
@@ -73,6 +74,16 @@ Public facade modules remain stable while editor, document and rendering behavio
 ```
 
 The executable will be created in `dist\PhotoRedactor.exe`.
+
+## Run tests
+
+```powershell
+.\run_tests.ps1
+```
+
+The script discovers every `tests/test_*.py` file automatically. Logic tests run together; every Tk interface test runs in a separate Python process on Windows to prevent Tcl/Tk state from leaking between scenarios. Visual regression covers 35 stored golden scenes, and 18 real-image fixtures validate selection and retouch quality with SSIM, MAE, IoU, precision, recall and boundary F1 metrics.
+
+Intentional golden updates use `python benchmarks\update_goldens.py`; real-image fixture updates use `python benchmarks\update_quality_fixtures.py`. Review changed PNG files before committing them.
 
 ## Performance diagnostics
 
