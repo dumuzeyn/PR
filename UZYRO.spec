@@ -4,8 +4,8 @@
 a = Analysis(
     ['uzyro_launcher.py'],
     pathex=[],
-    binaries=[],
-    datas=[('uzyro/assets/tool_demos', 'uzyro/assets/tool_demos'), ('uzyro/assets/branding', 'uzyro/assets/branding')],
+    binaries=[('uzyro/assets/native/fribidi-0.dll', '.')],
+    datas=[('uzyro/assets/native/LICENSE.fribidi.txt', 'licenses'), ('uzyro/assets/tool_demos', 'uzyro/assets/tool_demos'), ('uzyro/assets/branding', 'uzyro/assets/branding')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

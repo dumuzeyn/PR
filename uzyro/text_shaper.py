@@ -1,10 +1,30 @@
 from __future__ import annotations
 
+import ctypes
+import os
+import sys
 import unicodedata
 from abc import ABC, abstractmethod
 from collections import OrderedDict
 from dataclasses import dataclass, replace
 from pathlib import Path
+
+
+def _load_bundled_fribidi() -> object | None:
+    if os.name != "nt":
+        return None
+    roots = [Path(__file__).resolve().parent / "assets" / "native"]
+    bundled = getattr(sys, "_MEIPASS", None)
+    if bundled:
+        roots.insert(0, Path(bundled))
+    for root in roots:
+        library = root / "fribidi-0.dll"
+        if library.is_file():
+            return ctypes.WinDLL(str(library))
+    return None
+
+
+_FRIBIDI_HANDLE = _load_bundled_fribidi()
 
 from PIL import ImageDraw, ImageFont, features
 

@@ -1,10 +1,21 @@
 from __future__ import annotations
 
+import hashlib
+from pathlib import Path
+
 import numpy as np
 
 from uzyro.core import Document
 from uzyro.text_layout import TextLayoutEngine
 from uzyro.text_shaper import DEFAULT_TEXT_SHAPER, FontResolver, TextStyle, grapheme_clusters, text_direction
+
+
+def test_bundled_fribidi_runtime_is_present_and_verified() -> None:
+    library = Path(__file__).parents[1] / "uzyro" / "assets" / "native" / "fribidi-0.dll"
+    assert library.is_file()
+    assert hashlib.sha256(library.read_bytes()).hexdigest() == (
+        "463c7479d434a8681a9dbde16d0675e28d09d38fa43e3e18d826e345584ba18d"
+    )
 
 
 def alpha_bounds(pixels: np.ndarray) -> tuple[int, int, int, int]:
