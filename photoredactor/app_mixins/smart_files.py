@@ -248,16 +248,16 @@ class SmartFilesMixin:
             self.run_background("Export image", worker)
 
     def pick_foreground(self) -> None:
-        color = colorchooser.askcolor(color=self.color_hex(self.foreground), title="Основной цвет")[0]
-        if color:
-            self.foreground = tuple(map(int, color)) + (255,)
+        color = self.color_picker_dialog(self.foreground, "Основной цвет")
+        if color is not None:
+            self.foreground = color
             self.refresh_color_control()
             self.text_properties_changed()
 
     def pick_background(self) -> None:
-        color = colorchooser.askcolor(color=self.color_hex(self.background), title="Дополнительный цвет")[0]
-        if color:
-            self.background = tuple(map(int, color)) + (255,)
+        color = self.color_picker_dialog(self.background, "Дополнительный цвет")
+        if color is not None:
+            self.background = color
             self.refresh_color_control()
 
     def pick_color_from_document(self, point: tuple[int, int]) -> None:
@@ -406,7 +406,7 @@ class SmartFilesMixin:
                 f"Кисть: {report['brush_dab_ms']:.1f} мс на штрих\n"
                 f"Градиент: {report['gradient_preview_ms']:.1f} мс\n"
                 f"Трансформация: {report['transform_preview_ms']:.1f} мс\n"
-                f"Изменение среди 30 слоёв: {report['many_layers_tile_ms']:.1f} мс\n\n{state}"
+                f"Изменение среди 60 слоёв: {report['many_layers_tile_ms']:.1f} мс\n\n{state}"
             ))
             run_button.configure(state=tk.NORMAL)
 

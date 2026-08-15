@@ -291,6 +291,7 @@ class MenusToolsMixin:
     def _build_tools(self, parent: ttk.Frame) -> None:
         parent.configure(width=188)
         parent.pack_propagate(False)
+        self._build_color_control(parent)
         self.tool_palette = ToolPalette(
             parent,
             definitions=TOOL_DEFINITIONS,

@@ -3,6 +3,7 @@ from pathlib import Path
 
 import numpy as np
 
+from photoredactor.brush_engine import BrushSettings, PixelBrushStroke
 from photoredactor.core import Document
 from photoredactor.history import History, LayerFieldsCommand, LayerVisibilityCommand, MaskTilePatchCommand, PixelTilePatchCommand, TilePatch
 
@@ -53,6 +54,29 @@ def test_sparse_tile_history_uses_less_memory_than_bounding_rectangle() -> None:
 
     full_bounding_snapshot_bytes = 1024 * 1024 * 4 * 2
     assert command.memory_bytes < full_bounding_snapshot_bytes // 100
+
+
+def test_one_hundred_brush_strokes_keep_history_memory_bounded() -> None:
+    document = Document.new(640, 512, (0, 0, 0, 0))
+    layer = document.layer
+    history = History(memory_limit_bytes=32 * 1024 * 1024)
+    settings = BrushSettings(radius=10, hardness=0.7, opacity=1.0, flow=1.0)
+    for index in range(100):
+        color = (230, 55, 35, 255) if index % 2 else (30, 120, 225, 255)
+        stroke = PixelBrushStroke(layer, settings, color)
+        x = 64 + (index % 5) * 128
+        y = 64 + ((index // 5) % 4) * 128
+        stroke.dab(x, y)
+        patches = [
+            TilePatch(rect, before, layer.pixels[rect[1]:rect[3], rect[0]:rect[2]].copy())
+            for rect, before in stroke.before_tiles.values()
+        ]
+        history.push(PixelTilePatchCommand("Мазок", layer.id, patches))
+
+    full_snapshots = 100 * layer.pixels.nbytes * 2
+    assert len(history.undo_stack) == 100
+    assert history.memory_bytes < 16 * 1024 * 1024
+    assert history.memory_bytes < full_snapshots // 10
 
 
 def test_layer_fields_command_restores_only_changed_values() -> None:

@@ -58,7 +58,7 @@ def benchmark_interactive_paths() -> dict[str, float | bool]:
             f"Слой {index + 1}",
             np.full((600, 800, 4), (20 + index * 3, 80 + index * 2, 160, 18), dtype=np.uint8),
         )
-        for index in range(30)
+        for index in range(60)
     ]
     document.active_layer = len(document.layers) - 1
     engine = RenderEngine(tile_size=128)

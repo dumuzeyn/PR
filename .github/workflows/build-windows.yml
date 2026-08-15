@@ -42,7 +42,7 @@ jobs:
           }
 
           # Tcl/Tk on Windows does not reliably support repeated root teardown in one process.
-          $uiTests = python -m pytest --collect-only -q tests/test_startup.py tests/test_startup_brush.py tests/test_startup_retouch_phase2.py tests/test_startup_controls.py tests/test_startup_interactions.py tests/test_startup_performance.py tests/test_startup_generative.py tests/test_startup_psd.py tests/test_startup_print_spot.py tests/test_startup_vector_phase4.py tests/test_startup_layers_phase6.py tests/test_tool_palette.py |
+          $uiTests = python -m pytest --collect-only -q tests/test_startup.py tests/test_startup_brush.py tests/test_startup_retouch_phase2.py tests/test_startup_controls.py tests/test_startup_interactions.py tests/test_startup_performance.py tests/test_startup_generative.py tests/test_startup_psd.py tests/test_startup_print_spot.py tests/test_startup_vector_phase4.py tests/test_startup_layers_phase6.py tests/test_startup_phase8.py tests/test_tool_palette.py |
             Where-Object { $_ -like 'tests/*::*' }
           foreach ($test in $uiTests) {
             $uiOutput = python -m pytest -q $test 2>&1

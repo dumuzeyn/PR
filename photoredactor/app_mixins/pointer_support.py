@@ -36,7 +36,12 @@ class PointerSupportMixin:
         point = self.canvas_to_doc(event)
         if hasattr(self, "status_coords"):
             self.status_coords.configure(text=f"{point[0]}, {point[1]}")
-        if self.tool.get() == "move" and not self._panning:
+        tool = self.tool.get()
+        if tool in {"clone", "healing"} and not self._panning and getattr(event, "state", 0) & 0x0008:
+            self.canvas.configure(cursor="target")
+        elif tool in {"clone", "healing"} and not self._panning:
+            self.canvas.configure(cursor="crosshair")
+        elif tool == "move" and not self._panning:
             if self._move_layer_id is not None:
                 self.canvas.configure(cursor="fleur")
             else:
@@ -236,7 +241,9 @@ class PointerSupportMixin:
         mode = self.selection_mode_from_event(event) if tool == "quick_selection" else "replace"
         color_by_mode = {"replace": "#50e3ff", "add": "#59f28a", "subtract": "#ff6262", "intersect": "#ffd166"}
         label_by_mode = {"replace": "new", "add": "+", "subtract": "-", "intersect": "x"}
-        outline = color_by_mode.get(mode, "#50e3ff")
+        choosing_source = tool in {"clone", "healing"} and getattr(event, "state", 0) & 0x0008
+        outline = "#ffb000" if choosing_source else color_by_mode.get(mode, "#50e3ff")
+        label = "Источник" if choosing_source else label_by_mode.get(mode, "")
         coords = [cx - radius, cy - radius, cx + radius, cy + radius]
         hardness_radius = max(1.0, radius * float(np.clip(self.hardness.get(), 0.0, 1.0)))
         hardness_coords = [cx - hardness_radius, cy - hardness_radius, cx + hardness_radius, cy + hardness_radius]
@@ -246,7 +253,7 @@ class PointerSupportMixin:
             hardness_id = self.canvas.create_oval(*hardness_coords, outline=outline, dash=(2, 3), width=1)
             cross_h = self.canvas.create_line(cx - 6, cy, cx + 6, cy, fill=outline, width=1)
             cross_v = self.canvas.create_line(cx, cy - 6, cx, cy + 6, fill=outline, width=1)
-            text_id = self.canvas.create_text(cx, cy + radius + 12, text=label_by_mode.get(mode, ""), fill=outline, font=("Segoe UI", 9, "bold"))
+            text_id = self.canvas.create_text(cx, cy + radius + 12, text=label, fill=outline, font=("Segoe UI", 9, "bold"))
             self._brush_preview_ids = [fill_id, ring_id, hardness_id, cross_h, cross_v, text_id]
         else:
             fill_id, ring_id, hardness_id, cross_h, cross_v, text_id = self._brush_preview_ids
@@ -262,7 +269,7 @@ class PointerSupportMixin:
         self.canvas.itemconfigure(hardness_id, outline=outline, state=tk.NORMAL if tool in self.brush_preview_tools() else tk.HIDDEN)
         self.canvas.itemconfigure(cross_h, fill=outline)
         self.canvas.itemconfigure(cross_v, fill=outline)
-        self.canvas.itemconfigure(text_id, text=label_by_mode.get(mode, ""), fill=outline, state=tk.NORMAL if tool == "quick_selection" else tk.HIDDEN)
+        self.canvas.itemconfigure(text_id, text=label, fill=outline, state=tk.NORMAL if tool == "quick_selection" or choosing_source else tk.HIDDEN)
         for item_id in self._brush_preview_ids:
             self.canvas.tag_raise(item_id)
         self.update_clone_overlay(point)

@@ -193,7 +193,13 @@ class ShortcutsMixin:
         if context == "layers":
             self.delete_layer()
         elif context == "canvas":
-            if not self.delete_selected_anchors():
+            if self.delete_selected_anchors():
+                pass
+            elif self.doc.selection_mask is not None and self.doc.layer.kind == "raster":
+                self.delete_selected_pixels()
+            elif self.doc.layer.kind in {"shape", "text"} and self.doc.layer.id in self.selected_layer_ids:
+                self.delete_layer()
+            else:
                 self.delete_selected_pixels()
         return "break"
 

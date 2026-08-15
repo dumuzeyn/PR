@@ -75,10 +75,13 @@ class StartupTests(unittest.TestCase):
         self.assertLessEqual(preview.height(), self.app.canvas.winfo_height() + 8)
         self.app.clear_gradient_preview()
 
-    def test_colors_live_only_in_contextual_toolbar(self) -> None:
+    def test_colors_are_persistent_and_contextual_controls_stay_compact(self) -> None:
+        self.app.show_editor()
         self.app.tool.set("gradient")
         self.app.update()
-        self.assertFalse(hasattr(self.app, "color_control_canvas"))
+        self.assertTrue(self.app.color_control_canvas.winfo_ismapped())
+        self.assertTrue(self.app.color_control_canvas.find_withtag("foreground"))
+        self.assertTrue(self.app.color_control_canvas.find_withtag("background"))
         primary = self.app.tool_options_panel.body.winfo_children()[0]
         canvases = [child for child in primary.winfo_children() if isinstance(child, tk.Canvas)]
         self.assertEqual(len(canvases), 1)

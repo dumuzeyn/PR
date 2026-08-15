@@ -81,3 +81,11 @@ def test_black_white_adjustment_has_editable_channel_mix() -> None:
 def test_noise_filter_is_deterministic() -> None:
     source = styled_source()
     assert np.array_equal(deterministic_noise(source, 0.15), deterministic_noise(source, 0.15))
+
+
+def test_disabled_layer_effects_leave_pixels_unchanged() -> None:
+    source = styled_source()
+    layer = Layer("Style", source.copy(), effects={kind: {"enabled": False} for kind in EFFECT_ORDER})
+    underlays, styled = LayerEffectsStack.render(layer, layer.pixels)
+    assert underlays == []
+    assert np.array_equal(styled, source)

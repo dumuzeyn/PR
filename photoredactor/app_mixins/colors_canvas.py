@@ -7,7 +7,7 @@ class ColorsCanvasMixin:
     def _build_color_control(self, parent: ttk.Frame) -> None:
         frame = ttk.Frame(parent)
         frame.pack(fill=tk.X, padx=5, pady=(3, 7))
-        self.color_control_canvas = tk.Canvas(frame, width=46, height=40, highlightthickness=0, background=TOKENS.SURFACE)
+        self.color_control_canvas = tk.Canvas(frame, width=58, height=44, highlightthickness=0, background=TOKENS.SURFACE)
         self.color_control_canvas.pack(anchor=tk.CENTER)
         self.color_control_canvas.bind("<Button-1>", self.color_control_click)
         ToolTip(self.color_control_canvas, "Основной и дополнительный цвета\nX - поменять местами, D - сбросить")
@@ -22,9 +22,16 @@ class ColorsCanvasMixin:
         canvas.delete("all")
         canvas.create_rectangle(19, 14, 43, 37, fill=self.color_hex(self.background), outline=TOKENS.BORDER, width=1, tags="background")
         canvas.create_rectangle(3, 2, 27, 25, fill=self.color_hex(self.foreground), outline=TOKENS.TEXT_SECONDARY, width=1, tags="foreground")
+        canvas.create_text(49, 7, text="⇄", fill=TOKENS.TEXT_SECONDARY, font=("Segoe UI Symbol", 10), tags="swap")
+        canvas.create_rectangle(3, 32, 11, 40, fill="#000000", outline=TOKENS.TEXT_SECONDARY, width=1, tags="reset")
+        canvas.create_rectangle(9, 28, 17, 36, fill="#ffffff", outline=TOKENS.TEXT_SECONDARY, width=1, tags="reset")
 
     def color_control_click(self, event) -> None:
-        if event.x >= 19 and event.y >= 14:
+        if event.x >= 39 and event.y <= 15:
+            self.swap_colors()
+        elif event.x <= 18 and event.y >= 27:
+            self.reset_colors()
+        elif event.x >= 19 and event.y >= 14:
             self.pick_background()
         else:
             self.pick_foreground()

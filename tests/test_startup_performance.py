@@ -32,7 +32,7 @@ class StartupPerformanceTests(unittest.TestCase):
             self.app.update()
             text = str(self.app._interactive_performance_result.cget("text"))
             self.assertIn("Целевые задержки соблюдены", text)
-            self.assertIn("30 слоёв", text)
+            self.assertIn("60 слоёв", text)
         finally:
             self.app.run_background = original
             self.app._interactive_performance_dialog.destroy()
