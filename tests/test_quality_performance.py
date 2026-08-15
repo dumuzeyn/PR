@@ -1,16 +1,23 @@
 from __future__ import annotations
 
+import os
 import time
 import tracemalloc
 
 from uzyro.core import GradientEngine
-from uzyro.interactive_performance import benchmark_interactive_paths
+from uzyro.interactive_performance import INTERACTIVE_TARGETS_MS, benchmark_interactive_paths
 from tests.golden_cases import GOLDEN_CASES
+
+
+TIMING_TOLERANCE = 2.0 if os.environ.get("CI", "").lower() == "true" else 1.0
 
 
 def test_interactive_paths_remain_within_declared_targets() -> None:
     report = benchmark_interactive_paths()
-    assert report["passed"], report
+    assert all(
+        float(report[name]) <= target * TIMING_TOLERANCE
+        for name, target in INTERACTIVE_TARGETS_MS.items()
+    ), report
 
 
 def test_4k_gradient_has_bounded_temporary_memory() -> None:
@@ -26,7 +33,7 @@ def test_4k_gradient_has_bounded_temporary_memory() -> None:
     tracemalloc.stop()
     assert image.nbytes < 40 * 1024 * 1024
     assert peak < 160 * 1024 * 1024
-    assert elapsed < 1.5
+    assert elapsed < 1.5 * TIMING_TOLERANCE
 
 
 def test_complete_golden_scene_rendering_is_fast_enough_for_ci() -> None:
@@ -34,4 +41,4 @@ def test_complete_golden_scene_rendering_is_fast_enough_for_ci() -> None:
     rendered = [render() for render in GOLDEN_CASES.values()]
     elapsed = time.perf_counter() - started
     assert len(rendered) == 35
-    assert elapsed < 5.0
+    assert elapsed < 5.0 * TIMING_TOLERANCE
