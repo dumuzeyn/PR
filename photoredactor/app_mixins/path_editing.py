@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from ..app_shared import *
 from ..shape_ops import editable_bezier_nodes, editable_bezier_path_points
+from ..vector_geometry import nearest_cubic_parameter, split_cubic_bezier
 
 
 PATH_TOOLS = {"path_select", "direct_select", "add_anchor", "delete_anchor", "convert_anchor"}
@@ -156,22 +157,26 @@ class PathEditingMixin:
         local = self.snap_path_point((point[0] - layer.x, point[1] - layer.y))
         nearest_segment = 0
         nearest_distance = float("inf")
+        nearest_amount = 0.5
         for index in range(len(nodes) - 1):
-            probe = {"box": layer.shape_data.get("box"), "path_nodes": nodes[index:index + 2]}
-            for px, py in editable_bezier_path_points(probe, samples=36):
-                distance = math.hypot(local[0] - px, local[1] - py)
-                if distance < nearest_distance:
-                    nearest_segment, nearest_distance = index, distance
-        previous = nodes[nearest_segment]["anchor"]
-        following = nodes[nearest_segment + 1]["anchor"]
-        tangent = (float(following[0]) - float(previous[0]), float(following[1]) - float(previous[1]))
-        length = max(1.0, math.hypot(*tangent))
-        handle = min(40.0, length / 6.0)
-        unit = (tangent[0] / length, tangent[1] / length)
+            first, second = nodes[index], nodes[index + 1]
+            control = [first["anchor"], first.get("out", first["anchor"]), second.get("in", second["anchor"]), second["anchor"]]
+            amount, distance = nearest_cubic_parameter(control, local)
+            if distance < nearest_distance:
+                nearest_segment, nearest_amount, nearest_distance = index, amount, distance
+        tolerance = max(5.0, 9.0 / max(0.01, float(self.zoom.get())))
+        if nearest_distance > tolerance:
+            self.status_text("Кликните ближе к участку контура")
+            return
+        previous, following = nodes[nearest_segment], nodes[nearest_segment + 1]
+        control = [previous["anchor"], previous.get("out", previous["anchor"]), following.get("in", following["anchor"]), following["anchor"]]
+        left, right = split_cubic_bezier(control, nearest_amount)
+        previous["out"] = list(left[1])
+        following["in"] = list(right[2])
         node = {
-            "anchor": local,
-            "in": [local[0] - unit[0] * handle, local[1] - unit[1] * handle],
-            "out": [local[0] + unit[0] * handle, local[1] + unit[1] * handle],
+            "anchor": list(left[3]),
+            "in": list(left[2]),
+            "out": list(right[1]),
             "linked": True,
         }
         nodes.insert(nearest_segment + 1, node)

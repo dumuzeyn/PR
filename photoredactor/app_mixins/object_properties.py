@@ -68,6 +68,16 @@ class ObjectPropertiesMixin:
             ttk.Label(panel, text="Внешний вид", style="PanelTitle.TLabel").pack(anchor=tk.W, padx=10, pady=(7, 3))
             numeric_row("Толщина обводки", int(layer.shape_data.get("stroke_width", 0)), lambda value: self.set_shape_property("stroke_width", int(value)), 0, 100)
             combo_row("Обводка", str(layer.shape_data.get("stroke_alignment", "center")), ["inside", "center", "outside"], lambda value: self.set_shape_property("stroke_alignment", value))
+            combo_row("Концы линии", str(layer.shape_data.get("stroke_cap", "round")), ["butt", "round", "square"], lambda value: self.set_shape_property("stroke_cap", value))
+            combo_row("Соединения", str(layer.shape_data.get("stroke_join", "round")), ["miter", "round", "bevel"], lambda value: self.set_shape_property("stroke_join", value))
+            numeric_row("Предел острого угла", float(layer.shape_data.get("miter_limit", 4.0)), lambda value: self.set_shape_property("miter_limit", float(value)), 1.0, 20.0, 0.5)
+            dash_patterns = {
+                "Сплошная": [], "Точки": [2.0, 2.0], "Штрихи": [8.0, 4.0],
+                "Штрих-точка": [8.0, 3.0, 2.0, 3.0],
+            }
+            current_dash = next((name for name, pattern in dash_patterns.items() if pattern == layer.shape_data.get("dash_pattern", [])), "Сплошная")
+            combo_row("Штриховка", current_dash, list(dash_patterns), lambda value: self.set_shape_property("dash_pattern", dash_patterns[value]))
+            numeric_row("Смещение штрихов", float(layer.shape_data.get("dash_offset", 0.0)), lambda value: self.set_shape_property("dash_offset", float(value)), -1000.0, 1000.0, 1.0)
             numeric_row("Непрозрачность", float(layer.shape_data.get("opacity", 1.0)), lambda value: self.set_shape_property("opacity", float(value)), 0.0, 1.0, 0.05)
             kind = str(layer.shape_data.get("shape", "rectangle"))
             if kind in {"polygon", "star"}:

@@ -179,6 +179,8 @@ class PointerSupportMixin:
         self.doc.dirty = True
         self.update_object_bounds()
         now = time.perf_counter()
+        if layer.pixels.shape[0] * layer.pixels.shape[1] > 2_000_000:
+            return
         if now - self._last_object_resize_render >= 1 / 30:
             old_bounds = self._object_resize_rendered_bounds or document_box
             render_shape_layer(layer)

@@ -6,6 +6,8 @@ from .geometry_ops import *
 from .selection_ops import *
 from .render_ops import *
 from .text_ops import *
+from .vector_geometry import adaptive_bezier_path, rotate_points
+from .vector_rasterizer import aligned_stroke_mask, closed_shape_mask, stroke_polyline_mask
 
 
 def render_shape_layer(layer: Layer) -> None:
@@ -58,8 +60,8 @@ def render_shape_layer(layer: Layer) -> None:
         stroke_width = max(0, int(data.get("stroke_width", 0)))
         if stroke is not None and stroke_width > 0:
             stroke_color = np.array(stroke, dtype=np.uint8)
-            edge = shape_stroke_edge(mask, stroke_width, str(data.get("stroke_alignment", "center")))
-            pixels[edge] = stroke_color
+            edge = shape_stroke_mask(mask, stroke_width, str(data.get("stroke_alignment", "center")))
+            _paint_solid(pixels, edge, stroke_color)
         layer.pixels[y1:y2, x1:x2] = pixels
         apply_shape_postprocess(layer)
         return
@@ -91,56 +93,71 @@ def render_shape_layer(layer: Layer) -> None:
         stroke_width = max(0, int(data.get("stroke_width", 0)))
         if stroke is not None and stroke_width > 0:
             stroke_color = np.array(stroke, dtype=np.uint8)
-            edge = shape_stroke_edge(mask, stroke_width, str(data.get("stroke_alignment", "center")))
-            pixels[edge] = stroke_color
+            edge = shape_stroke_mask(mask, stroke_width, str(data.get("stroke_alignment", "center")))
+            _paint_solid(pixels, edge, stroke_color)
         layer.pixels[y1:y2, x1:x2] = pixels
         apply_shape_postprocess(layer)
         return
-    pil = rgba_array_to_pil(layer.pixels)
-    draw = ImageDraw.Draw(pil)
-    box = tuple(int(v) for v in data.get("box", [0, 0, 1, 1]))
+    box = tuple(float(v) for v in data.get("box", [0, 0, 1, 1]))
     fill = tuple(int(v) for v in data.get("fill", [255, 255, 255, 255]))
     stroke = data.get("stroke")
     outline = None if stroke is None else tuple(int(v) for v in stroke)
     stroke_width = max(0, int(data.get("stroke_width", 0)))
     shape = str(data.get("shape", "rectangle")).lower()
-    if shape == "ellipse":
-        draw.ellipse(box, fill=fill)
-    elif shape == "line":
-        draw.line((box[0], box[1], box[2], box[3]), fill=outline or fill, width=max(1, stroke_width or 1))
-    elif shape == "bezier":
-        points = editable_bezier_path_points(data, box)
-        draw.line(points, fill=outline or fill, width=max(1, stroke_width or 2), joint="curve")
-    elif shape == "polygon":
-        points = regular_polygon_points(box, max(3, int(data.get("sides", 5))))
-        draw.polygon(points, fill=fill)
-    elif shape == "star":
-        points = star_points(box, max(3, int(data.get("sides", 5))), float(data.get("inner_ratio", 0.5)))
-        draw.polygon(points, fill=fill)
-    elif shape == "custom":
-        points = custom_shape_points(data.get("custom_points"), box)
-        draw.polygon(points, fill=fill)
+    angle = float(data.get("rotation", 0.0))
+    if shape in {"line", "bezier"}:
+        points = [box[:2], box[2:4]] if shape == "line" else editable_bezier_path_points(data, tolerance=0.2)
+        center = ((box[0] + box[2]) * 0.5, (box[1] + box[3]) * 0.5)
+        mask = stroke_polyline_mask(
+            layer.pixels.shape[:2], rotate_points(points, center, angle),
+            max(1, stroke_width or (2 if shape == "bezier" else 1)),
+            str(data.get("stroke_cap", "round")), str(data.get("stroke_join", "round")),
+            float(data.get("miter_limit", 4.0)), data.get("dash_pattern"), float(data.get("dash_offset", 0.0)),
+        )
+        _paint_solid(layer.pixels, mask, outline or fill)
     else:
-        radius = max(0, int(data.get("corner_radius", 0)))
-        draw.rounded_rectangle(box, radius=radius, fill=fill)
-    layer.pixels = pil_to_rgba_array(pil)
-    if shape not in {"line", "bezier"} and outline is not None and stroke_width > 0:
-        mask = shape_data_to_mask(data, layer.pixels.shape[:2], apply_rotation=False)
-        layer.pixels[shape_stroke_edge(mask, stroke_width, str(data.get("stroke_alignment", "center")))] = np.array(outline, dtype=np.uint8)
-    apply_shape_postprocess(layer)
+        points = None
+        if shape == "polygon":
+            points = regular_polygon_points(box, max(3, int(data.get("sides", 5))))
+        elif shape == "star":
+            points = star_points(box, max(3, int(data.get("sides", 5))), float(data.get("inner_ratio", 0.5)))
+        elif shape == "custom":
+            points = custom_shape_points(data.get("custom_points"), box)
+        mask = closed_shape_mask(layer.pixels.shape[:2], shape, box, points, float(data.get("corner_radius", 0)), angle)
+        _paint_solid(layer.pixels, mask, fill)
+        if outline is not None and stroke_width > 0:
+            _paint_solid(layer.pixels, shape_stroke_mask(mask, stroke_width, str(data.get("stroke_alignment", "center"))), outline)
+    apply_shape_postprocess(layer, rotation_applied=True)
+
+
+def _paint_solid(pixels: np.ndarray, mask: np.ndarray, color: np.ndarray | tuple[int, ...]) -> None:
+    bounds = cv2.boundingRect(mask)
+    if bounds[2] <= 0 or bounds[3] <= 0:
+        return
+    x, y, width, height = bounds
+    target = pixels[y:y + height, x:x + width]
+    local_mask = mask[y:y + height, x:x + width]
+    rgba = np.asarray(color, dtype=np.float32)
+    source_alpha = local_mask.astype(np.float32) / 255.0 * (rgba[3] / 255.0)
+    if not np.any(source_alpha > 0):
+        return
+    destination_alpha = target[:, :, 3].astype(np.float32) / 255.0
+    output_alpha = source_alpha + destination_alpha * (1.0 - source_alpha)
+    numerator = rgba[:3][None, None, :] * source_alpha[:, :, None]
+    numerator += target[:, :, :3].astype(np.float32) * destination_alpha[:, :, None] * (1.0 - source_alpha[:, :, None])
+    target[:, :, :3] = np.where(
+        output_alpha[:, :, None] > 1e-8,
+        numerator / np.maximum(output_alpha[:, :, None], 1e-8),
+        0,
+    ).astype(np.uint8)
+    target[:, :, 3] = np.rint(output_alpha * 255.0).astype(np.uint8)
 
 def shape_stroke_edge(mask: np.ndarray, width: int, alignment: str = "center") -> np.ndarray:
-    width = max(1, int(width))
-    normalized = str(alignment).lower()
-    if normalized in {"inside", "внутри"}:
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (width * 2 + 1, width * 2 + 1))
-        return (mask > 0) & (cv2.erode(mask, kernel) == 0)
-    if normalized in {"outside", "снаружи"}:
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (width * 2 + 1, width * 2 + 1))
-        return (cv2.dilate(mask, kernel) > 0) & (mask == 0)
-    half = max(1, round(width / 2))
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (half * 2 + 1, half * 2 + 1))
-    return (cv2.dilate(mask, kernel) > 0) & (cv2.erode(mask, kernel) == 0)
+    return shape_stroke_mask(mask, width, alignment) > 0
+
+
+def shape_stroke_mask(mask: np.ndarray, width: int, alignment: str = "center") -> np.ndarray:
+    return aligned_stroke_mask(mask, max(1, int(width)), alignment)
 
 def shape_gradient_vector(data: dict[str, Any], gradient: dict[str, Any]) -> tuple[tuple[float, float], tuple[float, float]]:
     if "angle" not in gradient and "scale" not in gradient:
@@ -168,22 +185,21 @@ def editable_bezier_nodes(data: dict[str, Any]) -> list[dict[str, Any]]:
         {"anchor": list(points[3]), "in": list(points[2]), "out": list(points[3]), "linked": True},
     ]
 
-def editable_bezier_path_points(data: dict[str, Any], box: tuple[int, int, int, int] | None = None, samples: int = 48) -> list[tuple[int, int]]:
+def editable_bezier_path_points(
+    data: dict[str, Any], box: tuple[int, int, int, int] | None = None,
+    samples: int | None = None, tolerance: float | None = None, zoom: float = 1.0,
+) -> list[tuple[float, float]]:
     nodes = editable_bezier_nodes(data)
-    output: list[tuple[int, int]] = []
-    for index in range(len(nodes) - 1):
-        first, second = nodes[index], nodes[index + 1]
-        control = [first["anchor"], first.get("out", first["anchor"]), second.get("in", second["anchor"]), second["anchor"]]
-        segment = bezier_curve_points(control, box or tuple(int(value) for value in data.get("box", [0, 0, 1, 1])), samples)
-        output.extend(segment if not output else segment[1:])
-    return output
+    screen_tolerance = max(0.05, float(tolerance if tolerance is not None else 0.35) / max(0.01, float(zoom)))
+    return adaptive_bezier_path(nodes, screen_tolerance, bool(data.get("path_closed", False)))
 
-def apply_shape_postprocess(layer: Layer) -> None:
+
+def apply_shape_postprocess(layer: Layer, rotation_applied: bool = False) -> None:
     data = layer.shape_data or {}
     opacity = float(np.clip(data.get("opacity", 1.0), 0.0, 1.0))
     if opacity < 1.0:
         layer.pixels[:, :, 3] = np.clip(layer.pixels[:, :, 3].astype(np.float32) * opacity, 0, 255).astype(np.uint8)
-    angle = float(data.get("rotation", 0.0))
+    angle = 0.0 if rotation_applied else float(data.get("rotation", 0.0))
     if abs(angle) <= 1e-6 or not np.any(layer.pixels[:, :, 3]):
         return
     box = normalized_box(tuple(int(round(value)) for value in data.get("box", [0, 0, 1, 1])))
@@ -213,6 +229,18 @@ def translated_shape_data(data: dict[str, Any], dx: int, dy: int) -> dict[str, A
         points = data.get("control_points")
         if isinstance(points, list):
             translated["control_points"] = [[float(point[0]) + dx, float(point[1]) + dy] for point in points]
+        path_nodes = data.get("path_nodes")
+        if isinstance(path_nodes, list):
+            translated["path_nodes"] = [
+                {
+                    **node,
+                    **{
+                        key: [float(node[key][0]) + dx, float(node[key][1]) + dy]
+                        for key in ("anchor", "in", "out") if isinstance(node.get(key), list)
+                    },
+                }
+                for node in path_nodes if isinstance(node, dict)
+            ]
         gradient = data.get("gradient")
         if isinstance(gradient, dict):
             for key in ("start", "end"):
@@ -240,13 +268,18 @@ def shape_data_bounds(data: dict[str, Any]) -> tuple[int, int, int, int] | None:
     try:
         box = normalized_box(tuple(int(round(value)) for value in data.get("box", [0, 0, 1, 1])))
         angle = math.radians(float(data.get("rotation", 0.0)))
-        if abs(angle) <= 1e-8:
-            return box
         cx, cy = (box[0] + box[2]) / 2.0, (box[1] + box[3]) / 2.0
         corners = np.array([[box[0], box[1]], [box[2], box[1]], [box[2], box[3]], [box[0], box[3]]], dtype=np.float64)
-        rotation = np.array([[math.cos(angle), -math.sin(angle)], [math.sin(angle), math.cos(angle)]])
-        rotated = (corners - (cx, cy)) @ rotation.T + (cx, cy)
-        return math.floor(rotated[:, 0].min()), math.floor(rotated[:, 1].min()), math.ceil(rotated[:, 0].max()), math.ceil(rotated[:, 1].max())
+        if abs(angle) <= 1e-8:
+            rotated = corners
+        else:
+            rotation = np.array([[math.cos(angle), -math.sin(angle)], [math.sin(angle), math.cos(angle)]])
+            rotated = (corners - (cx, cy)) @ rotation.T + (cx, cy)
+        margin = max(0.0, float(data.get("stroke_width", 0)) * (1.0 if str(data.get("stroke_alignment", "center")) == "outside" else 0.5))
+        return (
+            math.floor(rotated[:, 0].min() - margin), math.floor(rotated[:, 1].min() - margin),
+            math.ceil(rotated[:, 0].max() + margin), math.ceil(rotated[:, 1].max() + margin),
+        )
     except (TypeError, ValueError):
         return None
 
@@ -364,31 +397,25 @@ def boolean_shape_mask(data: dict[str, Any], shape: tuple[int, int]) -> np.ndarr
 def shape_data_to_mask(data: dict[str, Any], shape: tuple[int, int], apply_rotation: bool = True) -> np.ndarray:
     if str(data.get("shape", "rectangle")).lower() == "boolean":
         return boolean_shape_mask(data, shape)
-    pil = Image.new("L", (shape[1], shape[0]), 0)
-    draw = ImageDraw.Draw(pil)
-    box = tuple(int(v) for v in data.get("box", [0, 0, 1, 1]))
+    box = tuple(float(v) for v in data.get("box", [0, 0, 1, 1]))
     stroke_width = max(1, int(data.get("stroke_width", 1)))
     kind = str(data.get("shape", "rectangle")).lower()
-    if kind == "ellipse":
-        draw.ellipse(box, fill=255)
-    elif kind == "line":
-        draw.line((box[0], box[1], box[2], box[3]), fill=255, width=stroke_width)
-    elif kind == "bezier":
-        draw.line(editable_bezier_path_points(data, box), fill=255, width=max(1, stroke_width), joint="curve")
-    elif kind == "polygon":
-        draw.polygon(regular_polygon_points(box, max(3, int(data.get("sides", 5)))), fill=255)
-    elif kind == "star":
-        draw.polygon(star_points(box, max(3, int(data.get("sides", 5))), float(data.get("inner_ratio", 0.5))), fill=255)
-    elif kind == "custom":
-        draw.polygon(custom_shape_points(data.get("custom_points"), box), fill=255)
-    else:
-        draw.rounded_rectangle(box, radius=max(0, int(data.get("corner_radius", 0))), fill=255)
-    mask = np.array(pil, dtype=np.uint8)
     angle = float(data.get("rotation", 0.0)) if apply_rotation else 0.0
-    if abs(angle) > 1e-6:
-        center = ((box[0] + box[2]) / 2.0, (box[1] + box[3]) / 2.0)
-        matrix = cv2.getRotationMatrix2D(center, -angle, 1.0)
-        mask = cv2.warpAffine(mask, matrix, (shape[1], shape[0]), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
-    return mask
+    if kind in {"line", "bezier"}:
+        points = [box[:2], box[2:4]] if kind == "line" else editable_bezier_path_points(data, tolerance=0.2)
+        center = ((box[0] + box[2]) * 0.5, (box[1] + box[3]) * 0.5)
+        return stroke_polyline_mask(
+            shape, rotate_points(points, center, angle), stroke_width,
+            str(data.get("stroke_cap", "round")), str(data.get("stroke_join", "round")),
+            float(data.get("miter_limit", 4.0)), data.get("dash_pattern"), float(data.get("dash_offset", 0.0)),
+        )
+    points = None
+    if kind == "polygon":
+        points = regular_polygon_points(box, max(3, int(data.get("sides", 5))))
+    elif kind == "star":
+        points = star_points(box, max(3, int(data.get("sides", 5))), float(data.get("inner_ratio", 0.5)))
+    elif kind == "custom":
+        points = custom_shape_points(data.get("custom_points"), box)
+    return closed_shape_mask(shape, kind, box, points, float(data.get("corner_radius", 0)), angle)
 
 __all__ = [name for name in globals() if not name.startswith("__")]

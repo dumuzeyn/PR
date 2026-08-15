@@ -56,6 +56,10 @@ class VectorPhase4UITests(unittest.TestCase):
 
         layer = self.app.doc.add_shape_layer("bezier", (30, 40, 350, 220), (0, 0, 0, 0), (240, 240, 240, 255), 4)
         self.app.selected_layer_ids = {layer.id}
+        self.app.refresh_properties()
+        shape_labels = widget_texts(self.app.object_properties)
+        for expected in ("Концы линии", "Соединения", "Предел острого угла", "Штриховка", "Смещение штрихов"):
+            self.assertIn(expected, shape_labels)
         self.app.tool.set("direct_select")
         self.app.history.clear()
         nodes = self.app.ensure_editable_path(layer)
