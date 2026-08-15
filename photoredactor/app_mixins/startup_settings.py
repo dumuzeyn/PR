@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from ..app_shared import *
-from ..brush_config import default_brush_config, normalize_brush_config
+from ..brush_config import default_brush_config, is_test_polluted_brush_settings, normalize_brush_config
 
 
 class StartupSettingsMixin:
@@ -355,6 +355,10 @@ class StartupSettingsMixin:
                         if isinstance(name, str) and name.strip() and isinstance(values, dict):
                             self.brush_presets[name.strip()] = dict(values)
                 self.brush_advanced.update(normalize_brush_config(data.get("brush_advanced")))
+                if is_test_polluted_brush_settings(self.tool_settings.get("brush"), self.brush_advanced):
+                    self.tool_settings["brush"] = copy.deepcopy(TOOL_SETTINGS_DEFAULTS["brush"])
+                    self.brush_advanced.clear()
+                    self.brush_advanced.update(default_brush_config())
                 shape_settings = data.get("shape_settings", {})
                 if isinstance(shape_settings, dict):
                     self.shape_stroke_width.set(max(0, min(100, int(shape_settings.get("stroke_width", 2)))))

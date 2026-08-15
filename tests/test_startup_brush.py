@@ -46,6 +46,25 @@ class BrushStartupTests(unittest.TestCase):
         self.app.undo()
         np.testing.assert_array_equal(self.app.doc.layer.pixels, before)
 
+    def test_fresh_install_default_brush_makes_a_visible_mark(self) -> None:
+        self.assertEqual(self.app.brush_blend_mode.get(), "Normal")
+        self.assertAlmostEqual(self.app.opacity.get(), 1.0)
+        self.assertAlmostEqual(self.app.brush_flow.get(), 1.0)
+        self.assertFalse(self.app.pressure_opacity.get())
+        self.assertFalse(self.app.pressure_flow.get())
+        before = self.app.doc.layer.pixels.copy()
+
+        self.app.tool.set("brush")
+        center_x = self.app.canvas.winfo_width() // 2
+        center_y = self.app.canvas.winfo_height() // 2
+        self.app.pointer_down(SimpleNamespace(x=center_x - 30, y=center_y, state=0))
+        self.app.pointer_drag(SimpleNamespace(x=center_x + 30, y=center_y, state=0))
+        self.app.pointer_up(SimpleNamespace(x=center_x + 30, y=center_y, state=0))
+
+        self.assertFalse(np.array_equal(before, self.app.doc.layer.pixels))
+        self.assertTrue(np.any(self.app.doc.layer.pixels[:, :, :3] != 255))
+        self.assertEqual(len(self.app.history.undo_stack), 1)
+
     def test_brush_settings_remain_independent_between_tools(self) -> None:
         self.app.tool.set("brush")
         self.app.hardness.set(0.17)

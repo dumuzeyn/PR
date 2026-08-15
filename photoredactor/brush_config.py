@@ -54,4 +54,21 @@ def normalize_brush_config(value: object) -> dict[str, object]:
     return result
 
 
-__all__ = ["BRUSH_ADVANCED_DEFAULTS", "default_brush_config", "normalize_brush_config"]
+def is_test_polluted_brush_settings(basic: object, advanced: object) -> bool:
+    """Recognize the exact profile written by pre-isolation UI tests."""
+    if not isinstance(basic, dict) or not isinstance(advanced, dict):
+        return False
+    expected_basic = {
+        "hardness": 0.17, "opacity": 0.83, "flow": 0.3,
+        "spacing": 0.2, "blend_mode": "Overlay",
+    }
+    expected_advanced = {"angle": 37.0, "roundness": 0.42, "scatter": 1.25}
+    return all(basic.get(key) == value for key, value in expected_basic.items()) and all(
+        advanced.get(key) == value for key, value in expected_advanced.items()
+    )
+
+
+__all__ = [
+    "BRUSH_ADVANCED_DEFAULTS", "default_brush_config", "is_test_polluted_brush_settings",
+    "normalize_brush_config",
+]
