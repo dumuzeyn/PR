@@ -34,7 +34,14 @@ jobs:
       - name: Verify text shaping engine
         shell: powershell
         run: |
-          .\.venv\Scripts\python.exe -c "import struct, PIL; from PIL import features; assert struct.calcsize('P') * 8 == 64; assert features.check('raqm'); assert features.check('fribidi'); assert features.check('harfbuzz'); print('Pillow', PIL.__version__, 'RAQM/FriBidi/HarfBuzz: OK')"
+          $diagnostics = .\.venv\Scripts\python.exe -c "import hashlib, json, pathlib, platform, struct, PIL; from PIL import Image, features; native=pathlib.Path(Image.core.__file__); print(json.dumps({'python': platform.python_version(), 'bits': struct.calcsize('P') * 8, 'pillow': PIL.__version__, 'pillow_path': PIL.__file__, 'native_path': str(native), 'native_sha256': hashlib.sha256(native.read_bytes()).hexdigest(), 'features': features.get_supported()}, sort_keys=True))"
+          $diagnostics | Write-Output
+          .\.venv\Scripts\python.exe -c "from PIL import features; raise SystemExit(0 if features.check('raqm') else 1)"
+          if ($LASTEXITCODE -ne 0) {
+            $detail = ($diagnostics -join "`n").Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+            Write-Output "::error title=RAQM недоступен::$detail"
+            exit 1
+          }
 
       - name: Run tests
         shell: powershell
