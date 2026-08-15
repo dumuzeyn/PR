@@ -93,6 +93,10 @@ class PointerEventsMixin:
                 self.finish_text_edit()
             self.status_text("Клик создает строку текста, перетаскивание создает текстовый блок")
         elif tool == "move":
+            selection_handle = self.selection_transform_handle_at(point)
+            if selection_handle is not None:
+                self.begin_selection_transform(selection_handle, point)
+                return
             selection = self.doc.selection_mask
             if selection is not None and 0 <= point[0] < self.doc.width and 0 <= point[1] < self.doc.height and selection[point[1], point[0]] > 0:
                 self._move_selection_start = point
@@ -102,7 +106,7 @@ class PointerEventsMixin:
                 return
             handle = self.object_handle_at(point)
             if handle is not None:
-                self.begin_object_resize(handle)
+                self.begin_object_resize(handle, point)
                 return
             auto_select = str(self.auto_select.get())
             layer = self.select_object_at(point, add=bool(event.state & 0x0001)) if auto_select != "Выкл" else self.doc.layer
@@ -132,6 +136,7 @@ class PointerEventsMixin:
             for bounds in group_bounds:
                 if bounds is not None:
                     self._move_last_bounds = bounds if self._move_last_bounds is None else union_rect(self._move_last_bounds, bounds)
+            self.begin_layer_move_preview(point)
         elif tool == "polygon_lasso":
             self._polygon_points.append(point)
             self.draw_polygon_lasso()
@@ -156,6 +161,8 @@ class PointerEventsMixin:
         elif tool in ["brush", "eraser", "blur_tool", "sharpen_tool", "dodge", "burn", "clone", "healing", "spot_healing"]:
             self.paint_line(self.last_point or point, point, pointer_input(event))
             self.last_point = point
+        elif tool == "move" and getattr(self, "_selection_transform_handle", None) is not None:
+            self.update_selection_transform(point, event.state)
         elif tool == "move" and self._object_resize_handle is not None:
             self.resize_selected_object_live(point, event.state)
         elif tool == "move" and self._move_selection_start is not None:
@@ -168,30 +175,7 @@ class PointerEventsMixin:
                 coords = (*self.doc_to_canvas(x1 + dx, y1 + dy), *self.doc_to_canvas(x2 + dx, y2 + dy))
                 self.update_drag_preview_item("rectangle", coords, outline=TOKENS.ACCENT, dash=(5, 4), width=2)
         elif tool == "move" and self.drag_start:
-            dx, dy = point[0] - self.drag_start[0], point[1] - self.drag_start[1]
-            if dx or dy:
-                layer = self.doc.get_layer(self._move_layer_id or "")
-                if layer is not None:
-                    old_bounds = self._move_last_bounds or self.layer_render_bounds(layer)
-                    active = self.doc.active_layer
-                    for index, candidate in enumerate(self.doc.layers):
-                        if candidate.id not in self._move_group_starts:
-                            continue
-                        self.doc.active_layer = index
-                        self.doc.move_active_layer(dx, dy)
-                    self.doc.active_layer = active
-                    new_bounds = None
-                    for candidate in self.doc.layers:
-                        if candidate.id in self._move_group_starts:
-                            bounds = self.layer_render_bounds(candidate)
-                            if bounds is not None:
-                                new_bounds = bounds if new_bounds is None else union_rect(new_bounds, bounds)
-                    new_bounds = new_bounds or self.layer_render_bounds(layer)
-                    dirty = union_rect(old_bounds, new_bounds)
-                    self._move_last_bounds = new_bounds
-                    self.drag_start = point
-                    self.request_canvas_refresh(dirty, layer, "transform")
-                    self.update_object_bounds()
+            self.move_selected_layers_live(point)
         elif tool in ["select", "ellipse_select", "crop", "gradient", "text", "rect_shape", "ellipse_shape", "line_shape", "bezier_shape", "polygon_shape", "star_shape", "custom_shape"]:
             self.draw_selection(self.drag_start, point, event.state)
             if tool == "gradient" and self.drag_start:
@@ -229,11 +213,14 @@ class PointerEventsMixin:
             self._clone_anchor_source = None
             self._clone_sample_pixels = None
         elif tool == "move":
-            if self._object_resize_handle is not None:
+            if getattr(self, "_selection_transform_handle", None) is not None:
+                self.finish_selection_transform()
+            elif self._object_resize_handle is not None:
                 self.finish_object_resize()
             elif self._move_selection_start is not None:
                 self.end_move_selection()
             else:
+                self.finish_layer_move_preview()
                 self.end_move_layer()
         elif tool == "gradient" and self.drag_start:
             if self.gradient_mode.get() == "Объект":

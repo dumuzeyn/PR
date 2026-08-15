@@ -45,13 +45,14 @@ class PointerSupportMixin:
             if self._move_layer_id is not None:
                 self.canvas.configure(cursor="fleur")
             else:
-                handle = self.object_handle_at(point)
+                handle = self.selection_transform_handle_at(point) or self.object_handle_at(point)
                 cursor_by_handle = {
                     "nw": "size_nw_se", "se": "size_nw_se", "ne": "size_ne_sw", "sw": "size_ne_sw",
                     "n": "sb_v_double_arrow", "s": "sb_v_double_arrow", "e": "sb_h_double_arrow", "w": "sb_h_double_arrow",
+                    "rotate": "exchange",
                 }
                 if handle:
-                    self.canvas.configure(cursor=cursor_by_handle[handle])
+                    self.canvas.configure(cursor=cursor_by_handle.get(handle, "arrow"))
                 else:
                     hit = topmost_layer_at(self.doc, point, tolerance=max(2, round(5 / max(self.zoom.get(), 0.01))))
                     self.canvas.configure(cursor="fleur" if hit is not None else "arrow")

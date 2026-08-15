@@ -113,6 +113,47 @@ class StartupTests(unittest.TestCase):
         self.assertIsInstance(self.app.history.undo_stack[-1], LayerMoveCommand)
         self.assertFalse(any(isinstance(command, DocumentStateCommand) for command in self.app.history.undo_stack))
 
+    def test_move_drag_coalesces_dense_pointer_events(self) -> None:
+        self.app.doc = self.app.doc.new(900, 700, (0, 0, 0, 0))
+        self.app.doc.layers.clear()
+        layer = self.app.doc.add_shape_layer("rectangle", (60, 50, 260, 180), (40, 120, 220, 255))
+        self.app.tool.set("move")
+        self.app.refresh()
+        start_x, start_y = self.app.doc_to_canvas(100, 90)
+        captured = []
+        original_refresh = self.app.request_canvas_refresh
+        self.app.request_canvas_refresh = lambda *args, **kwargs: captured.append((args, kwargs))
+        try:
+            self.app.pointer_down(SimpleNamespace(x=start_x, y=start_y, state=0))
+            for offset in range(1, 81):
+                self.app.pointer_drag(SimpleNamespace(x=start_x + offset, y=start_y + offset // 2, state=0))
+            self.app.pointer_up(SimpleNamespace(x=start_x + 80, y=start_y + 40, state=0))
+        finally:
+            self.app.request_canvas_refresh = original_refresh
+        self.assertEqual((layer.x, layer.y), (80, 40))
+        self.assertLessEqual(len(captured), 2)
+
+    def test_shape_rotation_handle_changes_angle_and_adds_one_history_step(self) -> None:
+        self.app.doc = self.app.doc.new(320, 220, (0, 0, 0, 0))
+        self.app.doc.layers.clear()
+        layer = self.app.doc.add_shape_layer("ellipse", (40, 30, 180, 120), (40, 120, 220, 255))
+        self.app.selected_layer_ids = {layer.id}
+        self.app.tool.set("move")
+        self.app.history.clear()
+        points = self.app._object_handle_geometry(layer)[0]
+        start = tuple(round(value) for value in points["rotate"])
+        center = ((40 + 180) // 2, (30 + 120) // 2)
+        self.app.begin_object_resize("rotate", start)
+        self.app.resize_selected_object_live((center[0] + 80, center[1]), 0)
+        self.app.finish_object_resize()
+        self.assertAlmostEqual(float(layer.shape_data["rotation"]), 90.0, delta=2.0)
+        self.assertEqual(len(self.app.history.undo_stack), 1)
+        self.app._editor_active = True
+        self.assertEqual(self.app.shortcut_undo(), "break")
+        self.assertAlmostEqual(float(layer.shape_data["rotation"]), 0.0, delta=0.01)
+        self.app.shortcut_redo()
+        self.assertAlmostEqual(float(layer.shape_data["rotation"]), 90.0, delta=2.0)
+
     def test_right_click_clears_selection_even_when_clicked_inside(self) -> None:
         self.app.doc = self.app.doc.new(180, 120, (0, 0, 0, 0))
         mask = np.zeros((120, 180), dtype=np.uint8)
@@ -258,6 +299,26 @@ class StartupTests(unittest.TestCase):
         self.app.end_move_selection()
         self.assertEqual(int(self.app.doc.layer.pixels[8, 7, 3]), 0)
         self.assertEqual(tuple(self.app.doc.layer.pixels[13, 19]), (230, 40, 20, 255))
+
+    def test_move_tool_rotates_pixels_inside_selection(self) -> None:
+        self.app.create_document_from_settings(
+            {"width": 48, "height": 40, "dpi": 72, "background": (0, 0, 0, 0), "include_clipboard": False}
+        )
+        self.app.doc.layer.pixels[10:14, 8:22] = (230, 40, 20, 255)
+        self.app.doc.layer.touch_pixels()
+        self.app.doc.set_rect_selection((8, 10, 22, 14))
+        self.app.tool.set("move")
+        self.app.history.clear()
+        bounds = self.app.doc.selection_bounds()
+        gap = 28.0 / self.app.zoom.get()
+        start = self.app._rotated_handle_points(bounds, 0.0, gap)["rotate"]
+        center = ((bounds[0] + bounds[2]) / 2.0, (bounds[1] + bounds[3]) / 2.0)
+        self.app.begin_selection_transform("rotate", tuple(round(value) for value in start))
+        self.app.update_selection_transform((round(center[0] + 30), round(center[1])), 0)
+        self.app.finish_selection_transform()
+        rotated = self.app.doc.selection_bounds()
+        self.assertGreater(rotated[3] - rotated[1], rotated[2] - rotated[0])
+        self.assertEqual(len(self.app.history.undo_stack), 1)
 
     def test_shape_preview_reuses_one_canvas_item(self) -> None:
         self.app.create_document_from_settings(

@@ -252,7 +252,7 @@ class StartupTests(unittest.TestCase):
         self.assertEqual(len(selected_rows), 1)
         self.assertEqual(len(self.app.doc.layers) - 1 - selected_rows[0], self.app.doc.active_layer)
 
-    def test_selected_shape_has_eight_stable_handles(self) -> None:
+    def test_selected_shape_has_stable_resize_and_rotation_handles(self) -> None:
         self.app.doc = self.app.doc.new(320, 220, (0, 0, 0, 0))
         self.app.doc.layers.clear()
         layer = self.app.doc.add_shape_layer("ellipse", (40, 30, 180, 120), (40, 120, 220, 255))
@@ -260,7 +260,7 @@ class StartupTests(unittest.TestCase):
         self.app.tool.set("move")
         self.app.refresh()
         self.app.update_object_bounds()
-        self.assertEqual(len(self.app._object_bounds_ids), 9)
+        self.assertEqual(len(self.app._object_bounds_ids), 11)
         item_ids = tuple(self.app._object_bounds_ids)
         self.app.update_object_bounds()
         self.assertEqual(tuple(self.app._object_bounds_ids), item_ids)
