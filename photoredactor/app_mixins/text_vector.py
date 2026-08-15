@@ -9,35 +9,8 @@ class TextVectorMixin:
         if layer.kind != "text" or layer.text_data is None:
             messagebox.showinfo("Text layer", "Select a text layer first.")
             return
-        data = self.text_layer_dialog("Edit text layer", layer.text_data)
-        if data is None:
-            return
-        self.run_document_command(
-            "Edit text layer",
-            lambda: self.doc.edit_text_layer(
-                text=data["text"],
-                size=data["size"],
-                color=self.foreground,
-                font_family=data["font_family"],
-                box_width=data["box_width"],
-                align=data["align"],
-                line_spacing=data["line_spacing"],
-                tracking=data["tracking"],
-                bold=data["bold"],
-                italic=data["italic"],
-                underline=data["underline"],
-                path_mode=data["path_mode"],
-                path_amount=data["path_amount"],
-                path_points=data["path_points"],
-                path_start=data["path_start"],
-                path_end=data["path_end"],
-                path_side=data["path_side"],
-                path_reverse=data["path_reverse"],
-                baseline_shift=data["baseline_shift"],
-                rotation=data["rotation"],
-            ),
-        )
-        self.refresh()
+        self.refresh_properties()
+        self.edit_active_text_on_canvas()
 
     def edit_text_path(self) -> None:
         if self._text_editor is not None:

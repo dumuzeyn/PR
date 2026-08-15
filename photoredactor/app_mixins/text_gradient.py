@@ -44,6 +44,7 @@ class TextGradientMixin:
             data = existing.text_data
             x, y = int(data.get("x", start[0])), int(data.get("y", start[1]))
             box_width = max(0, int(data.get("box_width", 0)))
+            box_height = max(0, int(data.get("box_height", 0)))
             initial_text = str(data.get("text", ""))
             self._text_editor_before = copy.deepcopy(data)
             self._text_editor_layer_id = existing.id
@@ -51,14 +52,17 @@ class TextGradientMixin:
         else:
             x, y = int(start[0]), int(start[1])
             box_width = abs(int(end[0]) - x) if abs(int(end[0]) - x) >= 6 else 0
+            box_height = abs(int(end[1]) - y) if box_width else 0
             initial_text = ""
             self._text_editor_before = None
             self._text_editor_layer_id = None
             self.text_box_width.set(box_width)
+            self.text_box_height.set(box_height)
         self._text_editor_origin = (x, y)
         self._text_editor_box_width = box_width
+        self._text_editor_box_height = box_height
         visible_width = box_width or min(520, max(260, self.doc.width - x))
-        visible_height = max(72, abs(int(end[1]) - int(start[1])) if box_width else int(self.text_size.get()) * 2)
+        visible_height = max(72, box_height if box_width else int(self.text_size.get()) * 2)
         editor = tk.Text(
             self.canvas,
             wrap=tk.WORD if box_width else tk.NONE,
@@ -125,6 +129,7 @@ class TextGradientMixin:
         layer_id = self._text_editor_layer_id
         origin = self._text_editor_origin
         box_width = max(0, int(self.text_box_width.get() or self._text_editor_box_width))
+        box_height = max(0, int(self.text_box_height.get() or self._text_editor_box_height)) if box_width else 0
         before = copy.deepcopy(self._text_editor_before)
         self._destroy_text_editor()
         if layer_id is not None:
@@ -132,7 +137,7 @@ class TextGradientMixin:
             if layer is None or before is None:
                 return
             self.doc.active_layer = self.doc.layers.index(layer)
-            self.apply_text_values(layer, text, origin, box_width)
+            self.apply_text_values(layer, text, origin, box_width, box_height)
             after = copy.deepcopy(layer.text_data or {})
             if before != after:
                 self.push_command(TextDataCommand("Edit text", layer.id, before, after, f"Text: {str(before.get('text', ''))[:24]}", layer.name))
@@ -143,6 +148,7 @@ class TextGradientMixin:
                 int(self.text_line_spacing.get()), int(self.text_tracking.get()),
                 bool(self.text_bold.get()), bool(self.text_italic.get()), bool(self.text_underline.get()),
                 rotation=float(self.text_rotation.get()),
+                box_height=box_height, text_mode="paragraph" if box_width else "point",
             )
             self.selected_layer_ids = {layer.id}
             self.push_command(LayerInsertCommand("Text layer", self.doc.active_layer, copy.deepcopy(layer)))
@@ -162,7 +168,7 @@ class TextGradientMixin:
         self._text_editor_layer_id = None
         self._text_editor_before = None
 
-    def apply_text_values(self, layer: Layer, text: str, origin: tuple[int, int], box_width: int) -> None:
+    def apply_text_values(self, layer: Layer, text: str, origin: tuple[int, int], box_width: int, box_height: int = 0) -> None:
         data = layer.text_data or {}
         data.update({
             "text": text,
@@ -172,6 +178,8 @@ class TextGradientMixin:
             "size": int(self.text_size.get()),
             "font_family": self.text_font_family.get(),
             "box_width": max(0, int(box_width)),
+            "box_height": max(0, int(box_height)) if box_width else 0,
+            "text_mode": "paragraph" if box_width else "point",
             "align": self.text_align.get(),
             "line_spacing": max(0, int(self.text_line_spacing.get())),
             "tracking": int(self.text_tracking.get()),
@@ -202,6 +210,7 @@ class TextGradientMixin:
             self.text_tracking.set(int(data.get("tracking", 0)))
             self.text_rotation.set(float(data.get("rotation", 0.0)))
             self.text_box_width.set(int(data.get("box_width", 0)))
+            self.text_box_height.set(int(data.get("box_height", 0)))
             color = data.get("color")
             if isinstance(color, list) and len(color) == 4:
                 self.foreground = tuple(int(value) for value in color)
@@ -227,6 +236,7 @@ class TextGradientMixin:
             str(layer.text_data.get("text", "")),
             (int(layer.text_data.get("x", 0)), int(layer.text_data.get("y", 0))),
             int(self.text_box_width.get()),
+            int(self.text_box_height.get()),
         )
         self.request_canvas_refresh()
         if self._text_property_after_id is not None:

@@ -38,6 +38,14 @@ class VectorLayersDocumentMixin:
         path_reverse: bool = False,
         baseline_shift: int = 0,
         rotation: float = 0.0,
+        box_height: int = 0,
+        text_mode: str | None = None,
+        kerning_enabled: bool = True,
+        standard_ligatures: bool = True,
+        discretionary_ligatures: bool = False,
+        stylistic_set: int = 0,
+        direction: str = "auto",
+        language: str = "",
     ) -> Layer:
         normalized_path_start, normalized_path_end = normalize_text_path_range(path_start, path_end)
         layer = Layer(
@@ -52,10 +60,18 @@ class VectorLayersDocumentMixin:
                 "size": int(size),
                 "font_family": font_family,
                 "box_width": int(box_width),
+                "box_height": max(0, int(box_height)),
+                "text_mode": text_mode if text_mode in {"point", "paragraph"} else "paragraph" if int(box_width) > 0 else "point",
                 "align": align,
                 "line_spacing": int(line_spacing if line_spacing is not None else max(2, int(size) // 5)),
                 "tracking": int(tracking),
                 "kerning": 0,
+                "kerning_enabled": bool(kerning_enabled),
+                "standard_ligatures": bool(standard_ligatures),
+                "discretionary_ligatures": bool(discretionary_ligatures),
+                "stylistic_set": max(0, min(20, int(stylistic_set))),
+                "direction": direction if direction in {"auto", "ltr", "rtl"} else "auto",
+                "language": str(language),
                 "horizontal_scale": 100,
                 "vertical_scale": 100,
                 "bold": bool(bold),
@@ -257,6 +273,14 @@ class VectorLayersDocumentMixin:
         path_reverse: bool | None = None,
         baseline_shift: int | None = None,
         rotation: float | None = None,
+        box_height: int | None = None,
+        text_mode: str | None = None,
+        kerning_enabled: bool | None = None,
+        standard_ligatures: bool | None = None,
+        discretionary_ligatures: bool | None = None,
+        stylistic_set: int | None = None,
+        direction: str | None = None,
+        language: str | None = None,
     ) -> None:
         layer = self.layer
         if layer.locked or layer.kind != "text" or layer.text_data is None:
@@ -272,6 +296,10 @@ class VectorLayersDocumentMixin:
             layer.text_data["font_family"] = font_family
         if box_width is not None:
             layer.text_data["box_width"] = max(0, int(box_width))
+        if box_height is not None:
+            layer.text_data["box_height"] = max(0, int(box_height))
+        if text_mode is not None:
+            layer.text_data["text_mode"] = text_mode if text_mode in {"point", "paragraph"} else "point"
         if align is not None:
             layer.text_data["align"] = align if align in {"left", "center", "right", "justify"} else "left"
         if line_spacing is not None:
@@ -280,6 +308,18 @@ class VectorLayersDocumentMixin:
             layer.text_data["tracking"] = int(tracking)
         if kerning is not None:
             layer.text_data["kerning"] = int(kerning)
+        if kerning_enabled is not None:
+            layer.text_data["kerning_enabled"] = bool(kerning_enabled)
+        if standard_ligatures is not None:
+            layer.text_data["standard_ligatures"] = bool(standard_ligatures)
+        if discretionary_ligatures is not None:
+            layer.text_data["discretionary_ligatures"] = bool(discretionary_ligatures)
+        if stylistic_set is not None:
+            layer.text_data["stylistic_set"] = max(0, min(20, int(stylistic_set)))
+        if direction is not None:
+            layer.text_data["direction"] = direction if direction in {"auto", "ltr", "rtl"} else "auto"
+        if language is not None:
+            layer.text_data["language"] = str(language)
         if horizontal_scale is not None:
             layer.text_data["horizontal_scale"] = max(1, int(horizontal_scale))
         if vertical_scale is not None:
@@ -356,6 +396,8 @@ class VectorLayersDocumentMixin:
         data["size"] = max(4, round(int(data.get("size", 48)) * scale_y))
         if int(data.get("box_width", 0) or 0) > 0:
             data["box_width"] = max(1, round(int(data["box_width"]) * scale_x))
+        if int(data.get("box_height", 0) or 0) > 0:
+            data["box_height"] = max(1, round(int(data["box_height"]) * scale_y))
         data["line_spacing"] = max(0, round(int(data.get("line_spacing", 0)) * scale_y))
         data["tracking"] = round(int(data.get("tracking", 0)) * scale_x)
         raw_path = data.get("path_points")

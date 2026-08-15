@@ -123,6 +123,7 @@ class StartupSettingsMixin:
         self.text_tracking = tk.IntVar(value=0)
         self.text_rotation = tk.DoubleVar(value=0.0)
         self.text_box_width = tk.IntVar(value=0)
+        self.text_box_height = tk.IntVar(value=0)
         self.quick_smooth = tk.IntVar(value=1)
         self.quick_edge_radius = tk.IntVar(value=2)
         self.quick_edge_strength = tk.DoubleVar(value=0.5)
@@ -180,6 +181,7 @@ class StartupSettingsMixin:
         self._text_editor_layer_id: str | None = None
         self._text_editor_origin = (0, 0)
         self._text_editor_box_width = 0
+        self._text_editor_box_height = 0
         self._text_editor_before: dict[str, object] | None = None
         self._text_property_after_id: str | None = None
         self._text_property_before: dict[str, object] | None = None
@@ -290,7 +292,7 @@ class StartupSettingsMixin:
         for variable in (
             self.text_font_family, self.text_size, self.text_bold, self.text_italic,
             self.text_underline, self.text_align, self.text_line_spacing,
-            self.text_tracking, self.text_rotation, self.text_box_width,
+            self.text_tracking, self.text_rotation, self.text_box_width, self.text_box_height,
         ):
             variable.trace_add("write", self.text_properties_changed)
         self.load_settings()

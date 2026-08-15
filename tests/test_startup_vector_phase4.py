@@ -42,7 +42,10 @@ class VectorPhase4UITests(unittest.TestCase):
         self.app.refresh()
         self.app.refresh_properties()
         labels = widget_texts(self.app.object_properties)
-        for expected in ("Символ", "Кернинг", "Масштаб по горизонтали, %", "Зачеркнуть", "Абзац", "Интервал после"):
+        for expected in (
+            "Символ", "Начертание", "Кернинг", "Стандартные лигатуры", "Масштаб по горизонтали, %",
+            "Зачеркнуть", "Абзац", "Режим текста", "Ширина блока", "Высота блока", "Интервал после",
+        ):
             self.assertIn(expected, labels)
 
         self.app.open_gradient_editor()

@@ -100,9 +100,15 @@ class ObjectPropertiesMixin:
         elif layer.kind == "text" and layer.text_data is not None:
             ttk.Label(panel, text="Символ", style="PanelTitle.TLabel").pack(anchor=tk.W, padx=10, pady=(7, 3))
             combo_row("Шрифт", str(layer.text_data.get("font_family", "Arial")), ["Arial", "Segoe UI", "Calibri", "Times New Roman", "Verdana", "Tahoma"], lambda value: self.set_text_property("font_family", value))
+            style_name = "Жирный курсив" if layer.text_data.get("bold") and layer.text_data.get("italic") else "Жирное" if layer.text_data.get("bold") else "Курсив" if layer.text_data.get("italic") else "Обычное"
+            combo_row("Начертание", style_name, ["Обычное", "Жирное", "Курсив", "Жирный курсив"], self.set_text_style)
             numeric_row("Размер", int(layer.text_data.get("size", 48)), lambda value: self.set_text_property("size", int(value)), 4, 500)
             numeric_row("Трекинг", int(layer.text_data.get("tracking", 0)), lambda value: self.set_text_property("tracking", int(value)), -100, 500)
-            numeric_row("Кернинг", int(layer.text_data.get("kerning", 0)), lambda value: self.set_text_property("kerning", int(value)), -100, 500)
+            ttk.Checkbutton(panel, text="Кернинг", variable=tk.BooleanVar(value=bool(layer.text_data.get("kerning_enabled", True))), command=lambda: self.set_text_property("kerning_enabled", not bool(layer.text_data.get("kerning_enabled", True)))).pack(anchor=tk.W, padx=10, pady=2)
+            ttk.Checkbutton(panel, text="Стандартные лигатуры", variable=tk.BooleanVar(value=bool(layer.text_data.get("standard_ligatures", True))), command=lambda: self.set_text_property("standard_ligatures", not bool(layer.text_data.get("standard_ligatures", True)))).pack(anchor=tk.W, padx=10, pady=2)
+            ttk.Checkbutton(panel, text="Дополнительные лигатуры", variable=tk.BooleanVar(value=bool(layer.text_data.get("discretionary_ligatures", False))), command=lambda: self.set_text_property("discretionary_ligatures", not bool(layer.text_data.get("discretionary_ligatures", False)))).pack(anchor=tk.W, padx=10, pady=2)
+            numeric_row("Стилистический набор", int(layer.text_data.get("stylistic_set", 0)), lambda value: self.set_text_property("stylistic_set", int(value)), 0, 20)
+            combo_row("Направление", str(layer.text_data.get("direction", "auto")), ["auto", "ltr", "rtl"], lambda value: self.set_text_property("direction", value))
             numeric_row("Масштаб по горизонтали, %", int(layer.text_data.get("horizontal_scale", 100)), lambda value: self.set_text_property("horizontal_scale", int(value)), 1, 1000)
             numeric_row("Масштаб по вертикали, %", int(layer.text_data.get("vertical_scale", 100)), lambda value: self.set_text_property("vertical_scale", int(value)), 1, 1000)
             numeric_row("Сдвиг базовой линии", int(layer.text_data.get("baseline_shift", 0)), lambda value: self.set_text_property("baseline_shift", int(value)), -500, 500)
@@ -112,7 +118,10 @@ class ObjectPropertiesMixin:
                 ttk.Checkbutton(style_row, text=label, variable=tk.BooleanVar(value=bool(layer.text_data.get(key, False))), command=lambda k=key: self.set_text_property(k, not bool(layer.text_data.get(k, False)))).pack(side=tk.LEFT, padx=(0, 5))
             ttk.Checkbutton(panel, text="Вертикальный текст", variable=tk.BooleanVar(value=bool(layer.text_data.get("vertical", False))), command=lambda: self.set_text_property("vertical", not bool(layer.text_data.get("vertical", False)))).pack(anchor=tk.W, padx=10, pady=2)
             ttk.Label(panel, text="Абзац", style="PanelTitle.TLabel").pack(anchor=tk.W, padx=10, pady=(7, 3))
-            numeric_row("Межстрочный", int(layer.text_data.get("line_spacing", 10)), lambda value: self.set_text_property("line_spacing", int(value)), 0, 500)
+            combo_row("Режим текста", str(layer.text_data.get("text_mode", "paragraph" if int(layer.text_data.get("box_width", 0)) > 0 else "point")), ["point", "paragraph"], lambda value: self.set_text_property("text_mode", value))
+            numeric_row("Ширина блока", int(layer.text_data.get("box_width", 0)), lambda value: self.set_text_property("box_width", int(value)), 0, 100000)
+            numeric_row("Высота блока", int(layer.text_data.get("box_height", 0)), lambda value: self.set_text_property("box_height", int(value)), 0, 100000)
+            numeric_row("Интерлиньяж", int(layer.text_data.get("line_spacing", 10)), lambda value: self.set_text_property("line_spacing", int(value)), 0, 500)
             combo_row("Выравнивание", str(layer.text_data.get("align", "left")), ["left", "center", "right", "justify"], lambda value: self.set_text_property("align", value))
             numeric_row("Отступ слева", int(layer.text_data.get("indent_left", 0)), lambda value: self.set_text_property("indent_left", int(value)), 0, 10000)
             numeric_row("Отступ справа", int(layer.text_data.get("indent_right", 0)), lambda value: self.set_text_property("indent_right", int(value)), 0, 10000)
@@ -221,5 +230,20 @@ class ObjectPropertiesMixin:
         render_text_layer(layer)
         layer.touch_pixels()
         self.push_command(TextDataCommand("Изменить текст", layer.id, before, copy.deepcopy(layer.text_data)))
+        self.doc.dirty = True
+        self.refresh()
+
+    def set_text_style(self, value: str) -> None:
+        layer = self.doc.layer
+        if layer.kind != "text" or layer.text_data is None:
+            return
+        before = copy.deepcopy(layer.text_data)
+        layer.text_data["bold"] = value in {"Жирное", "Жирный курсив"}
+        layer.text_data["italic"] = value in {"Курсив", "Жирный курсив"}
+        if layer.text_data == before:
+            return
+        render_text_layer(layer)
+        layer.touch_pixels()
+        self.push_command(TextDataCommand("Изменить начертание", layer.id, before, copy.deepcopy(layer.text_data)))
         self.doc.dirty = True
         self.refresh()

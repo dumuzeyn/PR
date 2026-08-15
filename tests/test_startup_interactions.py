@@ -287,6 +287,8 @@ class StartupTests(unittest.TestCase):
         self.app.finish_text_edit()
         self.assertEqual(self.app.doc.layer.kind, "text")
         self.assertEqual(self.app.doc.layer.text_data["box_width"], 160)
+        self.assertEqual(self.app.doc.layer.text_data["box_height"], 65)
+        self.assertEqual(self.app.doc.layer.text_data["text_mode"], "paragraph")
         self.assertIn("Текст на холсте", self.app.doc.layer.text_data["text"])
 
 
