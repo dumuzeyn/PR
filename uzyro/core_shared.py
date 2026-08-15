@@ -26,6 +26,7 @@ _brush_mask_cache: dict[int, np.ndarray] = {}
 _retouch_mask_cache: dict[tuple[int, int], np.ndarray] = {}
 _filter_mask_cache: dict[str, np.ndarray] = {}
 _gradient_lookup_cache: dict[tuple[Any, ...], np.ndarray] = {}
+_gradient_quantized_lookup_cache: dict[tuple[Any, ...], np.ndarray] = {}
 BLEND_MODES = [
     "Normal",
     "Multiply",
@@ -242,6 +243,19 @@ class GradientEngine:
         dtype = {8: np.uint8, 16: np.uint16, 32: np.float32}.get(output_depth)
         if dtype is None:
             raise ValueError("Bit depth must be 8, 16 or 32")
+        quantized_lookup = None
+        quantized_cache_key = None
+        if not dither and output_depth in (8, 16):
+            if cache_key is not None:
+                quantized_cache_key = (cache_key, output_depth)
+                quantized_lookup = _gradient_quantized_lookup_cache.get(quantized_cache_key)
+            if quantized_lookup is None:
+                quantized_lookup = quantize_rgba(lookup[None, :, :], output_depth)[0]
+                quantized_lookup.setflags(write=False)
+                if quantized_cache_key is not None:
+                    if len(_gradient_quantized_lookup_cache) >= 48:
+                        _gradient_quantized_lookup_cache.pop(next(iter(_gradient_quantized_lookup_cache)))
+                    _gradient_quantized_lookup_cache[quantized_cache_key] = quantized_lookup
         result = np.empty((height, width, 4), dtype=dtype)
         rows_per_chunk = max(1, min(height, 1_048_576 // max(1, width)))
         for top in range(0, height, rows_per_chunk):
@@ -251,10 +265,10 @@ class GradientEngine:
             if reverse:
                 values = 1.0 - values
             indices = np.clip(values * 65536.0, 0.0, 65536.0).astype(np.uint32)
-            output = lookup[indices]
+            output = (quantized_lookup if quantized_lookup is not None else lookup)[indices]
             if dither and width > 1 and height > 1:
                 output = ordered_dither(output, output_depth, chunk_origin)
-            result[top:bottom] = quantize_rgba(output, output_depth)
+            result[top:bottom] = output if quantized_lookup is not None else quantize_rgba(output, output_depth)
         return np.ascontiguousarray(result)
 
 
