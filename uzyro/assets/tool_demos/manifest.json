@@ -1,0 +1,163 @@
+{
+  "format": "UZYRO tool demos v2",
+  "generator": "UZYRO actual tool engine v1",
+  "frame_count": 18,
+  "size": [
+    288,
+    162
+  ],
+  "sources": {
+    "still_life.png": "f77da5eb24b17702e0c6a61ee85034d564752722d5f3806f1aa91f3e19ec6f93",
+    "landscape.png": "e2976120374495d6e7f4faa1f133469e76bd97aa300bcbe4f5b127eefed5bdd6"
+  },
+  "tools": {
+    "hand": {
+      "file": "hand.gif",
+      "engine": "uzyro"
+    },
+    "move": {
+      "file": "move.gif",
+      "engine": "uzyro"
+    },
+    "brush": {
+      "file": "brush.gif",
+      "engine": "uzyro"
+    },
+    "eraser": {
+      "file": "eraser.gif",
+      "engine": "uzyro"
+    },
+    "blur_tool": {
+      "file": "blur_tool.gif",
+      "engine": "uzyro"
+    },
+    "sharpen_tool": {
+      "file": "sharpen_tool.gif",
+      "engine": "uzyro"
+    },
+    "dodge": {
+      "file": "dodge.gif",
+      "engine": "uzyro"
+    },
+    "burn": {
+      "file": "burn.gif",
+      "engine": "uzyro"
+    },
+    "clone": {
+      "file": "clone.gif",
+      "engine": "uzyro"
+    },
+    "healing": {
+      "file": "healing.gif",
+      "engine": "uzyro"
+    },
+    "spot_healing": {
+      "file": "spot_healing.gif",
+      "engine": "uzyro"
+    },
+    "patch": {
+      "file": "patch.gif",
+      "engine": "uzyro"
+    },
+    "fill": {
+      "file": "fill.gif",
+      "engine": "uzyro"
+    },
+    "gradient": {
+      "file": "gradient.gif",
+      "engine": "uzyro"
+    },
+    "text": {
+      "file": "text.gif",
+      "engine": "uzyro"
+    },
+    "eyedropper": {
+      "file": "eyedropper.gif",
+      "engine": "uzyro"
+    },
+    "rect_shape": {
+      "file": "rect_shape.gif",
+      "engine": "uzyro"
+    },
+    "ellipse_shape": {
+      "file": "ellipse_shape.gif",
+      "engine": "uzyro"
+    },
+    "line_shape": {
+      "file": "line_shape.gif",
+      "engine": "uzyro"
+    },
+    "bezier_shape": {
+      "file": "bezier_shape.gif",
+      "engine": "uzyro"
+    },
+    "path_select": {
+      "file": "path_select.gif",
+      "engine": "uzyro"
+    },
+    "direct_select": {
+      "file": "direct_select.gif",
+      "engine": "uzyro"
+    },
+    "add_anchor": {
+      "file": "add_anchor.gif",
+      "engine": "uzyro"
+    },
+    "delete_anchor": {
+      "file": "delete_anchor.gif",
+      "engine": "uzyro"
+    },
+    "convert_anchor": {
+      "file": "convert_anchor.gif",
+      "engine": "uzyro"
+    },
+    "polygon_shape": {
+      "file": "polygon_shape.gif",
+      "engine": "uzyro"
+    },
+    "star_shape": {
+      "file": "star_shape.gif",
+      "engine": "uzyro"
+    },
+    "custom_shape": {
+      "file": "custom_shape.gif",
+      "engine": "uzyro"
+    },
+    "select": {
+      "file": "select.gif",
+      "engine": "uzyro"
+    },
+    "ellipse_select": {
+      "file": "ellipse_select.gif",
+      "engine": "uzyro"
+    },
+    "lasso": {
+      "file": "lasso.gif",
+      "engine": "uzyro"
+    },
+    "magnetic_lasso": {
+      "file": "magnetic_lasso.gif",
+      "engine": "uzyro"
+    },
+    "polygon_lasso": {
+      "file": "polygon_lasso.gif",
+      "engine": "uzyro"
+    },
+    "quick_selection": {
+      "file": "quick_selection.gif",
+      "engine": "uzyro"
+    },
+    "magic_wand": {
+      "file": "magic_wand.gif",
+      "engine": "uzyro"
+    },
+    "color_range": {
+      "file": "color_range.gif",
+      "engine": "uzyro"
+    },
+    "crop": {
+      "file": "crop.gif",
+      "engine": "uzyro"
+    }
+  }
+}
