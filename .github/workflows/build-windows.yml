@@ -22,10 +22,17 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: "3.12"
-          cache: pip
+          architecture: x64
 
       - name: Install dependencies
-        run: python -m pip install --disable-pip-version-check -r requirements.txt
+        run: |
+          python -m pip install --disable-pip-version-check --no-cache-dir -r requirements.txt
+          python -m pip install --disable-pip-version-check --no-cache-dir --force-reinstall Pillow==10.4.0
+
+      - name: Verify text shaping engine
+        shell: powershell
+        run: |
+          python -c "import struct, PIL; from PIL import features; assert struct.calcsize('P') * 8 == 64; assert features.check('raqm'); assert features.check('fribidi'); assert features.check('harfbuzz'); print('Pillow', PIL.__version__, 'RAQM/FriBidi/HarfBuzz: OK')"
 
       - name: Run tests
         shell: powershell
