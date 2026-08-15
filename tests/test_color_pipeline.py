@@ -7,18 +7,18 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 import tifffile
-import photoredactor.document_mixins.project_io as project_io
+import uzyro.document_mixins.project_io as project_io
 
-from photoredactor.color_management import (
+from uzyro.color_management import (
     builtin_srgb_bytes,
     convert_icc,
     profile_details,
     rgba_to_working,
     working_to_rgba,
 )
-from photoredactor.core import Document
-from photoredactor.history import History, PixelPatchCommand
-from photoredactor.print_pipeline import export_cmyk_tiff, print_preflight, proof_document
+from uzyro.core import Document
+from uzyro.history import History, PixelPatchCommand
+from uzyro.print_pipeline import export_cmyk_tiff, print_preflight, proof_document
 
 
 def system_cmyk_profile() -> Path | None:

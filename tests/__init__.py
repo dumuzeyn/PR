@@ -1,1 +1,1 @@
-"""PhotoRedactor test support package."""
+"""UZYRO test support package."""

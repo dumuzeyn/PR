@@ -4,18 +4,18 @@ from types import SimpleNamespace
 import tkinter as tk
 import unittest
 
-from photoredactor.app import PhotoRedactorApp
+from uzyro.app import UZYROApp
 
 
 class Phase6LayerUiTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.original_clipboard_reader = PhotoRedactorApp.read_clipboard_image
-        PhotoRedactorApp.read_clipboard_image = staticmethod(lambda: None)
-        self.app = PhotoRedactorApp(); self.app.update()
+        self.original_clipboard_reader = UZYROApp.read_clipboard_image
+        UZYROApp.read_clipboard_image = staticmethod(lambda: None)
+        self.app = UZYROApp(); self.app.update()
 
     def tearDown(self) -> None:
         self.app.destroy()
-        PhotoRedactorApp.read_clipboard_image = staticmethod(self.original_clipboard_reader)
+        UZYROApp.read_clipboard_image = staticmethod(self.original_clipboard_reader)
 
     def test_layer_styles_dialog_has_live_preview_and_returns_enabled_effect(self) -> None:
         self.app.doc = self.app.doc.new(280, 190, (0, 0, 0, 0))

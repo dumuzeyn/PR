@@ -1,6 +1,6 @@
 from PIL import Image
 
-from photoredactor.app import TOOL_DEFINITIONS, tool_demo_path
+from uzyro.app import TOOL_DEFINITIONS, tool_demo_path
 
 
 def test_every_tool_has_an_animated_demo() -> None:

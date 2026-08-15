@@ -6,10 +6,10 @@ from types import SimpleNamespace
 import numpy as np
 import tifffile
 
-from photoredactor.core import Document, Layer
-from photoredactor.app_mixins.shortcuts import ShortcutsMixin
-from photoredactor.print_pipeline import export_color_separations, spot_separations
-from photoredactor.spot_colors import (
+from uzyro.core import Document, Layer
+from uzyro.app_mixins.shortcuts import ShortcutsMixin
+from uzyro.print_pipeline import export_color_separations, spot_separations
+from uzyro.spot_colors import (
     SpotColor,
     assign_spot_color,
     assigned_spot_color,
@@ -18,7 +18,7 @@ from photoredactor.spot_colors import (
     replace_document_spot_colors,
     save_library,
 )
-from photoredactor.windows_print import PrintPlacement, PrinterPage, WindowsPrinter, calculate_placement, rgba_to_bgra_on_paper
+from uzyro.windows_print import PrintPlacement, PrinterPage, WindowsPrinter, calculate_placement, rgba_to_bgra_on_paper
 
 
 def test_ase_and_native_library_roundtrip_preserves_named_spots(tmp_path: Path) -> None:
@@ -30,7 +30,7 @@ def test_ase_and_native_library_roundtrip_preserves_named_spots(tmp_path: Path) 
     save_library(ase_path, colors)
     ase_colors = load_library(ase_path)
     assert [color.name for color in ase_colors] == [color.name for color in colors]
-    assert all(color.source == "PhotoRedactor" for color in ase_colors)
+    assert all(color.source == "UZYRO" for color in ase_colors)
     np.testing.assert_allclose([color.lab for color in ase_colors], [color.lab for color in colors], atol=1e-4)
 
     native_path = tmp_path / "library.prswatches"
@@ -70,8 +70,8 @@ def test_export_color_separations_writes_process_and_spot_plates(monkeypatch, tm
     replace_document_spot_colors(document, [color])
     assign_spot_color(document, document.layer.id, color.id)
     fake_cmyk = np.full((4, 5, 4), 64, dtype=np.uint8)
-    monkeypatch.setattr("photoredactor.print_pipeline.cmyk_separation", lambda *_args, **_kwargs: fake_cmyk)
-    monkeypatch.setattr("photoredactor.print_pipeline.profile_details", lambda _profile: {"name": "Test CMYK", "color_space": "CMYK"})
+    monkeypatch.setattr("uzyro.print_pipeline.cmyk_separation", lambda *_args, **_kwargs: fake_cmyk)
+    monkeypatch.setattr("uzyro.print_pipeline.profile_details", lambda _profile: {"name": "Test CMYK", "color_space": "CMYK"})
 
     manifest = export_color_separations(document, tmp_path / "plates", b"profile")
     paths = sorted(manifest.parent.glob("*.tif"))

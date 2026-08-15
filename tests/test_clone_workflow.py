@@ -1,6 +1,6 @@
 import numpy as np
 
-from photoredactor.core import Layer, SourceAnchor, clone_or_heal, spot_heal
+from uzyro.core import Layer, SourceAnchor, clone_or_heal, spot_heal
 
 
 def test_source_anchor_keeps_aligned_offset_between_strokes() -> None:

@@ -3,7 +3,7 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-from photoredactor.core import Document, background_selection_mask, sky_selection_mask, subject_selection_mask
+from uzyro.core import Document, background_selection_mask, sky_selection_mask, subject_selection_mask
 
 
 def complex_subject_scene() -> tuple[np.ndarray, np.ndarray]:

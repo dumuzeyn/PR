@@ -3,20 +3,20 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
-from photoredactor.app import PhotoRedactorApp
-from photoredactor.spot_colors import SpotColor, assign_spot_color, replace_document_spot_colors
+from uzyro.app import UZYROApp
+from uzyro.spot_colors import SpotColor, assign_spot_color, replace_document_spot_colors
 
 
 class PrintSpotStartupTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.original_clipboard_reader = PhotoRedactorApp.read_clipboard_image
-        PhotoRedactorApp.read_clipboard_image = staticmethod(lambda: None)
-        self.app = PhotoRedactorApp()
+        self.original_clipboard_reader = UZYROApp.read_clipboard_image
+        UZYROApp.read_clipboard_image = staticmethod(lambda: None)
+        self.app = UZYROApp()
         self.app.update()
 
     def tearDown(self) -> None:
         self.app.destroy()
-        PhotoRedactorApp.read_clipboard_image = staticmethod(self.original_clipboard_reader)
+        UZYROApp.read_clipboard_image = staticmethod(self.original_clipboard_reader)
 
     def test_spot_workspace_and_system_print_entrypoints(self) -> None:
         color = SpotColor("Пробная плашка", (55.0, 30.0, -20.0), (175, 115, 165), "Тест", "test-spot")
@@ -29,7 +29,7 @@ class PrintSpotStartupTests(unittest.TestCase):
         self.assertIn("Пробная плашка", tree.item(tree.get_children()[0], "text"))
         tree.winfo_toplevel().destroy()
 
-        with patch("photoredactor.app_mixins.print_spot_workspace.print_document", return_value=True) as printer:
+        with patch("uzyro.app_mixins.print_spot_workspace.print_document", return_value=True) as printer:
             self.app.system_print_document()
         printer.assert_called_once()
 

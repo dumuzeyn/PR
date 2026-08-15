@@ -4,7 +4,7 @@ from pathlib import Path
 
 import numpy as np
 
-from photoredactor.core import (
+from uzyro.core import (
     Document,
     boolean_shape_mask,
     shape_data_bounds,

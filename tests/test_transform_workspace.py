@@ -4,8 +4,8 @@ from pathlib import Path
 
 import numpy as np
 
-from photoredactor.core import Document, mesh_warp_pixels, perspective_warp_pixels, render_shape_layer, render_text_layer
-from photoredactor.warp_grid import insert_grid_line, regular_grid_points, remove_grid_line
+from uzyro.core import Document, mesh_warp_pixels, perspective_warp_pixels, render_shape_layer, render_text_layer
+from uzyro.warp_grid import insert_grid_line, regular_grid_points, remove_grid_line
 
 
 def sample_pixels(width: int = 96, height: int = 72) -> np.ndarray:

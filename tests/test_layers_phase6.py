@@ -4,10 +4,10 @@ from pathlib import Path
 
 import numpy as np
 
-from photoredactor.adjustment_ops import apply_adjustment
-from photoredactor.core import Document, Layer, apply_filter_stack
-from photoredactor.filter_ops import deterministic_noise
-from photoredactor.layer_effects import EFFECT_ORDER, LayerEffectsStack
+from uzyro.adjustment_ops import apply_adjustment
+from uzyro.core import Document, Layer, apply_filter_stack
+from uzyro.filter_ops import deterministic_noise
+from uzyro.layer_effects import EFFECT_ORDER, LayerEffectsStack
 
 
 def styled_source() -> np.ndarray:

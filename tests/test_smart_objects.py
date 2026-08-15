@@ -7,7 +7,7 @@ import cv2
 import numpy as np
 from PIL import Image
 
-from photoredactor.core import Document, render_layer_pixels
+from uzyro.core import Document, render_layer_pixels
 
 
 def make_image(path: Path, color: tuple[int, int, int, int], size: tuple[int, int] = (48, 36)) -> np.ndarray:
@@ -96,7 +96,7 @@ def test_smart_filters_and_advanced_transform_stay_non_destructive(tmp_path: Pat
     layer.smart_source[18:42, 25:55, :3] = (210, 55, 40)
     render_before = layer.smart_source.copy()
     layer.smart_source = render_before
-    from photoredactor.core import render_smart_object
+    from uzyro.core import render_smart_object
     render_smart_object(layer)
     immutable = layer.smart_source.copy()
     layer.filters = [{"type": "blur", "radius": 3, "opacity": 1.0}]

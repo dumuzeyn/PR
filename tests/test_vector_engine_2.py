@@ -4,15 +4,15 @@ import math
 
 import numpy as np
 
-from photoredactor.core import Document, editable_bezier_path_points, render_shape_layer, shape_data_to_mask, translated_shape_data
-from photoredactor.vector_geometry import (
+from uzyro.core import Document, editable_bezier_path_points, render_shape_layer, shape_data_to_mask, translated_shape_data
+from uzyro.vector_geometry import (
     adaptive_cubic_bezier,
     cubic_bezier_point,
     nearest_cubic_parameter,
     point_to_polyline_distance,
     split_cubic_bezier,
 )
-from photoredactor.vector_rasterizer import stroke_polyline_mask
+from uzyro.vector_rasterizer import stroke_polyline_mask
 
 
 def cubic_point(points, amount: float) -> tuple[float, float]:

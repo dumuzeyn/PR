@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from photoredactor.brush_config import is_test_polluted_brush_settings
+from uzyro.brush_config import is_test_polluted_brush_settings
 
 
 def test_old_ui_test_profile_is_recognized_without_matching_normal_user_settings() -> None:

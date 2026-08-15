@@ -2,8 +2,8 @@ from pathlib import Path
 
 import numpy as np
 
-from photoredactor.color_management import display_rgba, quantize_rgba
-from photoredactor.core import (
+from uzyro.color_management import display_rgba, quantize_rgba
+from uzyro.core import (
     BLEND_MODES,
     Document,
     adjust_brightness_contrast,
@@ -12,7 +12,7 @@ from photoredactor.core import (
     encode_png,
     render_layer_pixels,
 )
-from photoredactor.history import History, LayerPropertyCommand
+from uzyro.history import History, LayerPropertyCommand
 
 
 FILTERS = [

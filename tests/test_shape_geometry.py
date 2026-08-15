@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 
-from photoredactor.core import (
+from uzyro.core import (
     Document,
     layer_contains_point,
     resize_box_from_handle,

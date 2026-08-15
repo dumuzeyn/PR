@@ -3,8 +3,8 @@ from __future__ import annotations
 import time
 import tracemalloc
 
-from photoredactor.core import GradientEngine
-from photoredactor.interactive_performance import benchmark_interactive_paths
+from uzyro.core import GradientEngine
+from uzyro.interactive_performance import benchmark_interactive_paths
 from tests.golden_cases import GOLDEN_CASES
 
 

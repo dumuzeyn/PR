@@ -5,12 +5,14 @@ if (Test-Path $runtimePython) {
 } else {
   $py = "python"
 }
-& $py -m PyInstaller --noconfirm --clean --onefile --windowed --name PhotoRedactor `
+& $py -m PyInstaller --noconfirm --clean --onefile --windowed --name UZYRO `
+  --icon "uzyro/assets/branding/uzyro.ico" `
   --exclude-module scipy --exclude-module skimage --exclude-module aggdraw `
-  --add-data "photoredactor/assets/tool_demos;photoredactor/assets/tool_demos" launcher.py
+  --add-data "uzyro/assets/tool_demos;uzyro/assets/tool_demos" `
+  --add-data "uzyro/assets/branding;uzyro/assets/branding" uzyro_launcher.py
 if ($LASTEXITCODE -ne 0) {
   throw "PyInstaller завершился с кодом $LASTEXITCODE"
 }
-if (-not (Test-Path ".\dist\PhotoRedactor.exe")) {
-  throw "PhotoRedactor.exe не был создан"
+if (-not (Test-Path ".\dist\UZYRO.exe")) {
+  throw "UZYRO.exe не был создан"
 }

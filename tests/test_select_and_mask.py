@@ -3,7 +3,7 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-from photoredactor.core import decontaminate_edge_colors, refine_selection_brush
+from uzyro.core import decontaminate_edge_colors, refine_selection_brush
 
 
 def synthetic_hair_scene() -> tuple[np.ndarray, np.ndarray, np.ndarray]:

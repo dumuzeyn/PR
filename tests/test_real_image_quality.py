@@ -6,10 +6,10 @@ import numpy as np
 from PIL import Image
 import pytest
 
-from photoredactor.core import Layer, content_aware_fill, spot_heal
-from photoredactor.quality_metrics import image_similarity, mask_quality
-from photoredactor.segmentation import OpenCvCpuSegmentationBackend, postprocess_segmentation
-from photoredactor.selection_ops import sky_selection_mask
+from uzyro.core import Layer, content_aware_fill, spot_heal
+from uzyro.quality_metrics import image_similarity, mask_quality
+from uzyro.segmentation import OpenCvCpuSegmentationBackend, postprocess_segmentation
+from uzyro.selection_ops import sky_selection_mask
 
 
 FIXTURES = Path(__file__).with_name("fixtures") / "quality"

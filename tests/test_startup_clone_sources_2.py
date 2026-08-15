@@ -4,14 +4,14 @@ import unittest
 
 import numpy as np
 
-from photoredactor.app import PhotoRedactorApp
+from uzyro.app import UZYROApp
 
 
 class CloneSourcesPanelTests(unittest.TestCase):
     def test_five_sources_keep_independent_points_and_transforms(self) -> None:
-        original = PhotoRedactorApp.read_clipboard_image
-        PhotoRedactorApp.read_clipboard_image = staticmethod(lambda: None)
-        app = PhotoRedactorApp()
+        original = UZYROApp.read_clipboard_image
+        UZYROApp.read_clipboard_image = staticmethod(lambda: None)
+        app = UZYROApp()
         try:
             app.ensure_clone_sources()
             self.assertEqual(tuple(app._clone_sources), ("A", "B", "C", "D", "E"))
@@ -43,7 +43,7 @@ class CloneSourcesPanelTests(unittest.TestCase):
             self.assertIsInstance(app._clone_sources["A"].get("_sample_pixels"), np.ndarray)
         finally:
             app.destroy()
-            PhotoRedactorApp.read_clipboard_image = staticmethod(original)
+            UZYROApp.read_clipboard_image = staticmethod(original)
 
 
 if __name__ == "__main__":

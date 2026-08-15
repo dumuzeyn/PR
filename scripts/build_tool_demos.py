@@ -8,7 +8,7 @@ from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont, ImageOps
 
 
 ROOT = Path(__file__).resolve().parents[1]
-ASSET_DIR = ROOT / "photoredactor" / "assets" / "tool_demos"
+ASSET_DIR = ROOT / "uzyro" / "assets" / "tool_demos"
 SOURCE_DIR = ROOT / "design_assets" / "tool_demo_sources"
 SIZE = (288, 162)
 FRAME_COUNT = 18

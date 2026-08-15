@@ -8,8 +8,8 @@ import tracemalloc
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from photoredactor.core import GradientEngine
-from photoredactor.interactive_performance import benchmark_interactive_paths
+from uzyro.core import GradientEngine
+from uzyro.interactive_performance import benchmark_interactive_paths
 from tests.golden_cases import GOLDEN_CASES
 
 

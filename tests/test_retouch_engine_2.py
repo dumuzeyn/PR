@@ -3,8 +3,8 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-from photoredactor.core import BrushSettings, CloneHealingStroke, Layer, spot_heal
-from photoredactor.exemplar_inpaint import exemplar_inpaint
+from uzyro.core import BrushSettings, CloneHealingStroke, Layer, spot_heal
+from uzyro.exemplar_inpaint import exemplar_inpaint
 
 
 def striped_scene(size: int = 128) -> tuple[np.ndarray, np.ndarray]:

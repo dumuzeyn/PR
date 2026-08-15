@@ -4,14 +4,14 @@ import tkinter as tk
 from tkinter import ttk
 import unittest
 
-from photoredactor.app import PhotoRedactorApp
+from uzyro.app import UZYROApp
 
 
 class BrushEnginePanelTests(unittest.TestCase):
     def test_panel_opens_and_advanced_settings_roundtrip_in_preset(self) -> None:
-        original = PhotoRedactorApp.read_clipboard_image
-        PhotoRedactorApp.read_clipboard_image = staticmethod(lambda: None)
-        app = PhotoRedactorApp()
+        original = UZYROApp.read_clipboard_image
+        UZYROApp.read_clipboard_image = staticmethod(lambda: None)
+        app = UZYROApp()
         try:
             app.brush_advanced.update({"angle": 37.0, "roundness": 0.42, "scatter": 1.25})
             app.brush_preset_name.set("Расширенный тест")
@@ -33,7 +33,7 @@ class BrushEnginePanelTests(unittest.TestCase):
         finally:
             app.brush_presets.pop("Расширенный тест", None)
             app.destroy()
-            PhotoRedactorApp.read_clipboard_image = staticmethod(original)
+            UZYROApp.read_clipboard_image = staticmethod(original)
 
 
 if __name__ == "__main__":

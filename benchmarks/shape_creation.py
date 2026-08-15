@@ -9,8 +9,8 @@ import tracemalloc
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from photoredactor.core import Document
-from photoredactor.history import LayerInsertCommand
+from uzyro.core import Document
+from uzyro.history import LayerInsertCommand
 
 
 def run_case(legacy_snapshots: bool, count: int = 100) -> dict[str, float]:

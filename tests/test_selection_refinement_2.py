@@ -3,8 +3,8 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-from photoredactor.core import cleanup_selection_edges, correct_selection_edges, refine_selection_mask
-from photoredactor.selection_refinement import signed_distance_field
+from uzyro.core import cleanup_selection_edges, correct_selection_edges, refine_selection_mask
+from uzyro.selection_refinement import signed_distance_field
 
 
 def jagged_soft_mask() -> np.ndarray:

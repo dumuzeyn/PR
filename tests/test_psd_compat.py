@@ -8,9 +8,9 @@ from PIL import Image
 from psd_tools import PSDImage
 from psd_tools.constants import Tag
 
-from photoredactor.color_management import builtin_srgb_bytes, color_settings
-from photoredactor.core import Document, Layer
-from photoredactor.psd_compat import _compatibility_risks, export_psd, load_psd
+from uzyro.color_management import builtin_srgb_bytes, color_settings
+from uzyro.core import Document, Layer
+from uzyro.psd_compat import _compatibility_risks, export_psd, load_psd
 
 
 def test_layered_psd_roundtrip_preserves_editable_raster_properties(tmp_path: Path) -> None:

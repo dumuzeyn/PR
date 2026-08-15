@@ -1,4 +1,4 @@
-name: Build PhotoRedactor for Windows
+name: Build UZYRO for Windows
 
 on:
   push:
@@ -38,15 +38,15 @@ jobs:
       - name: Verify executable
         shell: powershell
         run: |
-          if (-not (Test-Path .\dist\PhotoRedactor.exe)) {
-            throw "PhotoRedactor.exe was not created"
+          if (-not (Test-Path .\dist\UZYRO.exe)) {
+            throw "UZYRO.exe was not created"
           }
-          Get-Item .\dist\PhotoRedactor.exe | Select-Object Name, Length, LastWriteTime
+          Get-Item .\dist\UZYRO.exe | Select-Object Name, Length, LastWriteTime
 
       - name: Upload Windows executable
         uses: actions/upload-artifact@v7
         with:
-          name: PhotoRedactor-Windows
-          path: dist/PhotoRedactor.exe
+          name: UZYRO-Windows
+          path: dist/UZYRO.exe
           if-no-files-found: error
           retention-days: 30

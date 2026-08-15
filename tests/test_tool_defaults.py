@@ -1,4 +1,4 @@
-from photoredactor.app_shared import BRUSH_PRESET_DEFAULTS, TOOL_SETTINGS_DEFAULTS
+from uzyro.app_shared import BRUSH_PRESET_DEFAULTS, TOOL_SETTINGS_DEFAULTS
 
 
 def test_all_brush_based_tools_start_hard_and_continuous() -> None:

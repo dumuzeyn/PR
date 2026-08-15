@@ -4,11 +4,11 @@ import math
 
 import numpy as np
 
-from photoredactor.core import Document, GradientEngine, Layer, draw_brush, mesh_warp_pixels
-from photoredactor.interactive_performance import INTERACTIVE_TARGETS_MS, benchmark_interactive_paths
-from photoredactor.performance import PerformanceProfiler
-from photoredactor.preview_ops import transform_preview_pixels
-from photoredactor.rendering import RenderEngine
+from uzyro.core import Document, GradientEngine, Layer, draw_brush, mesh_warp_pixels
+from uzyro.interactive_performance import INTERACTIVE_TARGETS_MS, benchmark_interactive_paths
+from uzyro.performance import PerformanceProfiler
+from uzyro.preview_ops import transform_preview_pixels
+from uzyro.rendering import RenderEngine
 
 
 def test_fast_opaque_brush_matches_reference_with_rounding_tolerance() -> None:

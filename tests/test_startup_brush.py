@@ -7,15 +7,15 @@ import unittest
 
 import numpy as np
 
-from photoredactor.app import PhotoRedactorApp
-from photoredactor.history import PixelTilePatchCommand
+from uzyro.app import UZYROApp
+from uzyro.history import PixelTilePatchCommand
 
 
 class BrushStartupTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.original_clipboard_reader = PhotoRedactorApp.read_clipboard_image
-        PhotoRedactorApp.read_clipboard_image = staticmethod(lambda: None)
-        self.app = PhotoRedactorApp()
+        self.original_clipboard_reader = UZYROApp.read_clipboard_image
+        UZYROApp.read_clipboard_image = staticmethod(lambda: None)
+        self.app = UZYROApp()
         self.app.create_document_from_settings(
             {"width": 240, "height": 140, "dpi": 72, "background": (255, 255, 255, 255), "include_clipboard": False}
         )
@@ -23,7 +23,7 @@ class BrushStartupTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.app.destroy()
-        PhotoRedactorApp.read_clipboard_image = staticmethod(self.original_clipboard_reader)
+        UZYROApp.read_clipboard_image = staticmethod(self.original_clipboard_reader)
 
     def pointer(self, point: tuple[int, int], pressure: float = 1.0):
         x, y = self.app.doc_to_canvas(*point)

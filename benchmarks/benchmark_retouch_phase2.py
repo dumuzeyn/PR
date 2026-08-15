@@ -9,7 +9,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from photoredactor.core import BrushSettings, CloneHealingStroke, Layer, SourceTransform, build_patch_edit, spot_heal
+from uzyro.core import BrushSettings, CloneHealingStroke, Layer, SourceTransform, build_patch_edit, spot_heal
 
 
 WIDTH, HEIGHT = 3840, 2160

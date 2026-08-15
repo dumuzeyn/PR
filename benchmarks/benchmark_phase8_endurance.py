@@ -8,10 +8,10 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from photoredactor.brush_engine import BrushSettings, PixelBrushStroke
-from photoredactor.core import Document
-from photoredactor.history import History, PixelTilePatchCommand, TilePatch
-from photoredactor.layer_effects import EFFECT_ORDER, LayerEffectsStack
+from uzyro.brush_engine import BrushSettings, PixelBrushStroke
+from uzyro.core import Document
+from uzyro.history import History, PixelTilePatchCommand, TilePatch
+from uzyro.layer_effects import EFFECT_ORDER, LayerEffectsStack
 
 
 def run_brush_endurance() -> tuple[float, float, int]:

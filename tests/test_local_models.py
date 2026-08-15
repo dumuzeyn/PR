@@ -14,8 +14,8 @@ import zipfile
 import numpy as np
 from PIL import Image
 
-from photoredactor.local_generative import LocalGenerationOptions, LocalImageClient, _LocalServer
-from photoredactor.model_manager import LCM_ACCELERATOR, MODEL_CATALOG, LocalModelSpec, ModelManagerError, ModelStore
+from uzyro.local_generative import LocalGenerationOptions, LocalImageClient, _LocalServer
+from uzyro.model_manager import LCM_ACCELERATOR, MODEL_CATALOG, LocalModelSpec, ModelManagerError, ModelStore
 
 
 class StubLocalClient(LocalImageClient):

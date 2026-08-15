@@ -11,9 +11,9 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from photoredactor.core import Document, Layer
-from photoredactor.project_tiles import is_tiled_array, read_tiled_array
-from photoredactor.rendering import RenderEngine
+from uzyro.core import Document, Layer
+from uzyro.project_tiles import is_tiled_array, read_tiled_array
+from uzyro.rendering import RenderEngine
 
 
 def patterned_rgba(width: int, height: int, offset: int = 0, alpha: int = 255) -> np.ndarray:

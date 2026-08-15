@@ -6,7 +6,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from photoredactor.core import Document, blend_rgb, frequency_separation, portrait_cleanup, reduce_red_eye
+from uzyro.core import Document, blend_rgb, frequency_separation, portrait_cleanup, reduce_red_eye
 
 
 def portrait_scene(scale: int = 1, skin_tone: tuple[int, int, int] = (185, 126, 102)) -> tuple[np.ndarray, dict[str, np.ndarray]]:

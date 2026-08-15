@@ -4,8 +4,8 @@ import copy
 
 import numpy as np
 
-from photoredactor.core import Document, text_path_point_at_distance, text_path_samples
-from photoredactor.history import History, TextDataCommand
+from uzyro.core import Document, text_path_point_at_distance, text_path_samples
+from uzyro.history import History, TextDataCommand
 
 
 def horizontal_points() -> list[list[float]]:

@@ -6,8 +6,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from photoredactor.core import Document
-from photoredactor.plugins import MANIFEST_FORMAT, PLUGIN_API_VERSION, PluginRegistry
+from uzyro.core import Document
+from uzyro.plugins import MANIFEST_FORMAT, PLUGIN_API_VERSION, PluginRegistry
 
 
 def write_plugin(root: Path, plugin_id: str, permissions: list[str], source: str) -> Path:
@@ -118,7 +118,7 @@ def test_importer_and_exporter_extension_points_exchange_documents(tmp_path: Pat
         "example.formats",
         ["document", "filesystem.read", "filesystem.write"],
         "from pathlib import Path\n"
-        "from photoredactor.core import Document\n"
+        "from uzyro.core import Document\n"
         "def register(api):\n"
         "    def load(source, params):\n"
         "        size = int(Path(source).read_text()); return Document.new(size, size, (10, 20, 30, 255))\n"
@@ -139,3 +139,16 @@ def test_importer_and_exporter_extension_points_exchange_documents(tmp_path: Pat
     target = tmp_path / "result.size"
     registry.export_document("Размер", document, target)
     assert target.read_text(encoding="utf-8") == "7x7"
+
+
+def test_legacy_manifest_format_remains_discoverable(tmp_path: Path) -> None:
+    folder = write_plugin(tmp_path, "example.legacy-brand", [], "def register(api):\n    pass\n")
+    manifest_path = folder / "plugin.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["format"] = f"{'Photo' + 'Redactor'} plugin v1"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    registry = PluginRegistry([tmp_path], tmp_path / "permissions.json")
+    registry.discover()
+    assert "example.legacy-brand" in registry.plugins
+    assert not registry.errors

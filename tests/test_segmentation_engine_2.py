@@ -5,14 +5,14 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from photoredactor.segmentation import (
+from uzyro.segmentation import (
     OpenCvCpuSegmentationBackend,
     SegmentationBackend,
     SegmentationService,
     postprocess_segmentation,
 )
-from photoredactor.segmentation_config import SegmentationConfig
-from photoredactor.selection_ops import sky_selection_mask
+from uzyro.segmentation_config import SegmentationConfig
+from uzyro.selection_ops import sky_selection_mask
 
 
 class FixedBackend(SegmentationBackend):
@@ -98,10 +98,10 @@ def test_backend_failure_falls_back_without_breaking_selection() -> None:
 
 
 def test_model_configuration_is_centralized_and_environment_driven(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("PHOTO_REDACTOR_SEGMENTATION_DIR", str(tmp_path / "models"))
-    monkeypatch.setenv("PHOTO_REDACTOR_SUBJECT_MODEL", str(tmp_path / "subject-custom.onnx"))
-    monkeypatch.setenv("PHOTO_REDACTOR_SKY_MODEL", str(tmp_path / "sky-custom.onnx"))
-    monkeypatch.setenv("PHOTO_REDACTOR_SEGMENTATION_SIZE", "512")
+    monkeypatch.setenv("UZYRO_SEGMENTATION_DIR", str(tmp_path / "models"))
+    monkeypatch.setenv("UZYRO_SUBJECT_MODEL", str(tmp_path / "subject-custom.onnx"))
+    monkeypatch.setenv("UZYRO_SKY_MODEL", str(tmp_path / "sky-custom.onnx"))
+    monkeypatch.setenv("UZYRO_SEGMENTATION_SIZE", "512")
     config = SegmentationConfig.from_environment()
     assert config.model_dir == tmp_path / "models"
     assert config.subject_model == tmp_path / "subject-custom.onnx"

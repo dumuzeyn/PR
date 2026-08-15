@@ -4,8 +4,8 @@ import tkinter as tk
 from types import SimpleNamespace
 import unittest
 
-from photoredactor.ui.icons import TOOL_GROUPS, tool_icon_bitmap
-from photoredactor.ui.tool_palette import ToolPaletteDialog
+from uzyro.ui.icons import TOOL_GROUPS, tool_icon_bitmap
+from uzyro.ui.tool_palette import ToolPaletteDialog
 
 
 DEFINITIONS = [

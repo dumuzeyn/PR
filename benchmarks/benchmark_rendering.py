@@ -9,8 +9,8 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from photoredactor.core import Document, Layer, draw_brush
-from photoredactor.rendering import RenderEngine
+from uzyro.core import Document, Layer, draw_brush
+from uzyro.rendering import RenderEngine
 
 
 def elapsed_ms(callback, repeats: int = 1) -> float:
@@ -52,7 +52,7 @@ def run_case(width: int, height: int, layer_count: int) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="PhotoRedactor rendering benchmark")
+    parser = argparse.ArgumentParser(description="UZYRO rendering benchmark")
     parser.add_argument("--include-4k", action="store_true", help="also run memory-intensive 4K cases")
     args = parser.parse_args()
     for layer_count in (1, 10):

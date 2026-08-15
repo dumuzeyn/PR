@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from photoredactor.generative_api import (
+from uzyro.generative_api import (
     GenerativeAPIError,
     inpaint_proxy,
     outpaint_proxy,
@@ -70,7 +70,7 @@ def test_outpaint_dimensions_are_validated_before_request() -> None:
 
 
 def test_generative_module_has_no_cloud_client_or_credentials() -> None:
-    import photoredactor.generative_api as module
+    import uzyro.generative_api as module
 
     assert not hasattr(module, "StabilityImageClient")
     assert "STABILITY_API_KEY" not in module.__dict__

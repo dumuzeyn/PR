@@ -6,8 +6,8 @@ import cv2
 import numpy as np
 import pytest
 
-from photoredactor.core import alpha_blend_inplace, apply_filter_stack
-from photoredactor.gpu_acceleration import (
+from uzyro.core import alpha_blend_inplace, apply_filter_stack
+from uzyro.gpu_acceleration import (
     accelerated_alpha_blend,
     accelerated_gaussian_blur,
     acceleration_metrics,
@@ -21,8 +21,8 @@ from photoredactor.gpu_acceleration import (
 @pytest.fixture
 def gpu_environment(monkeypatch: pytest.MonkeyPatch):
     reset_acceleration_metrics()
-    monkeypatch.setenv("PHOTO_REDACTOR_GPU", "force")
-    monkeypatch.setenv("PHOTO_REDACTOR_GPU_MIN_PIXELS", "1")
+    monkeypatch.setenv("UZYRO_GPU", "force")
+    monkeypatch.setenv("UZYRO_GPU_MIN_PIXELS", "1")
     status = acceleration_status()
     if status["backend"] == "cpu":
         pytest.skip("No real OpenCL or CUDA device is available")
@@ -42,7 +42,7 @@ def test_real_gpu_blur_and_filter_stack_match_cpu(gpu_environment, monkeypatch: 
         {"type": "emboss", "strength": 0.2, "enabled": True},
     ]
     gpu_result = apply_filter_stack(source, filters)
-    monkeypatch.setenv("PHOTO_REDACTOR_GPU", "off")
+    monkeypatch.setenv("UZYRO_GPU", "off")
     cpu_result = apply_filter_stack(source, filters)
     assert np.max(np.abs(gpu_result.astype(np.int16) - cpu_result.astype(np.int16))) <= 2
     metrics = acceleration_metrics()
@@ -57,7 +57,7 @@ def test_real_gpu_alpha_composite_matches_cpu(gpu_environment, monkeypatch: pyte
     mask = rng.integers(0, 256, source.shape[:2], dtype=np.uint8)
     gpu_result = accelerated_alpha_blend(source, destination, 0.73, mask, 0.64)
     assert gpu_result is not None
-    monkeypatch.setenv("PHOTO_REDACTOR_GPU", "off")
+    monkeypatch.setenv("UZYRO_GPU", "off")
     cpu_result = destination.copy()
     alpha_blend_inplace(cpu_result, source, 0, 0, 0.73, mask, 0.64, "Normal")
     assert np.max(np.abs(gpu_result.astype(np.int16) - cpu_result.astype(np.int16))) <= 1
@@ -65,7 +65,7 @@ def test_real_gpu_alpha_composite_matches_cpu(gpu_environment, monkeypatch: pyte
 
 def test_auto_mode_calibrates_and_benchmark_reports_real_measurements(monkeypatch: pytest.MonkeyPatch) -> None:
     reset_acceleration_metrics()
-    monkeypatch.setenv("PHOTO_REDACTOR_GPU", "auto")
+    monkeypatch.setenv("UZYRO_GPU", "auto")
     selected = calibrate_acceleration(force=True)
     assert isinstance(selected, bool)
     if not acceleration_status()["enabled"]:
@@ -82,7 +82,7 @@ def test_auto_mode_calibrates_and_benchmark_reports_real_measurements(monkeypatc
 
 
 def test_gpu_can_be_disabled_without_changing_result(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("PHOTO_REDACTOR_GPU", "off")
+    monkeypatch.setenv("UZYRO_GPU", "off")
     reset_acceleration_metrics()
     source = np.full((300, 400, 4), (90, 120, 150, 255), dtype=np.uint8)
     result = accelerated_gaussian_blur(source, (7, 7), 2.0)

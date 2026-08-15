@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from photoredactor.core import Document, GradientEngine, editable_bezier_nodes, render_shape_layer, shape_data_bounds, transform_shape_data_to_box
-from photoredactor.history import History, LayerGroupMoveCommand
+from uzyro.core import Document, GradientEngine, editable_bezier_nodes, render_shape_layer, shape_data_bounds, transform_shape_data_to_box
+from uzyro.history import History, LayerGroupMoveCommand
 
 
 BLACK = (0, 0, 0, 255)

@@ -7,9 +7,9 @@ import unittest
 
 import numpy as np
 
-from photoredactor.app import PhotoRedactorApp
-from photoredactor.core import Document
-from photoredactor.generative_api import GeneratedVariant, variant_seeds
+from uzyro.app import UZYROApp
+from uzyro.core import Document
+from uzyro.generative_api import GeneratedVariant, variant_seeds
 
 
 def _fake_local_variants(operation, source, mask, margins, settings, count, cancel) -> list[GeneratedVariant]:
@@ -35,10 +35,10 @@ class StartupGenerativeTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
         self.original_local_app_data = os.environ.get("LOCALAPPDATA")
-        self.original_clipboard_reader = PhotoRedactorApp.read_clipboard_image
+        self.original_clipboard_reader = UZYROApp.read_clipboard_image
         os.environ["LOCALAPPDATA"] = self.temp.name
-        PhotoRedactorApp.read_clipboard_image = staticmethod(lambda: None)
-        self.app = PhotoRedactorApp()
+        UZYROApp.read_clipboard_image = staticmethod(lambda: None)
+        self.app = UZYROApp()
         self.app.run_background = lambda _label, worker, done=None, is_current=None: done(worker()) if done else worker()
         self.app.local_generation_ready = lambda: True
         self.app.local_generation_variants = _fake_local_variants
@@ -46,7 +46,7 @@ class StartupGenerativeTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.app.destroy()
-        PhotoRedactorApp.read_clipboard_image = staticmethod(self.original_clipboard_reader)
+        UZYROApp.read_clipboard_image = staticmethod(self.original_clipboard_reader)
         if self.original_local_app_data is None:
             os.environ.pop("LOCALAPPDATA", None)
         else:

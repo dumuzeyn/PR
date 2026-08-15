@@ -8,7 +8,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from photoredactor.core import BrushPathSampler, BrushSettings, Layer, PixelBrushStroke, RetouchStroke
+from uzyro.core import BrushPathSampler, BrushSettings, Layer, PixelBrushStroke, RetouchStroke
 
 
 def benchmark_stroke(mode: str, points: list[tuple[int, int]], pixels: np.ndarray) -> tuple[float, int]:

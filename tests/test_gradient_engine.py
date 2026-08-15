@@ -1,6 +1,6 @@
 import numpy as np
 
-from photoredactor.core import Document, GradientEngine, Layer, apply_gradient, contiguous_color_region
+from uzyro.core import Document, GradientEngine, Layer, apply_gradient, contiguous_color_region
 
 
 BLACK = (0, 0, 0, 255)

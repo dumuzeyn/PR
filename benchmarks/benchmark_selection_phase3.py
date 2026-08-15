@@ -9,8 +9,8 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from photoredactor.core import Document
-from photoredactor.segmentation import OpenCvCpuSegmentationBackend
+from uzyro.core import Document
+from uzyro.segmentation import OpenCvCpuSegmentationBackend
 
 
 def timed(label: str, operation) -> None:

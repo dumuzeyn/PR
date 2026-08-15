@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from photoredactor.core import (
+from uzyro.core import (
     BrushPathSampler,
     BrushSettings,
     Document,

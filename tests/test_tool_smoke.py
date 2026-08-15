@@ -1,6 +1,6 @@
 import numpy as np
 
-from photoredactor.core import (
+from uzyro.core import (
     Document,
     apply_filter_stack,
     apply_gradient,

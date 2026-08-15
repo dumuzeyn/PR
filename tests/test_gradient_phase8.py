@@ -5,8 +5,8 @@ import unittest
 
 import numpy as np
 
-from photoredactor.app import PhotoRedactorApp
-from photoredactor.core import Document, GradientEngine
+from uzyro.app import UZYROApp
+from uzyro.core import Document, GradientEngine
 
 
 RED = (255, 0, 0, 255)
@@ -110,14 +110,14 @@ def test_professional_gradient_definition_survives_project_round_trip(tmp_path) 
 
 class GradientEditorUiTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.original_clipboard_reader = PhotoRedactorApp.read_clipboard_image
-        PhotoRedactorApp.read_clipboard_image = staticmethod(lambda: None)
-        self.app = PhotoRedactorApp()
+        self.original_clipboard_reader = UZYROApp.read_clipboard_image
+        UZYROApp.read_clipboard_image = staticmethod(lambda: None)
+        self.app = UZYROApp()
         self.app.update()
 
     def tearDown(self) -> None:
         self.app.destroy()
-        PhotoRedactorApp.read_clipboard_image = staticmethod(self.original_clipboard_reader)
+        UZYROApp.read_clipboard_image = staticmethod(self.original_clipboard_reader)
 
     def test_editor_changes_visible_settings_with_generation_mode(self) -> None:
         self.app.gradient_editor_dialog(self.app.current_gradient_definition())

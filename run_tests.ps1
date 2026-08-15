@@ -7,7 +7,7 @@ $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $testFiles = Get-ChildItem (Join-Path $root "tests") -Filter "test_*.py" | Sort-Object Name
 $uiFiles = @(
   $testFiles | Where-Object {
-    Select-String -LiteralPath $_.FullName -Pattern 'PhotoRedactorApp\(\)|tk\.Tk\(\)' -Quiet
+    Select-String -LiteralPath $_.FullName -Pattern 'UZYROApp\(\)|tk\.Tk\(\)' -Quiet
   }
 )
 $uiPaths = @($uiFiles | ForEach-Object { $_.FullName })

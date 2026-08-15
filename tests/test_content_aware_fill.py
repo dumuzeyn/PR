@@ -3,7 +3,7 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-from photoredactor.core import content_aware_fill, content_aware_fill_variants
+from uzyro.core import content_aware_fill, content_aware_fill_variants
 
 
 def source_guidance_scene() -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:

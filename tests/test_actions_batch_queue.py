@@ -6,10 +6,10 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-from photoredactor.automation import ACTION_FORMAT, ActionRecorder, ActionRunner
-from photoredactor.batch_queue import BatchQueue
-from photoredactor.core import Document
-from photoredactor.history import LayerInsertCommand, LayerPropertyCommand, PixelPatchCommand, SelectionMaskCommand
+from uzyro.automation import ACTION_FORMAT, ActionRecorder, ActionRunner
+from uzyro.batch_queue import BatchQueue
+from uzyro.core import Document
+from uzyro.history import LayerInsertCommand, LayerPropertyCommand, PixelPatchCommand, SelectionMaskCommand
 
 
 def test_history_commands_record_and_replay_pixels_properties_and_selection(tmp_path: Path) -> None:
@@ -136,3 +136,16 @@ def test_batch_queue_handles_collisions_errors_progress_cancel_and_persistence(t
     assert cancel_job.state == "cancelled"
     assert cancel_job.items[0].state == "completed"
     assert cancel_job.items[1].state == "cancelled"
+
+
+def test_legacy_action_and_batch_queue_formats_remain_readable(tmp_path: Path) -> None:
+    legacy_brand = "Photo" + "Redactor"
+    action = {"format": f"{legacy_brand} action v3", "name": "Legacy", "steps": []}
+    assert ActionRunner().run(Document.new(4, 4), action) == 0
+
+    queue_path = tmp_path / "legacy-queue.json"
+    queue_path.write_text(
+        json.dumps({"format": f"{legacy_brand} batch queue v1", "jobs": []}),
+        encoding="utf-8",
+    )
+    assert BatchQueue().load(queue_path) == 0

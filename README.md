@@ -1,4 +1,4 @@
-# PhotoRedactor
+# UZYRO
 
 Personal Photoshop-like raster editor for Windows.
 
@@ -61,7 +61,7 @@ This repository starts with a real working editor and an architecture intended t
 
 ## Dependency policy
 
-PhotoRedactor does not depend on placeholder packages or simulated AI libraries. Runtime dependencies are established projects installed from their real distributions: NumPy, OpenCV, Pillow, rawpy and psd-tools. New dependencies must be checked for a genuine upstream project, an importable implementation and actual use in the packaged application before they are added.
+UZYRO does not depend on placeholder packages or simulated AI libraries. Runtime dependencies are established projects installed from their real distributions: NumPy, OpenCV, Pillow, rawpy and psd-tools. New dependencies must be checked for a genuine upstream project, an importable implementation and actual use in the packaged application before they are added.
 
 ## Architecture
 
@@ -73,7 +73,7 @@ Public facade modules remain stable while editor, document and rendering behavio
 .\build_exe.ps1
 ```
 
-The executable will be created in `dist\PhotoRedactor.exe`.
+The executable will be created in `dist\UZYRO.exe`.
 
 ## Run tests
 
@@ -87,7 +87,7 @@ Intentional golden updates use `python benchmarks\update_goldens.py`; real-image
 
 ## Performance diagnostics
 
-Set `PHOTO_REDACTOR_DEBUG_PERF=1` before starting the editor to collect timing counters for composition, dirty tiles, filters, effects and PIL/Tk canvas conversion. Profiling is disabled by default and does not write into the interface.
+Set `UZYRO_DEBUG_PERF=1` before starting the editor to collect timing counters for composition, dirty tiles, filters, effects and PIL/Tk canvas conversion. Profiling is disabled by default and does not write into the interface.
 
 Run the repeatable rendering benchmark with:
 
@@ -99,27 +99,27 @@ Measured results and the list of correctness fallbacks are recorded in [`PERFORM
 
 ## Generative AI
 
-The EXE does not contain model weights. Open the top-level `Модели` menu after `Вид`, choose `Локальные модели...`, and download a model only when it is needed. PhotoRedactor detects NVIDIA CUDA, Vulkan or CPU, downloads the matching official stable-diffusion.cpp Windows engine, verifies the engine and model SHA-256 values, and stores them in the current user's local application data. Realistic Vision 5.1 Inpainting plus its LCM accelerator use about 2.1 GiB; engine size depends on the selected backend.
+The EXE does not contain model weights. Open the top-level `Модели` menu after `Вид`, choose `Локальные модели...`, and download a model only when it is needed. UZYRO detects NVIDIA CUDA, Vulkan or CPU, downloads the matching official stable-diffusion.cpp Windows engine, verifies the engine and model SHA-256 values, and stores them in the current user's local application data. Realistic Vision 5.1 Inpainting plus its LCM accelerator use about 2.1 GiB; engine size depends on the selected backend.
 
-`Правка -> Генеративная заливка` uses the current selection. `Изображение -> Генеративное расширение холста` adds content around the document. The prompt describes what must appear, while the negative prompt excludes unwanted content. `Быстро` and `Баланс` use the open LCM-LoRA accelerator at 4 or 6 steps; `Качество` uses regular DPM++ 2M sampling, and `Вручную` exposes all values. The local model stays loaded in a private `127.0.0.1` process between variants and is stopped when PhotoRedactor exits.
+`Правка -> Генеративная заливка` uses the current selection. `Изображение -> Генеративное расширение холста` adds content around the document. The prompt describes what must appear, while the negative prompt excludes unwanted content. `Быстро` and `Баланс` use the open LCM-LoRA accelerator at 4 or 6 steps; `Качество` uses regular DPM++ 2M sampling, and `Вручную` exposes all values. The local model stays loaded in a private `127.0.0.1` process between variants and is stopped when UZYRO exits.
 
-Both workflows run locally in the background, support cancellation, one to four variants and exact seed repeat, preserve pixels outside the mask, and apply the result as a separate undoable layer. PhotoRedactor does not require an API key and does not send the document to a cloud image provider.
+Both workflows run locally in the background, support cancellation, one to four variants and exact seed repeat, preserve pixels outside the mask, and apply the result as a separate undoable layer. UZYRO does not require an API key and does not send the document to a cloud image provider.
 
 ## Download the automatic Windows build
 
-Every push to `master` starts the `Build PhotoRedactor for Windows` workflow. Open the repository's `Actions` tab, select the latest successful run and download the `PhotoRedactor-Windows` artifact. It contains the current `PhotoRedactor.exe` built and tested by GitHub.
+Every push to `master` starts the `Build UZYRO for Windows` workflow. Open the repository's `Actions` tab, select the latest successful run and download the `UZYRO-Windows` artifact. It contains the current `UZYRO.exe` built and tested by GitHub.
 
 ## PSD and PSB compatibility
 
 PSD and PSB files can be opened from the regular file dialog. Pixel layers retain their order, names, coordinates, opacity, visibility, locks, clipping, supported blend modes and raster masks. DPI, ICC profile and document depth are imported; 16/32-bit RGB layers retain a high-precision working buffer when the source exposes one.
 
-`Файл -> Экспорт совместимого PSD/PSB` writes a layered file and reports every complex PhotoRedactor layer that had to become a pixel layer. Imported Photoshop text remains editable in PhotoRedactor with approximate font parameters and its original visual cache. The current upstream writer cannot create editable Photoshop type, shape or Smart Object records, so the professional round-trip item remains open in `ROADMAP.md`.
+`Файл -> Экспорт совместимого PSD/PSB` writes a layered file and reports every complex UZYRO layer that had to become a pixel layer. Imported Photoshop text remains editable in UZYRO with approximate font parameters and its original visual cache. The current upstream writer cannot create editable Photoshop type, shape or Smart Object records, so the professional round-trip item remains open in `ROADMAP.md`.
 
 ## Printing and spot colors
 
 `Файл -> Печать` opens the native Windows printer dialog and sends the document through the selected printer driver. The image is centered and fitted inside the driver's printable area while preserving its aspect ratio.
 
-`Изображение -> Управление цветом -> Плашечные краски` manages document spot inks and assigns them to layers. Libraries can be exchanged as Adobe Swatch Exchange (`.ase`) or PhotoRedactor (`.prswatches`) files. Licensed Pantone ASE libraries can be imported by their owner; PhotoRedactor does not bundle or fabricate proprietary Pantone color data.
+`Изображение -> Управление цветом -> Плашечные краски` manages document spot inks and assigns them to layers. Libraries can be exchanged as Adobe Swatch Exchange (`.ase`) or UZYRO (`.prswatches`) files. Licensed Pantone ASE libraries can be imported by their owner; UZYRO does not bundle or fabricate proprietary Pantone color data.
 
 The print preparation window can export four process plates and one grayscale TIFF plate for every assigned spot ink. `separations.json` records the profile, dimensions, Lab alternate values, sources and plate filenames.
 
@@ -148,13 +148,13 @@ The print preparation window can export four process plates and one grayscale TI
 
 ## Plugins and actions
 
-- Put Python plugins in `%APPDATA%\PhotoRedactor\plugins` and reload them from `Действия -> Перезагрузить плагины`.
+- Put Python plugins in `%APPDATA%\UZYRO\plugins` and reload them from `Действия -> Перезагрузить плагины`.
 - API v2 plugins use a versioned `plugin.json`, stay disabled until their requested permissions are approved in `Действия -> Управление плагинами`, and execute in a guarded child process. Plugin importers and exporters appear under `Файл`.
 - The plugin contract and external filter protocol are documented in [`PLUGINS.md`](PLUGINS.md).
 - Action v3 records the editor's actual undoable operations, including paint, masks, selections, vector/text edits, layer properties and layer structure. The action editor supports ordering, conditions, stops and per-step error policies; old v2 files remain readable. A ready example is in `actions\web_thumbnail.json`.
 - The batch queue supports multiple jobs, PNG/JPEG/WebP/TIFF/BMP output, rename/overwrite/skip collision policies, continue/stop error policies, progress, cancellation, per-file results and queue save/restore.
-- `PHOTO_REDACTOR_CACHE_MB` controls the RAM budget for render caches; older arrays automatically move to the scratch folder.
-- `PHOTO_REDACTOR_GPU=auto` benchmarks OpenCL and uses it only when beneficial; `force` always selects GPU and `off` keeps all work on CPU. The same modes and a live benchmark are available under Analysis > GPU settings.
+- `UZYRO_CACHE_MB` controls the RAM budget for render caches; older arrays automatically move to the scratch folder.
+- `UZYRO_GPU=auto` benchmarks OpenCL and uses it only when beneficial; `force` always selects GPU and `off` keeps all work on CPU. The same modes and a live benchmark are available under Analysis > GPU settings.
 
 ## Navigation
 

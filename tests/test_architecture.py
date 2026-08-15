@@ -2,7 +2,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE_DIRECTORIES = (ROOT / "photoredactor", ROOT / "tests")
+SOURCE_DIRECTORIES = (ROOT / "uzyro", ROOT / "tests")
 MAX_SOURCE_LINES = 500
 
 
@@ -19,13 +19,13 @@ def test_python_sources_stay_within_reviewable_size() -> None:
 
 
 def test_public_facades_keep_existing_entry_points() -> None:
-    from photoredactor.app import PhotoRedactorApp
-    from photoredactor.core import Document, Layer, apply_filter_stack, content_aware_fill
-    from photoredactor.history import History, LayerPropertyCommand
-    from photoredactor.ui.tool_options import ToolOptionsPanel
-    from photoredactor.ui.tool_palette import ToolPalette, ToolPaletteDialog
+    from uzyro.app import UZYROApp
+    from uzyro.core import Document, Layer, apply_filter_stack, content_aware_fill
+    from uzyro.history import History, LayerPropertyCommand
+    from uzyro.ui.tool_options import ToolOptionsPanel
+    from uzyro.ui.tool_palette import ToolPalette, ToolPaletteDialog
 
-    assert PhotoRedactorApp.__name__ == "PhotoRedactorApp"
+    assert UZYROApp.__name__ == "UZYROApp"
     assert Document.__name__ == "Document"
     assert Layer.__name__ == "Layer"
     assert callable(apply_filter_stack)

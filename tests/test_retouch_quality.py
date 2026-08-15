@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from photoredactor.core import Layer, RetouchStroke, clone_or_heal, local_retouch, retouch_falloff_mask, spot_heal
+from uzyro.core import Layer, RetouchStroke, clone_or_heal, local_retouch, retouch_falloff_mask, spot_heal
 
 
 def textured_pixels(width: int = 128, height: int = 96) -> np.ndarray:

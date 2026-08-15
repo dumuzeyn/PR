@@ -5,7 +5,7 @@ from collections.abc import Callable
 import cv2
 import numpy as np
 
-from photoredactor.core import (
+from uzyro.core import (
     BrushPathSampler,
     BrushSettings,
     Document,

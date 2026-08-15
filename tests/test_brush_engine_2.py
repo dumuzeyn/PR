@@ -6,10 +6,10 @@ from types import SimpleNamespace
 import cv2
 import numpy as np
 
-from photoredactor.brush_dynamics import dynamic_dabs
-from photoredactor.brush_tip import BRUSH_TEXTURE, BrushTipCache
-from photoredactor.core import BrushPathSampler, BrushSettings, Layer, PixelBrushStroke
-from photoredactor.tablet_input import EventTabletBackend, TabletSample
+from uzyro.brush_dynamics import dynamic_dabs
+from uzyro.brush_tip import BRUSH_TEXTURE, BrushTipCache
+from uzyro.core import BrushPathSampler, BrushSettings, Layer, PixelBrushStroke
+from uzyro.tablet_input import EventTabletBackend, TabletSample
 
 
 def save_mask(path: Path, mask: np.ndarray) -> str:

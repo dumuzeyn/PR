@@ -13,22 +13,22 @@ import cv2
 import numpy as np
 from PIL import Image
 
-from photoredactor.app import PhotoRedactorApp
-from photoredactor.automation import ACTION_FORMAT, ActionStep
-from photoredactor.core import Layer
-from photoredactor.history import DocumentStateCommand, LayerFieldsCommand, LayerInsertCommand, LayerMoveCommand, PixelPatchCommand, SelectionMaskCommand, ShapeDataCommand, TextDataCommand
-from photoredactor.ui.shortcuts import COMMAND_SHORTCUTS
+from uzyro.app import UZYROApp
+from uzyro.automation import ACTION_FORMAT, ActionStep
+from uzyro.core import Layer
+from uzyro.history import DocumentStateCommand, LayerFieldsCommand, LayerInsertCommand, LayerMoveCommand, PixelPatchCommand, SelectionMaskCommand, ShapeDataCommand, TextDataCommand
+from uzyro.ui.shortcuts import COMMAND_SHORTCUTS
 
 class StartupTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.original_clipboard_reader = PhotoRedactorApp.read_clipboard_image
-        PhotoRedactorApp.read_clipboard_image = staticmethod(lambda: None)
-        self.app = PhotoRedactorApp()
+        self.original_clipboard_reader = UZYROApp.read_clipboard_image
+        UZYROApp.read_clipboard_image = staticmethod(lambda: None)
+        self.app = UZYROApp()
         self.app.update()
 
     def tearDown(self) -> None:
         self.app.destroy()
-        PhotoRedactorApp.read_clipboard_image = staticmethod(self.original_clipboard_reader)
+        UZYROApp.read_clipboard_image = staticmethod(self.original_clipboard_reader)
 
     def test_filter_and_adjustment_dialogs_edit_channels_and_filter_mask(self) -> None:
         original_wait = tk.Toplevel.wait_window
@@ -440,7 +440,7 @@ class StartupTests(unittest.TestCase):
         self.assertFalse(self.app._composite_dirty)
 
     def test_gpu_settings_dialog_exposes_backend_and_persistent_modes(self) -> None:
-        original = os.environ.get("PHOTO_REDACTOR_GPU")
+        original = os.environ.get("UZYRO_GPU")
         original_save = self.app.save_settings
         self.app.save_settings = lambda: None
         try:
@@ -450,13 +450,13 @@ class StartupTests(unittest.TestCase):
             self.assertTrue(self.app._gpu_benchmark_result.winfo_exists())
             self.app._gpu_mode_variable.set("off")
             self.app._gpu_apply()
-            self.assertEqual(os.environ["PHOTO_REDACTOR_GPU"], "off")
+            self.assertEqual(os.environ["UZYRO_GPU"], "off")
         finally:
             self.app.save_settings = original_save
             if original is None:
-                os.environ.pop("PHOTO_REDACTOR_GPU", None)
+                os.environ.pop("UZYRO_GPU", None)
             else:
-                os.environ["PHOTO_REDACTOR_GPU"] = original
+                os.environ["UZYRO_GPU"] = original
 
     def test_action_editor_and_batch_queue_expose_manageable_steps_and_jobs(self) -> None:
         self.app.action_recorder.steps = [

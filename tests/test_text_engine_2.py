@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import numpy as np
 
-from photoredactor.core import Document
-from photoredactor.text_layout import TextLayoutEngine
-from photoredactor.text_shaper import DEFAULT_TEXT_SHAPER, FontResolver, TextStyle, grapheme_clusters, text_direction
+from uzyro.core import Document
+from uzyro.text_layout import TextLayoutEngine
+from uzyro.text_shaper import DEFAULT_TEXT_SHAPER, FontResolver, TextStyle, grapheme_clusters, text_direction
 
 
 def alpha_bounds(pixels: np.ndarray) -> tuple[int, int, int, int]:

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import numpy as np
 
-from photoredactor.core import (
+from uzyro.core import (
     Document,
     Layer,
     blend_rgb,

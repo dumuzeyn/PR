@@ -3,11 +3,11 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-from photoredactor.app_mixins.select_mask import SelectMaskMixin
-from photoredactor.app_shared import SELECT_MASK_PREVIEW_MODES
-from photoredactor.core import Document, Layer, smart_radius_refine
-from photoredactor.segmentation import OpenCvCpuSegmentationBackend, SegmentationService
-from photoredactor.selection_color import combine_sample_masks
+from uzyro.app_mixins.select_mask import SelectMaskMixin
+from uzyro.app_shared import SELECT_MASK_PREVIEW_MODES
+from uzyro.core import Document, Layer, smart_radius_refine
+from uzyro.segmentation import OpenCvCpuSegmentationBackend, SegmentationService
+from uzyro.selection_color import combine_sample_masks
 
 
 def test_color_range_combines_positive_and_negative_samples_with_soft_alpha() -> None:

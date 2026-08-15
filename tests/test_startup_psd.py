@@ -5,26 +5,26 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from photoredactor.app import PhotoRedactorApp
-from photoredactor.core import Document
-from photoredactor.psd_compat import export_psd
-import photoredactor.app_mixins.psd_files as psd_files_module
+from uzyro.app import UZYROApp
+from uzyro.core import Document
+from uzyro.psd_compat import export_psd
+import uzyro.app_mixins.psd_files as psd_files_module
 
 
 class StartupPSDTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
         self.original_local_app_data = os.environ.get("LOCALAPPDATA")
-        self.original_clipboard_reader = PhotoRedactorApp.read_clipboard_image
+        self.original_clipboard_reader = UZYROApp.read_clipboard_image
         os.environ["LOCALAPPDATA"] = self.temp.name
-        PhotoRedactorApp.read_clipboard_image = staticmethod(lambda: None)
-        self.app = PhotoRedactorApp()
+        UZYROApp.read_clipboard_image = staticmethod(lambda: None)
+        self.app = UZYROApp()
         self.app.run_background = lambda _label, worker, done=None, is_current=None: done(worker()) if done else worker()
         self.app.update()
 
     def tearDown(self) -> None:
         self.app.destroy()
-        PhotoRedactorApp.read_clipboard_image = staticmethod(self.original_clipboard_reader)
+        UZYROApp.read_clipboard_image = staticmethod(self.original_clipboard_reader)
         if self.original_local_app_data is None:
             os.environ.pop("LOCALAPPDATA", None)
         else:

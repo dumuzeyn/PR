@@ -2,8 +2,8 @@ import copy
 
 import numpy as np
 
-from photoredactor.core import Document, Layer
-from photoredactor.history import History, LayersDeleteCommand, ShapeDataCommand
+from uzyro.core import Document, Layer
+from uzyro.history import History, LayersDeleteCommand, ShapeDataCommand
 
 
 def test_color_range_is_global_and_perceptual() -> None:

@@ -4,9 +4,9 @@ import copy
 
 import numpy as np
 
-from photoredactor.core import Document, Layer
-from photoredactor.action_history import apply_history_payload, history_command_to_payload
-from photoredactor.history import GeneratedExpandCommand, History
+from uzyro.core import Document, Layer
+from uzyro.action_history import apply_history_payload, history_command_to_payload
+from uzyro.history import GeneratedExpandCommand, History
 
 
 def test_generation_metadata_survives_project_roundtrip(tmp_path) -> None:

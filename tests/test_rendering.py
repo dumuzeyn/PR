@@ -1,8 +1,8 @@
 import numpy as np
 
-from photoredactor.core import Document, Layer, draw_brush, draw_mask_brush
-from photoredactor.performance import PerformanceProfiler
-from photoredactor.rendering import RenderEngine
+from uzyro.core import Document, Layer, draw_brush, draw_mask_brush
+from uzyro.performance import PerformanceProfiler
+from uzyro.rendering import RenderEngine
 
 
 def sample_document() -> Document:

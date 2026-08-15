@@ -1,8 +1,8 @@
 from types import SimpleNamespace
 
-from photoredactor.app import TOOL_DEFINITIONS
-from photoredactor.ui.icons import SHORTCUTS
-from photoredactor.ui.shortcuts import (
+from uzyro.app import TOOL_DEFINITIONS
+from uzyro.ui.icons import SHORTCUTS
+from uzyro.ui.shortcuts import (
     TOOL_SHORTCUT_GROUPS,
     accelerator,
     command_for_event,

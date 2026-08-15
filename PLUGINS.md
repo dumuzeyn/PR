@@ -1,12 +1,12 @@
-# PhotoRedactor Plugin SDK v2
+# UZYRO Plugin SDK v2
 
-Плагины API v2 находятся в отдельных папках внутри `%APPDATA%\PhotoRedactor\plugins`. Каждый плагин состоит из `plugin.json` и указанного в нём Python-файла. Код выполняется в отдельном процессе с таймаутом; авария плагина не завершает редактор.
+Плагины API v2 находятся в отдельных папках внутри `%APPDATA%\UZYRO\plugins`. Каждый плагин состоит из `plugin.json` и указанного в нём Python-файла. Код выполняется в отдельном процессе с таймаутом; авария плагина не завершает редактор.
 
 ## Манифест
 
 ```json
 {
-  "format": "PhotoRedactor plugin v1",
+  "format": "UZYRO plugin v1",
   "id": "example.invert",
   "name": "Example Invert",
   "version": "1.0.0",

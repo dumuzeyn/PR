@@ -6,7 +6,7 @@ import numpy as np
 from PIL import Image
 import pytest
 
-from photoredactor.quality_metrics import assert_similar_image
+from uzyro.quality_metrics import assert_similar_image
 from tests.golden_cases import GOLDEN_CASES
 
 

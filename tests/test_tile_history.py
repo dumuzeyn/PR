@@ -3,9 +3,9 @@ from pathlib import Path
 
 import numpy as np
 
-from photoredactor.brush_engine import BrushSettings, PixelBrushStroke
-from photoredactor.core import Document
-from photoredactor.history import History, LayerFieldsCommand, LayerVisibilityCommand, MaskTilePatchCommand, PixelTilePatchCommand, TilePatch
+from uzyro.brush_engine import BrushSettings, PixelBrushStroke
+from uzyro.core import Document
+from uzyro.history import History, LayerFieldsCommand, LayerVisibilityCommand, MaskTilePatchCommand, PixelTilePatchCommand, TilePatch
 
 
 def test_pixel_tile_command_undo_redo() -> None:

@@ -6,11 +6,11 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-from photoredactor.automation import ActionRecorder, ActionRunner
-from photoredactor.color_management import cmyk_to_rgb, lab_to_rgb, rgb_to_cmyk, rgb_to_lab
-from photoredactor.core import Document, generative_expand_pixels
-from photoredactor.large_document import MipmapPyramid, ScratchCache, gpu_status
-from photoredactor.plugins import PluginRegistry
+from uzyro.automation import ActionRecorder, ActionRunner
+from uzyro.color_management import cmyk_to_rgb, lab_to_rgb, rgb_to_cmyk, rgb_to_lab
+from uzyro.core import Document, generative_expand_pixels
+from uzyro.large_document import MipmapPyramid, ScratchCache, gpu_status
+from uzyro.plugins import PluginRegistry
 
 
 def sample_rgba(width: int = 32, height: int = 24) -> np.ndarray:
@@ -106,7 +106,7 @@ def test_actions_are_replayable_and_batchable(tmp_path: Path) -> None:
     action = tmp_path / "action.json"
     recorder.save(action)
     data = json.loads(action.read_text(encoding="utf-8"))
-    assert data["format"] == "PhotoRedactor action v3"
+    assert data["format"] == "UZYRO action v3"
     document = Document.new(30, 20)
     assert ActionRunner().run(document, action) == 2
     assert (document.width, document.height, document.bit_depth) == (12, 10, 16)

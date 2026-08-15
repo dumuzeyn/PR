@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from photoredactor.core import Document, draw_brush, selection_contour_points
+from uzyro.core import Document, draw_brush, selection_contour_points
 
 
 def test_ellipse_selection_does_not_select_bounding_box_corners() -> None:
