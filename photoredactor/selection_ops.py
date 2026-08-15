@@ -315,7 +315,7 @@ def sky_selection_mask(pixels: np.ndarray, sensitivity: float = 0.5) -> np.ndarr
     yy = np.arange(h)[:, None]
     upper_weight = yy < max(1, int(h * 0.72))
     sensitivity = float(np.clip(sensitivity, 0.0, 1.0))
-    blue_sky = (hue >= 78 + round((1.0 - sensitivity) * 12)) & (hue <= 138 - round((1.0 - sensitivity) * 6)) & (saturation >= max(8, 38 - round(sensitivity * 28))) & (value >= max(45, 95 - round(sensitivity * 45)))
+    blue_sky = (hue >= 78 + round((1.0 - sensitivity) * 12)) & (hue <= 138 - round((1.0 - sensitivity) * 6)) & (saturation >= max(8, 38 - round(sensitivity * 28))) & (value >= max(75, 115 - round(sensitivity * 40)))
     pale_sky = (saturation < 40 + round(sensitivity * 35)) & (value >= 195 - round(sensitivity * 48)) & (rgb[:, :, 2] >= rgb[:, :, 0] - round(2 + sensitivity * 16))
     lab = cv2.cvtColor(rgb, cv2.COLOR_RGB2LAB).astype(np.float32)
     top_height = max(2, h // 18)

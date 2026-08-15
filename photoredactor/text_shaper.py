@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unicodedata
 from abc import ABC, abstractmethod
+from collections import OrderedDict
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -72,8 +73,16 @@ def opentype_features(style: TextStyle) -> tuple[str, ...]:
 
 
 class FontResolver:
-    def __init__(self) -> None:
-        self._cache: dict[tuple[str, int, bool, bool, bool], ImageFont.ImageFont] = {}
+    def __init__(self, cache_capacity: int = 64) -> None:
+        self.cache_capacity = max(8, int(cache_capacity))
+        self._cache: OrderedDict[tuple[str, int, bool, bool, bool], ImageFont.ImageFont] = OrderedDict()
+
+    def _remember(self, key: tuple[str, int, bool, bool, bool], font: ImageFont.ImageFont) -> ImageFont.ImageFont:
+        self._cache[key] = font
+        self._cache.move_to_end(key)
+        while len(self._cache) > self.cache_capacity:
+            self._cache.popitem(last=False)
+        return font
 
     @staticmethod
     def candidates(family: str, bold: bool, italic: bool) -> list[str]:
@@ -100,18 +109,17 @@ class FontResolver:
         key = (style.family, int(style.size), bool(style.bold), bool(style.italic), use_raqm)
         cached = self._cache.get(key)
         if cached is not None:
+            self._cache.move_to_end(key)
             return cached
         engine = ImageFont.Layout.RAQM if use_raqm else ImageFont.Layout.BASIC
         for candidate in self.candidates(style.family, style.bold, style.italic):
             try:
                 font = ImageFont.truetype(candidate, max(4, int(style.size)), layout_engine=engine)
-                self._cache[key] = font
-                return font
+                return self._remember(key, font)
             except OSError:
                 continue
         font = ImageFont.load_default()
-        self._cache[key] = font
-        return font
+        return self._remember(key, font)
 
 
 class TextShaper(ABC):

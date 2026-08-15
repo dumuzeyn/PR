@@ -202,9 +202,6 @@ class GradientEngine:
         interpolation_space: str = "srgb",
         noise: dict[str, Any] | None = None,
     ) -> np.ndarray:
-        values = cls.coordinates(width, height, start, end, kind, origin)
-        if reverse:
-            values = 1.0 - values
         normalized = cls.normalize_stops(stops)
         positions = np.array([item[0] for item in normalized], dtype=np.float32)
         colors = np.array([item[1] for item in normalized], dtype=np.float32) / 255.0
@@ -220,11 +217,23 @@ class GradientEngine:
             lookup[:, 3] = 1.0
         if noise and bool(noise.get("enabled", False)):
             lookup = noise_lookup(lookup, noise)
-        indices = np.clip(values * 65536.0, 0.0, 65536.0).astype(np.uint32)
-        output = lookup[indices]
-        if dither and width > 1 and height > 1:
-            output = ordered_dither(output, output_depth, origin)
-        return np.ascontiguousarray(quantize_rgba(output, output_depth))
+        dtype = {8: np.uint8, 16: np.uint16, 32: np.float32}.get(output_depth)
+        if dtype is None:
+            raise ValueError("Bit depth must be 8, 16 or 32")
+        result = np.empty((height, width, 4), dtype=dtype)
+        rows_per_chunk = max(1, min(height, 1_048_576 // max(1, width)))
+        for top in range(0, height, rows_per_chunk):
+            bottom = min(height, top + rows_per_chunk)
+            chunk_origin = (origin[0], origin[1] + top)
+            values = cls.coordinates(width, bottom - top, start, end, kind, chunk_origin)
+            if reverse:
+                values = 1.0 - values
+            indices = np.clip(values * 65536.0, 0.0, 65536.0).astype(np.uint32)
+            output = lookup[indices]
+            if dither and width > 1 and height > 1:
+                output = ordered_dither(output, output_depth, chunk_origin)
+            result[top:bottom] = quantize_rgba(output, output_depth)
+        return np.ascontiguousarray(result)
 
 
 def blank_rgba(width: int, height: int, color=(255, 255, 255, 255)) -> np.ndarray:

@@ -4,7 +4,7 @@ import numpy as np
 
 from photoredactor.core import Document
 from photoredactor.text_layout import TextLayoutEngine
-from photoredactor.text_shaper import DEFAULT_TEXT_SHAPER, TextStyle, grapheme_clusters, text_direction
+from photoredactor.text_shaper import DEFAULT_TEXT_SHAPER, FontResolver, TextStyle, grapheme_clusters, text_direction
 
 
 def alpha_bounds(pixels: np.ndarray) -> tuple[int, int, int, int]:
@@ -79,3 +79,12 @@ def test_opentype_and_paragraph_properties_roundtrip(tmp_path) -> None:
         "discretionary_ligatures", "stylistic_set", "direction", "language",
     ):
         assert restored.layer.text_data[key] == layer.text_data[key]
+
+
+def test_font_resolver_uses_bounded_lru_cache() -> None:
+    resolver = FontResolver(cache_capacity=12)
+    first = resolver.load(TextStyle("Arial", 8))
+    for size in range(9, 50):
+        resolver.load(TextStyle("Arial", size))
+    assert len(resolver._cache) == 12
+    assert first not in resolver._cache.values()
