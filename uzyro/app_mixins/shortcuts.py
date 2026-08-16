@@ -16,9 +16,9 @@ class ShortcutsMixin:
         root = ttk.PanedWindow(self.editor_root, orient=tk.HORIZONTAL)
         root.pack(fill=tk.BOTH, expand=True)
 
-        left = ttk.Frame(root, width=188, style="Panel.TFrame")
+        left = ttk.Frame(root, width=174, style="Panel.TFrame")
         center = ttk.Frame(root, style="Workspace.TFrame")
-        right = ttk.Frame(root, width=292, style="Panel.TFrame")
+        right = ttk.Frame(root, width=282, style="Panel.TFrame")
         root.add(left, weight=0)
         root.add(center, weight=1)
         root.add(right, weight=0)

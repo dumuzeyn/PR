@@ -289,7 +289,7 @@ class MenusToolsMixin:
         models.add_command(label="Управление локальными моделями...", command=self.model_manager_dialog)
 
     def _build_tools(self, parent: ttk.Frame) -> None:
-        parent.configure(width=188)
+        parent.configure(width=174)
         parent.pack_propagate(False)
         self._build_color_control(parent)
         self.tool_palette = ToolPalette(

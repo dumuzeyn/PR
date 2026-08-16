@@ -367,7 +367,7 @@ class ColorsCanvasMixin:
         self.status_text(f"Пресет ретуши: {self.retouch_preset.get()}")
 
     def _build_panels(self, parent: ttk.Frame) -> None:
-        self.right_tabs = ttk.Notebook(parent)
+        self.right_tabs = ttk.Notebook(parent, style="Sidebar.TNotebook")
         self.right_tabs.pack(fill=tk.BOTH, expand=True)
         layers_tab = ttk.Frame(self.right_tabs, style="Panel.TFrame")
         properties_tab = ttk.Frame(self.right_tabs, style="Panel.TFrame")
@@ -399,11 +399,11 @@ class ColorsCanvasMixin:
             name: action_icon(self, name, color=TOKENS.DANGER if name == "delete" else TOKENS.TEXT_PRIMARY)
             for name in ("add", "delete", "duplicate", "up", "down")
         }
-        add = ttk.Button(buttons, image=self._panel_icons["add"], width=3, command=self.new_layer)
-        delete = ttk.Button(buttons, image=self._panel_icons["delete"], width=3, command=self.delete_layer, style="Danger.TButton")
-        duplicate = ttk.Button(buttons, image=self._panel_icons["duplicate"], width=3, command=self.duplicate_layer)
-        up = ttk.Button(buttons, image=self._panel_icons["up"], width=3, command=lambda: self.move_layer(1))
-        down = ttk.Button(buttons, image=self._panel_icons["down"], width=3, command=lambda: self.move_layer(-1))
+        add = ttk.Button(buttons, image=self._panel_icons["add"], width=2, command=self.new_layer, style="PanelIcon.TButton")
+        delete = ttk.Button(buttons, image=self._panel_icons["delete"], width=2, command=self.delete_layer, style="PanelIcon.TButton")
+        duplicate = ttk.Button(buttons, image=self._panel_icons["duplicate"], width=2, command=self.duplicate_layer, style="PanelIcon.TButton")
+        up = ttk.Button(buttons, image=self._panel_icons["up"], width=2, command=lambda: self.move_layer(1), style="PanelIcon.TButton")
+        down = ttk.Button(buttons, image=self._panel_icons["down"], width=2, command=lambda: self.move_layer(-1), style="PanelIcon.TButton")
         for button in (add, delete, duplicate, up, down):
             button.pack(side=tk.LEFT, padx=(0, 3))
         solo = ttk.Button(buttons, text="Только", command=self.toggle_layer_solo)

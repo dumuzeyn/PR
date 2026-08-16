@@ -77,6 +77,7 @@ def configure_theme(root: tk.Misc, tokens: DesignTokens = TOKENS) -> ttk.Style:
     style.map("Primary.TButton", background=[("active", tokens.ACCENT_HOVER), ("pressed", tokens.ACCENT)])
     style.configure("Quiet.TButton", background=tokens.SURFACE, bordercolor=tokens.SURFACE, padding=(5, 3))
     style.map("Quiet.TButton", background=[("active", tokens.SURFACE_HOVER), ("pressed", tokens.SURFACE_ACTIVE)])
+    style.configure("PanelIcon.TButton", padding=(4, 4))
     style.configure("Danger.TButton", foreground=tokens.DANGER)
     style.configure(
         "Tool.TRadiobutton",
@@ -115,6 +116,9 @@ def configure_theme(root: tk.Misc, tokens: DesignTokens = TOKENS) -> ttk.Style:
     style.configure("TNotebook", background=tokens.SURFACE, borderwidth=0, tabmargins=0)
     style.configure("TNotebook.Tab", background=tokens.SURFACE_HOVER, foreground=tokens.TEXT_SECONDARY, padding=(10, 7), borderwidth=0)
     style.map("TNotebook.Tab", background=[("selected", tokens.SURFACE_SELECTED), ("active", tokens.SURFACE_HOVER)], foreground=[("selected", tokens.TEXT_PRIMARY)])
+    style.configure("Sidebar.TNotebook", background=tokens.SURFACE, borderwidth=0, tabmargins=0)
+    style.configure("Sidebar.TNotebook.Tab", background=tokens.SURFACE_HOVER, foreground=tokens.TEXT_SECONDARY, padding=(6, 7), borderwidth=0)
+    style.map("Sidebar.TNotebook.Tab", background=[("selected", tokens.SURFACE_SELECTED), ("active", tokens.SURFACE_HOVER)], foreground=[("selected", tokens.TEXT_PRIMARY)])
     style.configure("TPanedwindow", background=tokens.BORDER, sashwidth=1)
     style.configure("TSeparator", background=tokens.BORDER)
     return style
