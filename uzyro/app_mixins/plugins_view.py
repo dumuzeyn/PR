@@ -1,6 +1,18 @@
 from __future__ import annotations
 
 from ..app_shared import *
+from ..security.validation import loads_bounded_json
+
+
+PLUGIN_PERMISSION_INFO = {
+    "pixels": ("Изменение пикселей", "низкий", "Работа с переданным изображением."),
+    "document": ("Документ", "средний", "Чтение и изменение структуры открытого документа."),
+    "filesystem.read": ("Чтение файлов", "высокий", "Чтение файлов, доступных вашей учётной записи."),
+    "filesystem.write": ("Запись файлов", "высокий", "Создание и изменение файлов на компьютере."),
+    "network": ("Сеть", "высокий", "Подключение к интернету и локальной сети."),
+    "process": ("Запуск программ", "очень высокий", "Запуск внешних процессов от вашего имени."),
+    "native": ("Нативный код", "очень высокий", "Загрузка системных библиотек; выдавайте только доверенным плагинам."),
+}
 
 
 class PluginsViewMixin:
@@ -30,7 +42,7 @@ class PluginsViewMixin:
         if raw is None:
             return
         try:
-            params = json.loads(raw)
+            params = loads_bounded_json(raw, maximum=1024 * 1024)
             if not isinstance(params, dict):
                 raise ValueError("Параметры должны быть JSON-объектом")
         except Exception as exc:
@@ -58,7 +70,7 @@ class PluginsViewMixin:
         if raw is None:
             return
         try:
-            params = json.loads(raw)
+            params = loads_bounded_json(raw, maximum=1024 * 1024)
             if not isinstance(params, dict):
                 raise ValueError("Параметры должны быть JSON-объектом")
         except Exception as exc:
@@ -80,7 +92,7 @@ class PluginsViewMixin:
         if raw is None:
             return
         try:
-            params = json.loads(raw)
+            params = loads_bounded_json(raw, maximum=1024 * 1024)
             if not isinstance(params, dict):
                 raise ValueError("Параметры должны быть JSON-объектом")
             self.apply_to_layer(name, lambda pixels: self.plugin_registry.apply_filter(name, pixels, params))
@@ -109,29 +121,49 @@ class PluginsViewMixin:
         window = tk.Toplevel(self)
         self._plugin_manager_window = window
         window.title("Управление плагинами")
-        window.geometry("780x430")
+        window.geometry("980x560")
+        window.minsize(820, 480)
         window.transient(self)
-        tree = ttk.Treeview(window, columns=("version", "api", "status", "permissions"), show="tree headings", selectmode="browse")
+        header = ttk.Frame(window, padding=(16, 14, 16, 8))
+        header.pack(fill=tk.X)
+        ttk.Label(header, text="Плагины", style="PanelTitle.TLabel").pack(anchor=tk.W)
+        ttk.Label(
+            header,
+            text="Новые плагины отключены до выдачи запрошенных разрешений.",
+            style="Secondary.TLabel",
+        ).pack(anchor=tk.W, pady=(3, 0))
+        tree = ttk.Treeview(window, columns=("author", "version", "status", "permissions"), show="tree headings", selectmode="browse")
         self._plugin_manager_tree = tree
         tree.heading("#0", text="Плагин")
+        tree.heading("author", text="Автор")
         tree.heading("version", text="Версия")
-        tree.heading("api", text="API")
         tree.heading("status", text="Состояние")
         tree.heading("permissions", text="Разрешения")
-        tree.column("#0", width=180)
-        tree.column("version", width=80)
-        tree.column("api", width=55)
-        tree.column("status", width=160)
-        tree.column("permissions", width=280)
-        tree.pack(fill=tk.BOTH, expand=True, padx=10, pady=(10, 6))
+        tree.column("#0", width=190)
+        tree.column("author", width=145)
+        tree.column("version", width=75, anchor=tk.CENTER)
+        tree.column("status", width=150)
+        tree.column("permissions", width=350)
+        tree.pack(fill=tk.BOTH, expand=True, padx=16, pady=(0, 8))
+        tree.tag_configure("blocked", foreground=TOKENS.WARNING)
+        tree.tag_configure("critical", foreground=TOKENS.DANGER)
+        tree.tag_configure("ready", foreground=TOKENS.SUCCESS)
 
         def refresh() -> None:
             tree.delete(*tree.get_children())
             for info in self.plugin_registry.plugins.values():
-                status = "Нужно разрешение" if info.blocked_permissions else "Готов"
-                if info.legacy:
-                    status = "Совместимый фильтр"
-                tree.insert("", "end", iid=info.id, text=info.name, values=(info.version, info.api_version, status, ", ".join(sorted(info.requested_permissions)) or "нет"))
+                blocked = bool(info.blocked_permissions)
+                critical = bool(info.requested_permissions & {"process", "native"})
+                status = "Ожидает разрешения" if blocked else "Разрешён"
+                if info.legacy and blocked:
+                    status = "Совместимый, отключён"
+                labels = [PLUGIN_PERMISSION_INFO[value][0] for value in sorted(info.requested_permissions)]
+                tag = "critical" if critical else "blocked" if blocked else "ready"
+                tree.insert(
+                    "", "end", iid=info.id, text=info.name,
+                    values=(info.author or "Не указан", info.version, status, ", ".join(labels) or "Не запрошены"),
+                    tags=(tag,),
+                )
 
         def configure_permissions() -> None:
             selected = tree.selection()
@@ -142,13 +174,33 @@ class PluginsViewMixin:
             dialog.title(f"Разрешения: {info.name}")
             dialog.transient(window)
             dialog.grab_set()
-            body = ttk.Frame(dialog, padding=12)
+            dialog.minsize(600, 380)
+            body = ttk.Frame(dialog, padding=16)
             body.pack(fill=tk.BOTH, expand=True)
+            ttk.Label(body, text=info.name, style="PanelTitle.TLabel").pack(anchor=tk.W)
+            ttk.Label(
+                body,
+                text=f"Автор: {info.author or 'Не указан'}  |  Версия: {info.version}  |  API: {info.api_version}",
+                style="Secondary.TLabel",
+            ).pack(anchor=tk.W, pady=(3, 12))
             variables = {}
             for permission in sorted(info.requested_permissions):
                 variable = tk.BooleanVar(value=permission in info.granted_permissions)
                 variables[permission] = variable
-                ttk.Checkbutton(body, text=permission, variable=variable).pack(anchor="w", pady=2)
+                label, risk, description = PLUGIN_PERMISSION_INFO[permission]
+                row = ttk.Frame(body, style="Elevated.TFrame", padding=(10, 8))
+                row.pack(fill=tk.X, pady=3)
+                check = ttk.Checkbutton(row, text=label, variable=variable)
+                check.pack(anchor=tk.W)
+                tone = "Danger.TLabel" if risk == "очень высокий" else "Warning.TLabel" if risk == "высокий" else "Secondary.TLabel"
+                ttk.Label(row, text=f"Риск: {risk}. {description}", style=tone, wraplength=530).pack(anchor=tk.W, padx=(24, 0), pady=(2, 0))
+
+            if info.requested_permissions & {"process", "native"}:
+                ttk.Label(
+                    body,
+                    text="Python-плагин запускается отдельно, но это не системная песочница. Разрешайте запуск программ и нативный код только проверенному автору.",
+                    style="Danger.TLabel", wraplength=550,
+                ).pack(fill=tk.X, pady=(10, 0))
 
             def apply() -> None:
                 self.plugin_registry.set_permissions(info.id, {key for key, value in variables.items() if value.get()})
@@ -156,10 +208,14 @@ class PluginsViewMixin:
                 self.reload_plugins()
                 refresh()
 
-            ttk.Button(body, text="Применить", command=apply).pack(anchor="e", pady=(10, 0))
+            actions = ttk.Frame(body)
+            actions.pack(fill=tk.X, pady=(14, 0))
+            ttk.Button(actions, text="Отмена", command=dialog.destroy).pack(side=tk.RIGHT)
+            ttk.Button(actions, text="Применить", command=apply, style="Primary.TButton").pack(side=tk.RIGHT, padx=(0, 6))
+            self.center_toplevel(dialog, 640, max(420, 225 + len(variables) * 58))
 
         controls = ttk.Frame(window)
-        controls.pack(fill=tk.X, padx=10, pady=(0, 10))
+        controls.pack(fill=tk.X, padx=16, pady=(0, 14))
         ttk.Button(controls, text="Настроить разрешения...", command=configure_permissions).pack(side=tk.LEFT)
         ttk.Button(controls, text="Перезагрузить", command=lambda: (self.reload_plugins(), refresh())).pack(side=tk.LEFT, padx=4)
         ttk.Button(controls, text="Показать ошибки", command=self.show_plugin_errors).pack(side=tk.LEFT)

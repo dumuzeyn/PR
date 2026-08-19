@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from ..core_shared import *
+from ..security.files import inspect_pillow_image, validate_array, validate_dimensions, validate_regular_file
+from ..security.limits import LIMITS
 from ..layer import Layer
 from ..geometry_ops import *
 from ..selection_ops import *
@@ -22,29 +24,38 @@ class PersistenceDocumentMixin:
 
     @classmethod
     def from_image(cls, path: str | Path) -> "Document":
-        if Path(path).suffix.lower() in {".psd", ".psb"}:
+        source = validate_regular_file(path, maximum=LIMITS.max_image_file_bytes)
+        if source.suffix.lower() in {".psd", ".psb"}:
             from ..psd_compat import load_psd
 
-            return load_psd(path, cls)
-        if Path(path).suffix.lower() in RAW_EXTENSIONS:
-            return cls.from_raw(path)
-        image = Image.open(path)
-        arr = pil_to_rgba_array(image)
-        h, w = arr.shape[:2]
-        dpi = image.info.get("dpi", (300, 300))[0] if image.info.get("dpi") else 300
-        doc = cls(width=w, height=h, dpi=dpi, metadata=image_metadata(image, path))
-        doc.layers.append(Layer(Path(path).stem, arr))
-        doc.path = str(path)
+            return load_psd(source, cls)
+        if source.suffix.lower() in RAW_EXTENSIONS:
+            return cls.from_raw(source)
+        inspect_pillow_image(source)
+        with Image.open(source) as image:
+            image.load()
+            validate_dimensions(image.width, image.height)
+            arr = pil_to_rgba_array(image)
+            h, w = arr.shape[:2]
+            dpi = image.info.get("dpi", (300, 300))[0] if image.info.get("dpi") else 300
+            metadata = image_metadata(image, source)
+        doc = cls(width=w, height=h, dpi=max(1, min(2400, int(dpi))), metadata=metadata)
+        doc.layers.append(Layer(source.stem, arr))
+        doc.path = str(source)
         return doc
 
     @classmethod
     def from_raw(cls, path: str | Path) -> "Document":
+        source = validate_regular_file(path, maximum=LIMITS.max_image_file_bytes)
+        if source.suffix.lower() not in RAW_EXTENSIONS:
+            raise ValueError("Файл не имеет поддерживаемого RAW-расширения")
         try:
             import rawpy
         except ImportError as exc:
             raise RuntimeError("Для открытия RAW требуется компонент rawpy. Переустановите полную сборку UZYRO.") from exc
-        with rawpy.imread(str(path)) as raw:
+        with rawpy.imread(str(source)) as raw:
             rgb16 = raw.postprocess(use_camera_wb=True, output_bps=16, no_auto_bright=False)
+            validate_array(rgb16, expected_channels={3})
             rgba16 = np.dstack((rgb16, np.full(rgb16.shape[:2], 65535, dtype=np.uint16)))
             metadata = raw.metadata
             white_balance = raw.camera_whitebalance
@@ -63,9 +74,9 @@ class PersistenceDocumentMixin:
             width=w,
             height=h,
             bit_depth=16,
-            metadata={"source": str(Path(path).resolve()), "format": "RAW", "raw": raw_info},
+            metadata={"source": str(source), "format": "RAW", "raw": raw_info},
             layers=[layer],
-            path=str(path),
+            path=str(source),
         )
         doc.assign_color_profile("sRGB")
         doc.dirty = False

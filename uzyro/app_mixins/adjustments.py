@@ -200,11 +200,14 @@ class AdjustmentsMixin:
             if not path:
                 return
             try:
-                payload = json.loads(Path(path).read_text(encoding="utf-8"))
+                from ..security.validation import load_bounded_json
+                payload = load_bounded_json(path, maximum=4 * 1024 * 1024)
                 presets = payload.get("presets", payload) if isinstance(payload, dict) else {}
+                if not isinstance(presets, dict) or len(presets) > 512:
+                    raise ValueError("Файл содержит недопустимое количество пресетов.")
                 added = 0
                 for name, preset in presets.items():
-                    if isinstance(name, str) and isinstance(preset, dict) and str(preset.get("type", "")) in ADJUSTMENT_TYPES:
+                    if isinstance(name, str) and len(name) <= 128 and isinstance(preset, dict) and str(preset.get("type", "")) in ADJUSTMENT_TYPES:
                         self.adjustment_presets[name] = dict(preset)
                         added += 1
                 if added == 0:
@@ -212,7 +215,7 @@ class AdjustmentsMixin:
                 preset_box.configure(values=list(self.adjustment_presets))
                 adjustment_preset.set(next(reversed(self.adjustment_presets)))
                 apply_adjustment_preset()
-            except (OSError, ValueError, json.JSONDecodeError) as exc:
+            except (OSError, ValueError) as exc:
                 messagebox.showerror("Импорт пресетов", str(exc), parent=dialog)
 
         def export_adjustment_presets() -> None:

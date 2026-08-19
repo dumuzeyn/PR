@@ -12,10 +12,13 @@ from psd_tools.constants import BlendMode, ProtectedFlags, Resource, Tag
 from psd_tools.psd.image_resources import ImageResource, ResoulutionInfo
 from psd_tools.psd.tagged_blocks import ProtectedSetting
 
-from .color_management import color_settings, display_rgba, profile_name
+from .color_management import color_settings, display_rgba, profile_name, validate_icc_bytes
 from .core_shared import pil_to_rgba_array, rgba_array_to_pil
 from .layer import Layer
 from .render_ops import render_layer_pixels, render_layer_style
+from .security.errors import ResourceLimitError, SecurityValidationError
+from .security.files import load_pillow_bytes, validate_dimensions, validate_regular_file
+from .security.limits import LIMITS
 
 if TYPE_CHECKING:
     from .document import Document
@@ -66,14 +69,28 @@ def _dpi(psd: PSDImage) -> int:
 
 
 def _leaf_layers(group, prefix: tuple[str, ...] = ()):
-    for source in group:
+    stack = [(iter(group), prefix, 0)]
+    yielded = 0
+    while stack:
+        iterator, groups, depth = stack[-1]
+        try:
+            source = next(iterator)
+        except StopIteration:
+            stack.pop()
+            continue
         if source.is_group():
-            yield from _leaf_layers(source, (*prefix, str(source.name)))
-        else:
-            yield source, prefix
+            if depth >= 64:
+                raise ResourceLimitError("PSD содержит слишком глубокую структуру групп")
+            stack.append((iter(source), (*groups, str(source.name)[:LIMITS.max_name_chars]), depth + 1))
+            continue
+        yielded += 1
+        if yielded > LIMITS.max_layers:
+            raise ResourceLimitError("PSD содержит слишком много слоёв")
+        yield source, groups
 
 
 def _layer_image(source) -> Image.Image:
+    validate_dimensions(max(1, int(source.width)), max(1, int(source.height)), copies=3)
     image = source.topil(apply_icc=False)
     if image is None:
         image = source.composite(force=True, apply_icc=False)
@@ -132,11 +149,14 @@ def _embedded_smart_document(source, document_type) -> dict[str, Any] | None:
         if str(smart.kind) != "data":
             return None
         data = smart.data
+        if not isinstance(data, bytes) or len(data) > LIMITS.max_archive_member_bytes:
+            raise ResourceLimitError("Встроенный Smart Object превышает безопасный размер")
         detected = str(smart.detected_filetype or "").lower()
         if detected in {"8bps", "8bpb", "psd", "psb"}:
+            _validate_psd_header(data)
             nested = _load_psd_image(PSDImage.open(BytesIO(data)), document_type, "embedded.psd")
         else:
-            image = Image.open(BytesIO(data)).convert("RGBA")
+            image = load_pillow_bytes(data)
             pixels = pil_to_rgba_array(image)
             nested = document_type(width=image.width, height=image.height, background=(0, 0, 0, 0))
             nested.layers = [Layer("Содержимое Smart Object", pixels)]
@@ -206,6 +226,7 @@ def _load_psd_image(psd: PSDImage, document_type, source_name: str) -> "Document
     metadata: dict[str, Any] = {"source": "PSD/PSB", "source_path": source_name}
     profile = _resource_data(psd, Resource.ICC_PROFILE)
     if isinstance(profile, bytes) and profile:
+        profile = validate_icc_bytes(profile)
         settings = color_settings(metadata)
         settings["profile_name"] = profile_name(profile)
         settings["icc_base64"] = base64.b64encode(profile).decode("ascii")
@@ -234,9 +255,32 @@ def _load_psd_image(psd: PSDImage, document_type, source_name: str) -> "Document
     return document
 
 
+def _validate_psd_header(source: str | Path | bytes) -> tuple[int, int, int, int]:
+    if isinstance(source, bytes):
+        header = source[:26]
+    else:
+        with Path(source).open("rb") as stream:
+            header = stream.read(26)
+    if len(header) != 26 or header[:4] != b"8BPS":
+        raise SecurityValidationError("Файл не содержит корректный заголовок PSD/PSB")
+    version = int.from_bytes(header[4:6], "big")
+    if version not in {1, 2}:
+        raise SecurityValidationError("Версия PSD/PSB не поддерживается")
+    channels = int.from_bytes(header[12:14], "big")
+    height = int.from_bytes(header[14:18], "big")
+    width = int.from_bytes(header[18:22], "big")
+    depth = int.from_bytes(header[22:24], "big")
+    if not 1 <= channels <= 56 or depth not in {1, 8, 16, 32}:
+        raise SecurityValidationError("PSD/PSB содержит некорректные каналы или глубину цвета")
+    validate_dimensions(width, height, channels=min(channels, 4), bytes_per_channel=max(1, depth // 8), copies=3)
+    return width, height, channels, depth
+
+
 def load_psd(path: str | Path, document_type) -> "Document":
     try:
-        return _load_psd_image(PSDImage.open(path), document_type, str(Path(path).resolve()))
+        source = validate_regular_file(path, maximum=LIMITS.max_image_file_bytes)
+        _validate_psd_header(source)
+        return _load_psd_image(PSDImage.open(source), document_type, str(source))
     except Exception as exc:
         raise PSDCompatibilityError(f"Не удалось открыть PSD/PSB: {exc}") from exc
 

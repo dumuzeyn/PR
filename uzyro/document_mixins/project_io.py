@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 from ..core_shared import *
 from ..layer import Layer
 from ..geometry_ops import *
@@ -13,6 +15,10 @@ from ..content_ops import *
 from ..adjustment_ops import *
 from ..precision_pipeline import composite_precision
 from ..project_tiles import PROJECT_FORMAT_VERSION, PROJECT_TILE_SIZE, is_tiled_array, read_tiled_array, temporary_project_path, tiled_payload_stats, write_tiled_array
+from ..security.files import load_pillow_bytes, read_zip_member, validate_array, validate_regular_file, validate_zip_archive
+from ..security.limits import LIMITS
+from ..security.project import validate_legacy_project, validate_project_manifest
+from ..security.validation import loads_bounded_json
 
 import tifffile
 
@@ -81,7 +87,10 @@ class ProjectIoDocumentMixin:
                             "pixels": write_tiled_array(zf, f"{prefix}/pixels", layer.pixels),
                         }
                     )
-                zf.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False).encode("utf-8"))
+                zf.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, allow_nan=False).encode("utf-8"))
+            with temporary.open("r+b") as stream:
+                stream.flush()
+                os.fsync(stream.fileno())
             temporary.replace(target)
         except Exception:
             temporary.unlink(missing_ok=True)
@@ -91,14 +100,18 @@ class ProjectIoDocumentMixin:
 
     @classmethod
     def open_project(cls, path: str | Path, progress=None) -> "Document":
-        with zipfile.ZipFile(path, "r") as zf:
-            names = set(zf.namelist())
+        source = validate_regular_file(path, maximum=LIMITS.max_project_file_bytes)
+        with zipfile.ZipFile(source, "r") as zf:
+            infos = validate_zip_archive(zf)
+            names = set(infos)
             if "manifest.json" not in names and "document.json" in names:
-                data = json.loads(zf.read("document.json").decode("utf-8"))
+                data = loads_bounded_json(read_zip_member(zf, "document.json", maximum=LIMITS.max_json_bytes))
+                validate_legacy_project(data)
                 doc = cls.restore(data)
-                doc.path = str(path)
+                doc.path = str(source)
                 return doc
-            manifest = json.loads(zf.read("manifest.json").decode("utf-8"))
+            manifest = loads_bounded_json(read_zip_member(zf, "manifest.json", maximum=LIMITS.max_json_bytes))
+            validate_project_manifest(manifest, zf, infos=infos)
             doc = cls(
                 width=int(manifest["width"]),
                 height=int(manifest["height"]),
@@ -115,8 +128,8 @@ class ProjectIoDocumentMixin:
                 if not value:
                     return None
                 if is_tiled_array(value):
-                    return read_tiled_array(zf, value)
-                decoded = pil_to_rgba_array(Image.open(io.BytesIO(zf.read(value))))
+                    return read_tiled_array(zf, value, archive_infos=infos)
+                decoded = pil_to_rgba_array(load_pillow_bytes(read_zip_member(zf, value)))
                 return decoded[:, :, 0] if mask else decoded
 
             for layer_index, raw in enumerate(manifest["layers"], 1):
@@ -151,9 +164,11 @@ class ProjectIoDocumentMixin:
                         transform_source=payload(raw.get("transform_source")),
                         transform_mask_source=payload(raw.get("transform_mask_source"), True),
                         working_pixels=None if not raw.get("working_pixels") else (
-                            read_tiled_array(zf, raw["working_pixels"])
+                            read_tiled_array(zf, raw["working_pixels"], archive_infos=infos)
                             if is_tiled_array(raw["working_pixels"])
-                            else np.load(io.BytesIO(zf.read(raw["working_pixels"])), allow_pickle=False)
+                            else validate_array(np.load(
+                                io.BytesIO(read_zip_member(zf, raw["working_pixels"])), allow_pickle=False,
+                            ))
                         ),
                         working_model=raw.get("working_model", "RGBA"),
                         working_depth=int(raw.get("working_depth", manifest.get("bit_depth", 8))),
@@ -168,13 +183,16 @@ class ProjectIoDocumentMixin:
             doc.saved_selections = {}
             for name, selection_path in manifest.get("saved_selections", {}).items():
                 doc.saved_selections[name] = payload(selection_path, True)
-        doc.path = str(path)
+        doc.path = str(source)
         return doc
 
     @staticmethod
     def project_storage_info(path: str | Path) -> dict[str, int | str]:
-        with zipfile.ZipFile(path, "r") as zf:
-            manifest = json.loads(zf.read("manifest.json").decode("utf-8"))
+        source = validate_regular_file(path, maximum=LIMITS.max_project_file_bytes)
+        with zipfile.ZipFile(source, "r") as zf:
+            infos = validate_zip_archive(zf)
+            manifest = loads_bounded_json(read_zip_member(zf, "manifest.json", maximum=LIMITS.max_json_bytes))
+            validate_project_manifest(manifest, zf, infos=infos)
         totals = {"tiles": 0, "bytes": 0}
 
         def visit(value) -> None:

@@ -6,14 +6,20 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import platform
 import shutil
-import subprocess
 import tempfile
 import threading
 from typing import Callable
 from urllib.request import Request, urlopen
 import zipfile
+
+from .security.errors import ResourceLimitError, SecurityValidationError
+from .security.files import safe_extract_zip
+from .security.limits import LIMITS
+from .security.network import validate_download_url
+from .security.paths import ensure_within, safe_filename
+from .security.processes import run_checked
+from .security.validation import bounded_int, bounded_string, load_bounded_json, loads_bounded_json, validate_identifier, validate_json_tree
 
 
 ENGINE_RELEASE_API = "https://api.github.com/repos/leejet/stable-diffusion.cpp/releases/latest"
@@ -148,13 +154,14 @@ def _nvidia_vram_mb() -> int:
     if not executable:
         return 0
     try:
-        result = subprocess.run(
+        result = run_checked(
             [executable, "--query-gpu=memory.total", "--format=csv,noheader,nounits"],
-            capture_output=True, text=True, timeout=8, check=True,
-            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+            timeout=8,
         )
+        if result.returncode != 0:
+            return 0
         return max(int(line.strip()) for line in result.stdout.splitlines() if line.strip())
-    except (OSError, ValueError, subprocess.SubprocessError):
+    except (OSError, ValueError, TimeoutError, SecurityValidationError, ResourceLimitError):
         return 0
 
 
@@ -201,6 +208,14 @@ def _download(
     url: str, target: Path, expected_size: int, expected_sha256: str,
     progress: ProgressCallback | None, cancel: threading.Event | None,
 ) -> None:
+    if expected_size <= 0 or expected_size > LIMITS.max_archive_total_bytes:
+        raise ModelManagerError("Опубликованный размер загрузки вне безопасного диапазона")
+    if len(expected_sha256) != 64 or any(char not in "0123456789abcdefABCDEF" for char in expected_sha256):
+        raise ModelManagerError("Некорректное опубликованное значение SHA-256")
+    try:
+        safe_url = validate_download_url(url, allow_file=True)
+    except SecurityValidationError as exc:
+        raise ModelManagerError(str(exc)) from exc
     target.parent.mkdir(parents=True, exist_ok=True)
     partial = target.with_suffix(target.suffix + ".part")
     offset = partial.stat().st_size if partial.exists() else 0
@@ -216,20 +231,38 @@ def _download(
     elif offset > expected_size:
         offset = 0
         partial.unlink(missing_ok=True)
-    with urlopen(Request(url, headers=headers), timeout=60) as response:
-        append = offset > 0 and getattr(response, "status", 200) == 206
-        if not append:
-            offset = 0
-        mode = "ab" if append else "wb"
-        with partial.open(mode) as output:
-            done = offset
-            while chunk := response.read(1024 * 1024):
-                if cancel is not None and cancel.is_set():
-                    raise DownloadCancelled("Загрузка отменена")
-                output.write(chunk)
-                done += len(chunk)
-                if progress:
-                    progress("Загрузка", done, expected_size)
+    try:
+        with urlopen(Request(safe_url, headers=headers), timeout=60) as response:
+            validate_download_url(response.geturl(), allow_file=True)
+            append = offset > 0 and getattr(response, "status", 200) == 206
+            if not append:
+                offset = 0
+            declared = response.headers.get("Content-Length")
+            if declared is not None:
+                remaining = expected_size - offset
+                if bounded_int(declared, "Content-Length", 0, expected_size) != remaining:
+                    raise ModelManagerError("Сервер сообщил неожиданный размер загрузки")
+            mode = "ab" if append else "wb"
+            with partial.open(mode) as output:
+                done = offset
+                while chunk := response.read(1024 * 1024):
+                    if cancel is not None and cancel.is_set():
+                        raise DownloadCancelled("Загрузка отменена")
+                    done += len(chunk)
+                    if done > expected_size:
+                        raise ModelManagerError("Сервер отправил больше данных, чем было опубликовано")
+                    output.write(chunk)
+                    if progress:
+                        progress("Загрузка", done, expected_size)
+                output.flush()
+                os.fsync(output.fileno())
+    except DownloadCancelled:
+        raise
+    except ModelManagerError:
+        partial.unlink(missing_ok=True)
+        raise
+    except (OSError, ValueError) as exc:
+        raise ModelManagerError(f"Не удалось безопасно загрузить файл: {exc}") from exc
     if partial.stat().st_size != expected_size:
         raise ModelManagerError("Размер загруженного файла не совпадает с опубликованным размером")
     if _sha256(partial, progress, cancel).lower() != expected_sha256.lower():
@@ -240,13 +273,30 @@ def _download(
 
 class ModelStore:
     def __init__(self, root: str | Path) -> None:
-        self.root = Path(root)
+        self.root = Path(root).resolve()
         self.models_dir = self.root / "models"
         self.engines_dir = self.root / "engines"
+        self._digest_cache: dict[tuple[str, int, int, str], bool] = {}
 
     def model_path(self, model: LocalModelSpec | str) -> Path:
         spec = MODEL_BY_ID[model] if isinstance(model, str) else model
-        return self.models_dir / spec.model_id / spec.filename
+        model_id = validate_identifier(spec.model_id, "ID модели")
+        filename = safe_filename(spec.filename)
+        return ensure_within(self.models_dir / model_id / filename, self.models_dir)
+
+    def _digest_matches(self, path: Path, expected: str) -> bool:
+        try:
+            stat = path.stat()
+            key = (str(path.resolve()), int(stat.st_size), int(stat.st_mtime_ns), expected.lower())
+            cached = self._digest_cache.get(key)
+            if cached is not None:
+                return cached
+            matches = _sha256(path).lower() == expected.lower()
+            self._digest_cache = {item: value for item, value in self._digest_cache.items() if item[0] != key[0]}
+            self._digest_cache[key] = matches
+            return matches
+        except OSError:
+            return False
 
     def model_installed(self, model: LocalModelSpec | str) -> bool:
         spec = MODEL_BY_ID[model] if isinstance(model, str) else model
@@ -255,10 +305,19 @@ class ModelStore:
         if not path.is_file() or path.stat().st_size != spec.size or not manifest.is_file():
             return False
         try:
-            data = json.loads(manifest.read_text(encoding="utf-8"))
-            return data.get("sha256") == spec.sha256 and data.get("size") == spec.size
-        except (OSError, ValueError):
+            data = load_bounded_json(manifest, maximum=1024 * 1024)
+            return (
+                isinstance(data, dict)
+                and data.get("sha256") == spec.sha256
+                and data.get("size") == spec.size
+            )
+        except (OSError, ValueError, SecurityValidationError, ResourceLimitError):
             return False
+
+    def model_verified(self, model: LocalModelSpec | str) -> bool:
+        spec = MODEL_BY_ID[model] if isinstance(model, str) else model
+        path = self.model_path(spec)
+        return self.model_installed(spec) and self._digest_matches(path, spec.sha256)
 
     def accelerator_path(self) -> Path:
         return self.model_path(LCM_ACCELERATOR)
@@ -272,12 +331,10 @@ class ModelStore:
     ) -> Path:
         spec = MODEL_BY_ID[model] if isinstance(model, str) else model
         path = self.model_path(spec)
-        if self.model_installed(spec):
+        if self.model_verified(spec):
             return path
         _download(spec.url, path, spec.size, spec.sha256, progress, cancel)
-        (path.parent / "manifest.json").write_text(
-            json.dumps(asdict(spec), ensure_ascii=False, indent=2), encoding="utf-8",
-        )
+        self._write_json_atomic(path.parent / "manifest.json", asdict(spec))
         return path
 
     def remove_model(self, model: LocalModelSpec | str) -> None:
@@ -299,23 +356,31 @@ class ModelStore:
         return values[backend]
 
     def _latest_engine_assets(self, backend: str) -> list[dict[str, object]]:
-        request = Request(ENGINE_RELEASE_API, headers={"Accept": "application/vnd.github+json", "User-Agent": "UZYRO/1.0"})
+        url = validate_download_url(ENGINE_RELEASE_API)
+        request = Request(url, headers={"Accept": "application/vnd.github+json", "User-Agent": "UZYRO/1.0"})
         with urlopen(request, timeout=30) as response:
-            release = json.loads(response.read().decode("utf-8"))
+            payload = response.read(2 * 1024 * 1024 + 1)
+        if len(payload) > 2 * 1024 * 1024:
+            raise ModelManagerError("Ответ каталога движка слишком велик")
+        release = loads_bounded_json(payload, maximum=2 * 1024 * 1024)
+        if not isinstance(release, dict) or not isinstance(release.get("assets"), list):
+            raise ModelManagerError("Каталог движка вернул некорректный ответ")
         suffixes = [self._engine_asset_suffix(backend)]
         if backend == "cuda":
             suffixes.append("cudart-sd-bin-win-cu12-x64.zip")
         result: list[dict[str, object]] = []
         for suffix in suffixes:
-            asset = next((item for item in release.get("assets", []) if str(item.get("name", "")).endswith(suffix)), None)
+            asset = next((item for item in release["assets"] if isinstance(item, dict) and str(item.get("name", "")).endswith(suffix)), None)
             if not asset:
                 raise ModelManagerError(f"В актуальном выпуске stable-diffusion.cpp нет сборки {suffix}")
             digest = str(asset.get("digest", ""))
             if not digest.startswith("sha256:"):
                 raise ModelManagerError("Выпуск движка не содержит проверяемую SHA-256 подпись")
             result.append({
-                "tag": str(release["tag_name"]), "name": str(asset["name"]),
-                "url": str(asset["browser_download_url"]), "size": int(asset["size"]),
+                "tag": validate_identifier(release.get("tag_name"), "Версия движка"),
+                "name": safe_filename(bounded_string(asset.get("name"), "Имя архива", 256)),
+                "url": validate_download_url(bounded_string(asset.get("browser_download_url"), "URL движка", 2048)),
+                "size": bounded_int(asset.get("size"), "Размер архива", 1, LIMITS.max_archive_total_bytes),
                 "sha256": digest.split(":", 1)[1], "backend": backend,
             })
         return result
@@ -323,13 +388,30 @@ class ModelStore:
     def engine_executable(self, backend: str) -> Path | None:
         state_path = self.engines_dir / f"{backend}.json"
         try:
-            data = json.loads(state_path.read_text(encoding="utf-8"))
-            path = (self.engines_dir / str(data["relative_executable"])).resolve()
-            if self.engines_dir.resolve() in path.parents and path.is_file():
+            data = load_bounded_json(state_path, maximum=2 * 1024 * 1024)
+            if not isinstance(data, dict) or data.get("backend") != backend:
+                return None
+            path = ensure_within(self.engines_dir / bounded_string(data["relative_executable"], "Путь движка", 1024), self.engines_dir, must_exist=True)
+            digest = bounded_string(data.get("executable_sha256"), "SHA-256 движка", 64)
+            if path.is_file() and not path.is_symlink() and path.suffix.lower() == ".exe" and self._digest_matches(path, digest):
                 return path
-        except (OSError, KeyError, ValueError):
+        except (OSError, KeyError, ValueError, SecurityValidationError, ResourceLimitError):
             pass
         return None
+
+    @staticmethod
+    def _write_json_atomic(path: Path, value: object) -> None:
+        validate_json_tree(value)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+        try:
+            with temporary.open("w", encoding="utf-8", newline="\n") as output:
+                json.dump(value, output, ensure_ascii=False, indent=2, allow_nan=False)
+                output.flush()
+                os.fsync(output.fileno())
+            os.replace(temporary, path)
+        finally:
+            temporary.unlink(missing_ok=True)
 
     def install_engine(
         self, backend: str, progress: ProgressCallback | None = None,
@@ -347,19 +429,17 @@ class ModelStore:
             _download(str(asset["url"]), archive, int(asset["size"]), str(asset["sha256"]), progress, cancel)
             archives.append(archive)
         destination = self.engines_dir / release_tag / backend
+        self.engines_dir.mkdir(parents=True, exist_ok=True)
         staging = Path(tempfile.mkdtemp(prefix="extract-", dir=self.engines_dir))
         try:
             for archive in archives:
                 with zipfile.ZipFile(archive) as bundle:
-                    root = staging.resolve()
-                    for member in bundle.infolist():
-                        target = (staging / member.filename).resolve()
-                        if root != target and root not in target.parents:
-                            raise ModelManagerError("Архив движка содержит небезопасный путь")
-                    bundle.extractall(staging)
+                    safe_extract_zip(bundle, staging)
             executable = next(staging.rglob("sd-cli.exe"), None)
             if executable is None:
                 raise ModelManagerError("В архиве движка отсутствует sd-cli.exe")
+            executable = ensure_within(executable, staging, must_exist=True)
+            executable_digest = _sha256(executable, progress, cancel)
             destination.parent.mkdir(parents=True, exist_ok=True)
             if destination.exists():
                 shutil.rmtree(destination)
@@ -367,9 +447,12 @@ class ModelStore:
             executable = destination / executable.relative_to(staging)
             relative = executable.resolve().relative_to(self.engines_dir.resolve())
             self.engines_dir.mkdir(parents=True, exist_ok=True)
-            (self.engines_dir / f"{backend}.json").write_text(
-                json.dumps({"tag": release_tag, "backend": backend, "assets": assets, "relative_executable": str(relative)}, ensure_ascii=False, indent=2),
-                encoding="utf-8",
+            self._write_json_atomic(
+                self.engines_dir / f"{backend}.json",
+                {
+                    "tag": release_tag, "backend": backend, "assets": assets,
+                    "relative_executable": str(relative), "executable_sha256": executable_digest,
+                },
             )
             for archive in archives:
                 archive.unlink(missing_ok=True)

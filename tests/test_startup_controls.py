@@ -8,6 +8,7 @@ import tkinter as tk
 import time
 from types import SimpleNamespace
 import unittest
+import uuid
 
 import cv2
 import numpy as np
@@ -472,7 +473,10 @@ class StartupTests(unittest.TestCase):
             "name": "Тест",
             "steps": [{"command": "set_bit_depth", "params": {"bit_depth": 16}}],
         }
-        self.app.batch_queue.enqueue(action, ["sample.png"], tempfile.gettempdir())
+        sample = Path(tempfile.gettempdir()) / f"uzyro-batch-{uuid.uuid4().hex}.png"
+        Image.new("RGB", (4, 4), (20, 40, 60)).save(sample)
+        self.addCleanup(sample.unlink, missing_ok=True)
+        self.app.batch_queue.enqueue(action, [sample], tempfile.gettempdir())
         self.app.open_batch_queue()
         self.app.update()
         self.assertEqual(len(self.app._batch_queue_tree.get_children()), 1)

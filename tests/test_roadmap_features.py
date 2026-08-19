@@ -122,7 +122,10 @@ def test_python_filter_plugin_is_discovered_and_validated(tmp_path: Path) -> Non
         "    api.register_filter('Инверсия плагина', invert, 'test')\n",
         encoding="utf-8",
     )
-    registry = PluginRegistry([tmp_path])
+    registry = PluginRegistry([tmp_path], tmp_path / "permissions.json")
+    assert registry.discover() == 0
+    assert registry.plugins["legacy.invert"].blocked_permissions == {"pixels"}
+    registry.set_permissions("legacy.invert", {"pixels"})
     assert registry.discover() == 1
     original = sample_rgba(8, 6)
     result = registry.apply_filter("Инверсия плагина", original)

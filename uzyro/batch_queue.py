@@ -10,6 +10,9 @@ from typing import Any, Callable
 
 from .automation import ActionRunner, SkipBatchFile, load_action
 from .core import Document
+from .security.limits import LIMITS
+from .security.paths import canonical_path, ensure_within, safe_filename
+from .security.validation import load_bounded_json, validate_json_tree
 
 
 JOB_STATES = {"pending", "running", "completed", "completed_with_errors", "cancelled", "failed"}
@@ -73,10 +76,13 @@ class BatchQueue:
             raise ValueError("Режим совпадения имён должен быть rename, overwrite или skip")
         if on_error not in {"continue", "stop"}:
             raise ValueError("Режим ошибок очереди должен быть continue или stop")
-        normalized = [str(Path(source).resolve()) for source in sources]
+        normalized_suffix = self._validate_suffix(suffix)
+        normalized = [str(canonical_path(source, must_exist=True)) for source in sources]
         if not normalized:
             raise ValueError("Для задания не выбраны исходные файлы")
-        job = BatchJob(load_action(action), normalized, str(Path(destination).resolve()), suffix, conflict, on_error)
+        if len(normalized) > LIMITS.max_batch_items:
+            raise ValueError("В задании слишком много исходных файлов")
+        job = BatchJob(load_action(action), normalized, str(canonical_path(destination)), normalized_suffix, conflict, on_error)
         with self._lock:
             self.jobs.append(job)
         return job
@@ -159,15 +165,16 @@ class BatchQueue:
 
     @staticmethod
     def _target_path(folder: Path, stem: str, suffix: str, conflict: str) -> Path | None:
-        suffix = suffix if suffix.startswith(".") else f".{suffix}"
-        target = folder / f"{stem}{suffix}"
+        suffix = BatchQueue._validate_suffix(suffix)
+        filename = safe_filename(f"{stem}{suffix}")
+        target = ensure_within(folder / filename, folder)
         if not target.exists() or conflict == "overwrite":
             return target
         if conflict == "skip":
             return None
         number = 2
         while True:
-            candidate = folder / f"{stem}_{number}{suffix}"
+            candidate = ensure_within(folder / safe_filename(f"{stem}_{number}{suffix}"), folder)
             if not candidate.exists():
                 return candidate
             number += 1
@@ -178,16 +185,26 @@ class BatchQueue:
         Path(path).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
     def load(self, path: str | Path) -> int:
-        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+        payload = load_bounded_json(path)
         supported_formats = {
             "UZYRO batch queue v1",
             f"{'Photo' + 'Redactor'} batch queue v1",
         }
         if payload.get("format") not in supported_formats:
             raise ValueError("Неподдерживаемый формат очереди")
+        raw_jobs = payload.get("jobs", [])
+        if not isinstance(raw_jobs, list) or len(raw_jobs) > LIMITS.max_batch_jobs:
+            raise ValueError("Очередь содержит некорректное количество заданий")
         jobs: list[BatchJob] = []
-        for raw in payload.get("jobs", []):
+        for raw in raw_jobs:
             raw = dict(raw)
+            raw["action"] = load_action(raw.get("action", {}))
+            raw["destination"] = str(canonical_path(raw.get("destination", "")))
+            raw["suffix"] = self._validate_suffix(str(raw.get("suffix", ".png")))
+            sources = raw.get("sources", [])
+            if not isinstance(sources, list) or len(sources) > LIMITS.max_batch_items:
+                raise ValueError("Задание содержит слишком много файлов")
+            raw["sources"] = [str(canonical_path(item)) for item in sources]
             raw["items"] = [BatchItem(**item) for item in raw.get("items", [])]
             job = BatchJob(**raw)
             if job.state == "running":
@@ -198,6 +215,13 @@ class BatchQueue:
         with self._lock:
             self.jobs = jobs
         return len(jobs)
+
+    @staticmethod
+    def _validate_suffix(suffix: str) -> str:
+        value = suffix if suffix.startswith(".") else f".{suffix}"
+        if len(value) > 16 or len(value) < 2 or not value[1:].isalnum():
+            raise ValueError("Некорректное расширение выходного файла")
+        return value.lower()
 
 
 __all__ = ["BatchItem", "BatchJob", "BatchQueue"]

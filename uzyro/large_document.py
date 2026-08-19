@@ -5,13 +5,13 @@ import hashlib
 import os
 from pathlib import Path
 import shutil
-import tempfile
 from typing import Hashable
 
 import cv2
 import numpy as np
 
 from .gpu_acceleration import acceleration_status, should_accelerate
+from .security.temporary import temporary_root
 
 
 def gpu_status() -> dict[str, object]:
@@ -45,7 +45,11 @@ class ScratchCache:
 
     def __init__(self, memory_limit: int = 256 * 1024 * 1024, directory: str | Path | None = None) -> None:
         self.memory_limit = max(0, int(memory_limit))
-        self.directory = Path(directory) if directory else Path(tempfile.mkdtemp(prefix="uzyro-cache-"))
+        if directory is None:
+            import tempfile
+            self.directory = Path(tempfile.mkdtemp(prefix="cache-", dir=temporary_root()))
+        else:
+            self.directory = Path(directory)
         self.directory.mkdir(parents=True, exist_ok=True)
         self._memory: OrderedDict[Hashable, np.ndarray] = OrderedDict()
         self._disk: dict[Hashable, Path] = {}

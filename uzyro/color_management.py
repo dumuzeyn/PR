@@ -8,6 +8,10 @@ import cv2
 import numpy as np
 from PIL import Image, ImageCms
 
+from .security.errors import ResourceLimitError, SecurityValidationError
+from .security.limits import LIMITS
+from .security.paths import validate_local_input
+
 
 COLOR_MODELS = ("RGBA", "Lab", "CMYK")
 BIT_DEPTHS = (8, 16, 32)
@@ -111,9 +115,23 @@ def profile_bytes(profile: str | Path | bytes | None) -> bytes | None:
     if profile is None:
         return None
     if isinstance(profile, bytes):
-        return profile
-    path = Path(profile)
-    return path.read_bytes() if path.exists() else None
+        return validate_icc_bytes(profile)
+    try:
+        path = validate_local_input(profile, allowed_suffixes={".icc", ".icm"})
+    except (SecurityValidationError, OSError):
+        return None
+    if path.stat().st_size > LIMITS.max_icc_bytes:
+        raise ResourceLimitError("ICC-профиль превышает безопасный размер")
+    return validate_icc_bytes(path.read_bytes())
+
+
+def validate_icc_bytes(payload: bytes) -> bytes:
+    if len(payload) < 128 or len(payload) > LIMITS.max_icc_bytes:
+        raise ResourceLimitError("ICC-профиль имеет небезопасный размер")
+    declared = int.from_bytes(payload[:4], "big")
+    if declared < 128 or declared > len(payload) or payload[36:40] != b"acsp":
+        raise SecurityValidationError("ICC-профиль повреждён")
+    return payload[:declared]
 
 
 def builtin_srgb_bytes() -> bytes:
@@ -125,7 +143,10 @@ def profile_name(profile: str | Path | bytes | None) -> str:
         return "sRGB"
     if isinstance(profile, (str, Path)) and Path(profile).exists():
         try:
-            return ImageCms.getProfileName(ImageCms.ImageCmsProfile(str(profile))).strip()
+            raw = profile_bytes(profile)
+            if raw is None:
+                return Path(profile).stem
+            return ImageCms.getProfileName(ImageCms.ImageCmsProfile(BytesIO(raw))).strip()
         except Exception:
             return Path(profile).stem
     if isinstance(profile, bytes):
@@ -139,9 +160,13 @@ def profile_name(profile: str | Path | bytes | None) -> str:
 def _open_profile(profile: str | Path | bytes | None):
     if profile is None or str(profile).lower() in {"srgb", "s-rgb"}:
         return ImageCms.createProfile("sRGB")
-    if isinstance(profile, bytes):
-        return ImageCms.ImageCmsProfile(BytesIO(profile))
-    return ImageCms.ImageCmsProfile(str(profile))
+    raw = profile_bytes(profile)
+    if raw is None:
+        raise SecurityValidationError("ICC-профиль не найден")
+    try:
+        return ImageCms.ImageCmsProfile(BytesIO(raw))
+    except (OSError, ValueError) as exc:
+        raise SecurityValidationError("ICC-профиль повреждён или не поддерживается") from exc
 
 
 def profile_details(profile: str | Path | bytes | None) -> dict[str, str]:

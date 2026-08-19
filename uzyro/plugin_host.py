@@ -11,6 +11,10 @@ import numpy as np
 
 from .core import Document
 from .plugins import PluginAPI
+from .security.files import validate_array
+from .security.limits import LIMITS
+from .security.paths import canonical_path
+from .security.validation import load_bounded_json, loads_bounded_json, validate_json_tree
 
 
 RESULT_PREFIX = "UZYRO_PLUGIN_RESULT="
@@ -101,7 +105,8 @@ def load_plugin(entrypoint: Path, permissions: set[str], allowed_paths: list[Pat
 
 
 def execute(request: dict[str, Any]) -> dict[str, Any]:
-    entrypoint = Path(request["entrypoint"]).resolve()
+    validate_json_tree(request)
+    entrypoint = canonical_path(request["entrypoint"], must_exist=True)
     permissions = {str(item) for item in request.get("permissions", [])}
     args = [str(item) for item in request.get("args", [])]
     allowed_paths = [Path(item) for item in request.get("allowed_paths", [])]
@@ -112,21 +117,21 @@ def execute(request: dict[str, Any]) -> dict[str, Any]:
     if operation == "filter":
         name, source, target, parameters = args
         callback = api.filters[name][0]
-        pixels = np.load(source, allow_pickle=False)
-        params = json.loads(Path(parameters).read_text(encoding="utf-8"))
+        pixels = validate_array(np.load(source, allow_pickle=False), expected_channels={4})
+        params = load_bounded_json(parameters)
         output = np.asarray(callback(pixels.copy(), params))
         np.save(target, output, allow_pickle=False)
         return {"ok": True}
     if operation == "action":
         name, source, target, parameters = args
         document = Document.open_project(source)
-        params = json.loads(Path(parameters).read_text(encoding="utf-8"))
+        params = load_bounded_json(parameters)
         api.actions[name][0](document, params)
         document.save_project(target)
         return {"ok": True}
     if operation == "import":
         name, source, target, parameters = args
-        params = json.loads(Path(parameters).read_text(encoding="utf-8"))
+        params = load_bounded_json(parameters)
         document = api.importers[name][0](source, params)
         if not isinstance(document, Document):
             raise TypeError("Импортёр должен вернуть Document")
@@ -135,7 +140,7 @@ def execute(request: dict[str, Any]) -> dict[str, Any]:
     if operation == "export":
         name, source, target, parameters = args
         document = Document.open_project(source)
-        params = json.loads(Path(parameters).read_text(encoding="utf-8"))
+        params = load_bounded_json(parameters)
         api.exporters[name][0](document, target, params)
         return {"ok": True}
     raise ValueError(f"Неизвестная операция host: {operation}")
@@ -143,9 +148,17 @@ def execute(request: dict[str, Any]) -> dict[str, Any]:
 
 def main() -> None:
     try:
-        request = json.loads(sys.stdin.read())
+        payload = sys.stdin.buffer.read(LIMITS.max_plugin_message_bytes + 1)
+        if len(payload) > LIMITS.max_plugin_message_bytes:
+            raise ValueError("Запрос к plugin host превышает безопасный размер")
+        request = loads_bounded_json(payload, maximum=LIMITS.max_plugin_message_bytes)
+        if not isinstance(request, dict):
+            raise ValueError("Запрос к plugin host должен быть JSON-объектом")
         result = execute(request)
-        print(RESULT_PREFIX + json.dumps(result, ensure_ascii=False))
+        encoded = json.dumps(result, ensure_ascii=False)
+        if len(encoded.encode("utf-8")) > LIMITS.max_plugin_message_bytes:
+            raise ValueError("Ответ plugin host превышает безопасный размер")
+        print(RESULT_PREFIX + encoded)
     except Exception as exc:
         print(f"{type(exc).__name__}: {exc}", file=sys.stderr)
         raise SystemExit(1)

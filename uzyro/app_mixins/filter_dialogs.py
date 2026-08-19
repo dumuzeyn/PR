@@ -267,9 +267,10 @@ class FilterDialogsMixin:
             if not path:
                 return
             try:
-                data = json.loads(Path(path).read_text(encoding="utf-8"))
+                from ..security.validation import load_bounded_json
+                data = load_bounded_json(path, maximum=4 * 1024 * 1024)
                 raw_filters = data.get("filters") if isinstance(data, dict) else data
-                if not isinstance(raw_filters, list):
+                if not isinstance(raw_filters, list) or len(raw_filters) > 512:
                     raise ValueError
                 loaded = []
                 for item in raw_filters:

@@ -9,6 +9,9 @@ from typing import Any
 import numpy as np
 
 from .layer import Layer
+from .security.errors import ResourceLimitError, SecurityValidationError
+from .security.files import bounded_zlib_decompress, validate_array
+from .security.limits import LIMITS
 
 
 def encode_value(value: Any) -> Any:
@@ -42,8 +45,18 @@ def decode_value(value: Any) -> Any:
     if kind == "tuple":
         return tuple(decode_value(item) for item in value.get("items", []))
     if kind == "ndarray":
-        raw = zlib.decompress(base64.b64decode(str(value["data"]), validate=True))
-        return np.load(io.BytesIO(raw), allow_pickle=False)
+        encoded = str(value.get("data", ""))
+        if len(encoded) > LIMITS.max_action_bytes * 2:
+            raise ResourceLimitError("Массив действия превышает безопасный размер")
+        try:
+            compressed = base64.b64decode(encoded, validate=True)
+        except (ValueError, TypeError) as exc:
+            raise SecurityValidationError("Повреждённый массив действия") from exc
+        raw = bounded_zlib_decompress(compressed, maximum=LIMITS.max_action_bytes)
+        try:
+            return validate_array(np.load(io.BytesIO(raw), allow_pickle=False))
+        except (ValueError, OSError) as exc:
+            raise SecurityValidationError("Повреждённый массив действия") from exc
     return {key: decode_value(item) for key, item in value.items()}
 
 

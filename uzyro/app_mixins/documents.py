@@ -65,8 +65,8 @@ class DocumentsMixin:
             preset_list_area,
             width=preset_list_width,
             height=572,
-            background="#ffffff",
-            highlightbackground="#c8cdd3",
+            background=TOKENS.SURFACE,
+            highlightbackground=TOKENS.BORDER,
             highlightthickness=1,
             cursor="hand2",
             takefocus=True,
@@ -85,8 +85,8 @@ class DocumentsMixin:
                 y1,
                 preset_list_width,
                 y1 + preset_row_height,
-                fill="#ffffff",
-                outline="#e0e3e7",
+                fill=TOKENS.SURFACE,
+                outline=TOKENS.SEPARATOR,
                 tags=(tag, "preset"),
             )
             name_item = preset_list.create_text(
@@ -94,7 +94,7 @@ class DocumentsMixin:
                 y1 + 16,
                 text=str(preset["name"]),
                 anchor=tk.W,
-                fill="#15191e",
+                fill=TOKENS.TEXT_PRIMARY,
                 font=("Segoe UI Semibold", 10),
                 tags=(tag, "preset"),
             )
@@ -103,7 +103,7 @@ class DocumentsMixin:
                 y1 + 36,
                 text=f"Размер холста: {preset['width']} x {preset['height']} px",
                 anchor=tk.W,
-                fill="#626a73",
+                fill=TOKENS.TEXT_SECONDARY,
                 font=("Segoe UI", 9),
                 tags=(tag, "preset"),
             )
@@ -119,7 +119,7 @@ class DocumentsMixin:
         current_size_label = ttk.Label(preview_panel, text="", font=("Segoe UI Semibold", 14))
         current_size_label.pack(anchor=tk.W, pady=(0, 7))
         self._new_document_size_label = current_size_label
-        preview = tk.Canvas(preview_panel, width=330, height=210, background="#25282d", highlightthickness=0)
+        preview = tk.Canvas(preview_panel, width=330, height=210, background=TOKENS.WORKSPACE, highlightthickness=1, highlightbackground=TOKENS.BORDER)
         preview.pack()
         preset_description = ttk.Label(preview_panel, text="", wraplength=330, justify=tk.LEFT)
         preset_description.pack(fill=tk.X, pady=(7, 0))
@@ -175,16 +175,17 @@ class DocumentsMixin:
                 image.thumbnail((shown_width, shown_height), Image.Resampling.LANCZOS)
                 self._new_document_preview = ImageTk.PhotoImage(image)
                 preview.create_image((x1 + x2) // 2, (y1 + y2) // 2, image=self._new_document_preview)
-            preview.create_rectangle(x1, y1, x2, y2, outline="#7d8794", width=1)
+            preview.create_rectangle(x1, y1, x2, y2, outline=TOKENS.BORDER_ACTIVE, width=1)
 
         selected_preset_index = 0
 
         def paint_preset_selection() -> None:
             for index, (rectangle, name_item, size_item) in enumerate(preset_items):
                 selected = index == selected_preset_index
-                preset_list.itemconfigure(rectangle, fill="#1976d2" if selected else "#ffffff")
-                preset_list.itemconfigure(name_item, fill="#ffffff" if selected else "#15191e")
-                preset_list.itemconfigure(size_item, fill="#dcecff" if selected else "#626a73")
+                preset_list.itemconfigure(rectangle, fill=TOKENS.SURFACE_SELECTED if selected else TOKENS.SURFACE)
+                preset_list.itemconfigure(rectangle, outline=TOKENS.ACCENT if selected else TOKENS.SEPARATOR)
+                preset_list.itemconfigure(name_item, fill=TOKENS.TEXT_PRIMARY)
+                preset_list.itemconfigure(size_item, fill=TOKENS.ACCENT_HOVER if selected else TOKENS.TEXT_SECONDARY)
 
         def select_preset(index: int) -> None:
             nonlocal selected_preset_index

@@ -3,6 +3,8 @@ from __future__ import annotations
 import zipfile
 
 from ..app_shared import *
+from ..security.paths import validate_local_input
+from ..security.temporary import temporary_root
 
 
 class SmartFilesMixin:
@@ -13,12 +15,14 @@ class SmartFilesMixin:
         self.open_path(path)
 
     def open_path(self, path: str) -> None:
-        if not Path(path).exists():
+        try:
+            source = validate_local_input(path)
+        except (OSError, ValueError):
             messagebox.showerror("Открытие", f"Файл не найден:\n{path}")
             self.recent_files = [item for item in self.recent_files if item.lower() != path.lower()]
             self.refresh_recent_menu()
             return
-        source_path = str(Path(path).resolve())
+        source_path = str(source)
 
         def worker() -> Document:
             return Document.open_project(source_path) if source_path.lower().endswith(".prdx") else Document.from_image(source_path)
@@ -87,7 +91,8 @@ class SmartFilesMixin:
             messagebox.showinfo("Smart Object", "У выбранного Smart Object нет вложенного редактируемого документа.")
             return
         layer_id = self.doc.layer.id
-        temporary = Path(tempfile.gettempdir()) / f"UZYRO-smart-{uuid.uuid4().hex}.prdx"
+        smart_root = Path(tempfile.mkdtemp(prefix="smart-", dir=temporary_root()))
+        temporary = smart_root / "document.prdx"
         nested.save_project(temporary)
         process = self.launch_smart_document_editor(temporary)
 
@@ -103,6 +108,10 @@ class SmartFilesMixin:
                 self.refresh()
             try:
                 temporary.unlink()
+            except OSError:
+                pass
+            try:
+                smart_root.rmdir()
             except OSError:
                 pass
 

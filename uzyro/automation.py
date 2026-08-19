@@ -9,6 +9,9 @@ import cv2
 
 from .action_history import apply_history_payload, history_command_to_payload
 from .core import Document, adjust_brightness_contrast, adjust_saturation, apply_filter_stack, rotate_bound
+from .security.errors import ResourceLimitError
+from .security.limits import LIMITS
+from .security.validation import bounded_int, bounded_string, finite_float, load_bounded_json, validate_json_tree
 
 
 ACTION_FORMAT = "UZYRO action v3"
@@ -97,7 +100,7 @@ class ActionRecorder:
 
 
 def load_action(action: str | Path | dict[str, Any]) -> dict[str, Any]:
-    data = json.loads(Path(action).read_text(encoding="utf-8")) if isinstance(action, (str, Path)) else dict(action)
+    data = load_bounded_json(action, maximum=LIMITS.max_action_bytes) if isinstance(action, (str, Path)) else dict(action)
     validate_action(data)
     return data
 
@@ -113,14 +116,42 @@ def validate_action(data: dict[str, Any]) -> None:
     steps = data.get("steps")
     if not isinstance(steps, list):
         raise ValueError("В действии отсутствует список шагов")
+    if len(steps) > LIMITS.max_action_steps:
+        raise ResourceLimitError("Действие содержит слишком много шагов")
+    bounded_string(str(data.get("name", "Действие")), "Название действия", LIMITS.max_name_chars)
     for index, raw in enumerate(steps):
         if isinstance(raw, str):
+            bounded_string(raw, f"Шаг {index + 1}", LIMITS.max_name_chars)
             continue
         if not isinstance(raw, dict) or not str(raw.get("command", "")):
             raise ValueError(f"Шаг {index + 1} не содержит команду")
+        command = bounded_string(str(raw["command"]), f"Команда шага {index + 1}", 128)
+        params = raw.get("params", {})
+        if not isinstance(params, dict):
+            raise ValueError(f"Параметры шага {index + 1} должны быть объектом")
+        validate_json_tree(params)
+        _validate_builtin_params(command, params, index)
         if raw.get("on_error", "stop") not in ERROR_POLICIES:
             raise ValueError(f"Шаг {index + 1} содержит неизвестную политику ошибок")
         _validate_condition(raw.get("condition"), index)
+
+
+def _validate_builtin_params(command: str, params: dict[str, Any], index: int) -> None:
+    label = f"Параметры шага {index + 1}"
+    if command in {"resize_image", "resize_canvas"}:
+        bounded_int(params.get("width"), f"{label}: ширина", 1, LIMITS.max_dimension)
+        bounded_int(params.get("height"), f"{label}: высота", 1, LIMITS.max_dimension)
+    elif command == "rotate":
+        finite_float(params.get("angle", 0), f"{label}: угол", -360_000.0, 360_000.0)
+    elif command == "set_bit_depth" and int(params.get("bit_depth", 0)) not in {8, 16, 32}:
+        raise ValueError(f"{label}: глубина цвета должна быть 8, 16 или 32")
+    elif command == "set_color_model" and str(params.get("color_model", "")) not in {"RGBA", "CMYK", "Lab", "GRAY"}:
+        raise ValueError(f"{label}: неизвестная цветовая модель")
+    elif command == "brightness_contrast":
+        bounded_int(params.get("brightness", 0), f"{label}: яркость", -255, 255)
+        finite_float(params.get("contrast", 1.0), f"{label}: контраст", 0.0, 10.0)
+    elif command == "saturation":
+        finite_float(params.get("amount", 1.0), f"{label}: насыщенность", 0.0, 10.0)
 
 
 def _validate_condition(condition: Any, index: int) -> None:

@@ -9,6 +9,10 @@ from typing import Any, Iterable
 
 import numpy as np
 
+from .security.files import validate_regular_file
+from .security.paths import validate_local_input
+from .security.validation import bounded_string, load_bounded_json
+
 
 ASE_HEADER = b"ASEF\x00\x01\x00\x00"
 ASE_COLOR_BLOCK = 0x0001
@@ -25,7 +29,7 @@ class SpotColor:
     id: str = field(default_factory=lambda: uuid.uuid4().hex)
 
     def __post_init__(self) -> None:
-        name = self.name.strip()
+        name = bounded_string(self.name, "Название цвета", 256).strip()
         if not name:
             raise ValueError("Название плашечной краски не может быть пустым")
         lab = tuple(float(value) for value in self.lab)
@@ -37,7 +41,7 @@ class SpotColor:
         object.__setattr__(self, "name", name)
         object.__setattr__(self, "lab", lab)
         object.__setattr__(self, "alternate_rgb", rgb)
-        object.__setattr__(self, "source", self.source.strip() or "Пользовательские")
+        object.__setattr__(self, "source", bounded_string(self.source, "Источник цвета", 256).strip() or "Пользовательские")
 
     def to_dict(self) -> dict[str, Any]:
         value = asdict(self)
@@ -163,10 +167,13 @@ def _ase_rgb(model: bytes, values: tuple[float, ...]) -> tuple[int, int, int]:
 
 
 def load_ase(path: str | Path, include_process: bool = True) -> list[SpotColor]:
-    data = Path(path).read_bytes()
+    source = validate_local_input(path, allowed_suffixes={".ase"})
+    data = validate_regular_file(source, maximum=32 * 1024 * 1024).read_bytes()
     if len(data) < 12 or data[:8] != ASE_HEADER:
         raise ValueError("Файл не является библиотекой Adobe Swatch Exchange")
     block_count = struct.unpack_from(">I", data, 8)[0]
+    if block_count > 100_000:
+        raise ValueError("Библиотека ASE содержит слишком много элементов")
     offset, group, colors = 12, Path(path).stem, []
     for _ in range(block_count):
         if offset + 6 > len(data):
@@ -222,12 +229,12 @@ def save_ase(path: str | Path, colors: Iterable[SpotColor], group_name: str = "U
 
 
 def load_library(path: str | Path) -> list[SpotColor]:
-    source = Path(path)
+    source = validate_local_input(path, allowed_suffixes={".ase", ".json", ".prswatches"})
     if source.suffix.lower() == ".ase":
         return load_ase(source)
-    data = json.loads(source.read_text(encoding="utf-8"))
+    data = load_bounded_json(source, maximum=8 * 1024 * 1024)
     values = data.get("colors") if isinstance(data, dict) else data
-    if not isinstance(values, list):
+    if not isinstance(values, list) or len(values) > 100_000:
         raise ValueError("В библиотеке отсутствует список colors")
     return [SpotColor.from_dict(value) for value in values]
 

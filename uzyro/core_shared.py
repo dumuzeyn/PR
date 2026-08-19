@@ -19,6 +19,9 @@ from .performance import profiled, profiler
 from .color_management import BIT_DEPTHS, COLOR_MODELS, color_settings, convert_icc, display_rgba, normalize_rgba, profile_bytes, profile_name, quantize_rgba, rgb_to_cmyk, rgb_to_lab, rgba_to_working, working_to_rgba
 from .gradient_color import INTERPOLATION_SPACES, color_lookup, ordered_dither
 from .gradient_noise import noise_lookup
+from .security.errors import ResourceLimitError, SecurityValidationError
+from .security.files import load_pillow_bytes, validate_array
+from .security.limits import LIMITS
 
 
 _checker_cache: dict[tuple[int, int, int], np.ndarray] = {}
@@ -293,7 +296,13 @@ def encode_png(arr: np.ndarray) -> str:
 
 
 def decode_png(text: str) -> np.ndarray:
-    return pil_to_rgba_array(Image.open(io.BytesIO(base64.b64decode(text))))
+    if not isinstance(text, str) or len(text) > LIMITS.max_archive_member_bytes * 2:
+        raise ResourceLimitError("Встроенное изображение проекта слишком велико")
+    try:
+        payload = base64.b64decode(text, validate=True)
+    except (ValueError, TypeError) as exc:
+        raise SecurityValidationError("Повреждённые данные изображения проекта") from exc
+    return pil_to_rgba_array(load_pillow_bytes(payload))
 
 
 def encode_array(arr: np.ndarray) -> str:
@@ -303,7 +312,14 @@ def encode_array(arr: np.ndarray) -> str:
 
 
 def decode_array(text: str) -> np.ndarray:
-    return np.load(io.BytesIO(base64.b64decode(text)), allow_pickle=False)
+    if not isinstance(text, str) or len(text) > LIMITS.max_archive_member_bytes * 2:
+        raise ResourceLimitError("Встроенный массив проекта слишком велик")
+    try:
+        payload = base64.b64decode(text, validate=True)
+        array = np.load(io.BytesIO(payload), allow_pickle=False)
+    except (ValueError, TypeError, OSError) as exc:
+        raise SecurityValidationError("Повреждённый массив проекта") from exc
+    return validate_array(array)
 
 
 def file_fingerprint(path: str | Path) -> dict[str, Any]:
@@ -330,12 +346,20 @@ def image_metadata(image: Image.Image, path: str | Path) -> dict[str, Any]:
         exif = image.getexif()
         if exif:
             metadata["exif"] = {}
-            for key, value in exif.items():
+            for index, (key, value) in enumerate(exif.items()):
+                if index >= 4096:
+                    metadata["exif_truncated"] = True
+                    break
                 name = ExifTags.TAGS.get(key, str(key))
+                name = str(name)[:128]
                 if isinstance(value, bytes):
                     value = value[:128].hex()
                 elif not isinstance(value, (str, int, float, bool, list, tuple)):
                     value = str(value)
+                if isinstance(value, str):
+                    value = value[:2048]
+                elif isinstance(value, (list, tuple)):
+                    value = [str(item)[:256] for item in value[:128]]
                 metadata["exif"][name] = value
     except Exception:
         metadata["exif_error"] = "Could not read EXIF"

@@ -219,20 +219,20 @@ class RenderingViewMixin:
             marker = "👁" if layer.visible else "⊘"
             indicators: list[str] = []
             if layer.mask is not None:
-                indicators.append("M")
+                indicators.append("маска")
             if layer.locked:
-                indicators.append("L")
+                indicators.append("заблокирован")
             if layer.group_id:
-                indicators.append("G")
+                indicators.append("группа")
             if layer.kind == "linked":
                 linked_status = self.doc.linked_layer_status(layer)["status"]
                 if linked_status in {"missing", "modified"}:
-                    indicators.append("?" if linked_status == "missing" else "!")
+                    indicators.append("связь потеряна" if linked_status == "missing" else "источник изменён")
             if layer.effects or layer.filters:
-                indicators.append("fx")
+                indicators.append("эффекты")
             spot = assigned_spot_color(self.doc, layer.id)
             if spot is not None:
-                indicators.append(f"Spot: {spot.name}")
+                indicators.append(f"плашечный: {spot.name}")
             suffix = f"  [{' '.join(indicators)}]" if indicators else ""
             rows.append(f"{marker}   {layer.name}{suffix}")
         existing = list(self.layer_list.get(0, tk.END))

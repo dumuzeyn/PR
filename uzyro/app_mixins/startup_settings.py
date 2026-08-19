@@ -329,7 +329,8 @@ class StartupSettingsMixin:
     def load_settings(self) -> None:
         try:
             if self.settings_path.exists():
-                data = json.loads(self.settings_path.read_text(encoding="utf-8"))
+                from ..security.settings import load_settings_file
+                data = load_settings_file(self.settings_path)
                 gpu_mode = str(data.get("gpu_mode", os.environ.get("UZYRO_GPU", "auto"))).lower()
                 os.environ["UZYRO_GPU"] = gpu_mode if gpu_mode in {"auto", "force", "off"} else "auto"
                 reset_acceleration_metrics()
@@ -436,9 +437,7 @@ class StartupSettingsMixin:
             self.app_data_dir.mkdir(parents=True, exist_ok=True)
             self.capture_tool_pane_position()
             self.save_active_tool_settings()
-            self.settings_path.write_text(
-                json.dumps(
-                    {
+            payload = {
                         "recent_files": self.recent_files[:12],
                         "tool_order": self.tool_order,
                         "visible_tools": self.visible_tools,
@@ -465,12 +464,9 @@ class StartupSettingsMixin:
                             "background": self.custom_canvas_background,
                         },
                         "generative": self.generative_settings,
-                    },
-                    ensure_ascii=False,
-                    indent=2,
-                ),
-                encoding="utf-8",
-            )
+                    }
+            from ..security.settings import save_settings_file
+            save_settings_file(self.settings_path, payload)
         except Exception:
             pass
     def add_recent_file(self, path: str) -> None:

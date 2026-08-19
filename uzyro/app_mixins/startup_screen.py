@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from ..app_shared import *
+from ..brand import branding_asset
+from ..security.files import load_pillow_image, validate_dimensions
 
 
 class StartupScreenMixin:
@@ -9,13 +11,13 @@ class StartupScreenMixin:
         try:
             value = ImageGrab.grabclipboard()
             if isinstance(value, Image.Image):
+                validate_dimensions(value.width, value.height, copies=3)
                 return value.convert("RGBA")
             if isinstance(value, list):
                 for path in value:
                     suffix = Path(path).suffix.lower()
                     if suffix in {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}:
-                        with Image.open(path) as image:
-                            return image.convert("RGBA")
+                        return load_pillow_image(path)
         except (OSError, ValueError):
             pass
         return None
@@ -37,11 +39,19 @@ class StartupScreenMixin:
         frame.pack(fill=tk.BOTH, expand=True)
         self.startup_frame = frame
 
-        header = tk.Frame(frame, background=TOKENS.BACKGROUND, height=82)
+        header = tk.Frame(frame, background=TOKENS.BACKGROUND, height=88)
         header.pack(fill=tk.X)
         header.pack_propagate(False)
-        tk.Label(header, text="UZYRO", font=("Segoe UI Semibold", 22), foreground=TOKENS.TEXT_PRIMARY, background=TOKENS.BACKGROUND).pack(anchor=tk.W, padx=36, pady=(14, 0))
-        tk.Label(header, text="Стартовый экран", font=("Segoe UI", 9), foreground=TOKENS.TEXT_SECONDARY, background=TOKENS.BACKGROUND).pack(anchor=tk.W, padx=38)
+        try:
+            source_icon = tk.PhotoImage(file=str(branding_asset("uzyro-icon.png")))
+            self._startup_brand_icon = source_icon.subsample(8, 8)
+            tk.Label(header, image=self._startup_brand_icon, background=TOKENS.BACKGROUND).pack(side=tk.LEFT, padx=(32, 14), pady=12)
+        except tk.TclError:
+            self._startup_brand_icon = None
+        brand_text = tk.Frame(header, background=TOKENS.BACKGROUND)
+        brand_text.pack(side=tk.LEFT, fill=tk.Y, pady=13)
+        tk.Label(brand_text, text="UZYRO", font=("Segoe UI Semibold", 21), foreground=TOKENS.TEXT_PRIMARY, background=TOKENS.BACKGROUND).pack(anchor=tk.W)
+        tk.Label(brand_text, text="Рабочее пространство", font=("Segoe UI", 9), foreground=TOKENS.TEXT_SECONDARY, background=TOKENS.BACKGROUND).pack(anchor=tk.W)
 
         content = tk.Frame(frame, background=TOKENS.SURFACE)
         content.pack(fill=tk.BOTH, expand=True, padx=36, pady=26)
@@ -93,7 +103,7 @@ class StartupScreenMixin:
             clipboard_box.pack(fill=tk.X, pady=(12, 8))
             preview = clipboard_image.copy()
             preview.thumbnail((72, 72), Image.Resampling.LANCZOS)
-            preview_canvas = Image.new("RGBA", (72, 72), (228, 230, 232, 255))
+            preview_canvas = Image.new("RGBA", (72, 72), (34, 35, 41, 255))
             preview_canvas.alpha_composite(preview, ((72 - preview.width) // 2, (72 - preview.height) // 2))
             self._startup_clipboard_preview = ImageTk.PhotoImage(preview_canvas)
             tk.Label(clipboard_box, image=self._startup_clipboard_preview, background=TOKENS.SURFACE_HOVER).pack(side=tk.LEFT, padx=(0, 12))

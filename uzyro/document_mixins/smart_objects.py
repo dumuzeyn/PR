@@ -11,6 +11,18 @@ from ..text_ops import *
 from ..shape_ops import *
 from ..content_ops import *
 from ..adjustment_ops import *
+from ..security.files import load_pillow_image
+from ..security.paths import canonical_path, validate_local_input
+
+
+SMART_SOURCE_SUFFIXES = {
+    ".prdx", ".psd", ".psb", ".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff",
+    *RAW_EXTENSIONS,
+}
+
+
+def _smart_source_path(path: str | Path) -> Path:
+    return validate_local_input(path, allowed_suffixes=SMART_SOURCE_SUFFIXES)
 
 
 class SmartObjectsDocumentMixin:
@@ -57,14 +69,15 @@ class SmartObjectsDocumentMixin:
         return True
 
     def place_image(self, path: str | Path, linked: bool = False) -> Layer:
-        if Path(path).suffix.lower() == ".prdx":
-            return self.place_project(path, linked)
-        image = Image.open(path)
+        source = _smart_source_path(path)
+        if source.suffix.lower() == ".prdx":
+            return self.place_project(source, linked)
+        image = load_pillow_image(source)
         pixels = pil_to_rgba_array(image)
         h, w = pixels.shape[:2]
-        source_path = str(Path(path).resolve())
+        source_path = str(source)
         layer = Layer(
-            Path(path).stem,
+            source.stem,
             pixels,
             x=(self.width - w) // 2,
             y=(self.height - h) // 2,
@@ -89,7 +102,7 @@ class SmartObjectsDocumentMixin:
     def place_document(self, document: "Document", name: str = "Вложенный документ", source_path: str | Path | None = None, linked: bool = False) -> Layer:
         rendered = document.composite(False)
         height, width = rendered.shape[:2]
-        path = None if source_path is None else str(Path(source_path).resolve())
+        path = None if source_path is None else str(_smart_source_path(source_path))
         data: dict[str, Any] = {
             "linked": bool(linked and path),
             "content_type": "document",
@@ -113,8 +126,9 @@ class SmartObjectsDocumentMixin:
         return layer
 
     def place_project(self, path: str | Path, linked: bool = False) -> Layer:
-        nested = type(self).open_project(path)
-        return self.place_document(nested, Path(path).stem, path, linked)
+        source = _smart_source_path(path)
+        nested = type(self).open_project(source)
+        return self.place_document(nested, source.stem, source, linked)
 
     def convert_layers_to_smart_object(self, layer_ids: list[str] | set[str] | None = None) -> Layer | None:
         selected = set(layer_ids or [self.layer.id])
@@ -221,10 +235,12 @@ class SmartObjectsDocumentMixin:
         path = data.get("source_path")
         if layer.kind != "linked" or not path:
             return {"status": "embedded", "path": path}
-        if not Path(path).exists():
+        try:
+            source = _smart_source_path(path)
+        except (OSError, ValueError):
             return {"status": "missing", "path": path}
         saved = data.get("fingerprint") or {}
-        current = file_fingerprint(path)
+        current = file_fingerprint(source)
         modified = bool(saved) and (current.get("sha256") != saved.get("sha256"))
         return {"status": "modified" if modified else "current", "path": path, "saved": saved, "current": current}
 
@@ -232,15 +248,17 @@ class SmartObjectsDocumentMixin:
         layer = self.layer
         smart_data = layer.smart_data or {}
         source_path = smart_data.get("source_path")
-        if not source_path or not Path(source_path).exists():
+        try:
+            source = _smart_source_path(source_path)
+        except (OSError, ValueError):
             return False
         advanced = self._prepare_smart_source_replacement(layer)
-        if Path(source_path).suffix.lower() == ".prdx" or smart_data.get("content_type") == "document":
-            nested = type(self).open_project(source_path)
+        if source.suffix.lower() == ".prdx" or smart_data.get("content_type") == "document":
+            nested = type(self).open_project(source)
             pixels = nested.composite(False)
             nested_snapshot = nested.snapshot()
         else:
-            image = Image.open(source_path)
+            image = load_pillow_image(source)
             pixels = pil_to_rgba_array(image)
             nested_snapshot = None
         source_h, source_w = pixels.shape[:2]
@@ -249,9 +267,9 @@ class SmartObjectsDocumentMixin:
         layer.smart_data = {
             **smart_data,
             "linked": True,
-            "source_path": str(Path(source_path).resolve()),
+            "source_path": str(source),
             "original_size": [source_w, source_h],
-            "fingerprint": file_fingerprint(source_path),
+            "fingerprint": file_fingerprint(source),
         }
         if nested_snapshot is not None:
             layer.smart_data["content_type"] = "document"
@@ -263,14 +281,16 @@ class SmartObjectsDocumentMixin:
         return True
 
     def relink_active_layer(self, path: str | Path) -> bool:
-        if not Path(path).exists():
+        try:
+            source = _smart_source_path(path)
+        except (OSError, ValueError):
             return False
         layer = self.layer
         layer.kind = "linked"
         layer.smart_data = {
             **(layer.smart_data or {}),
             "linked": True,
-            "source_path": str(Path(path).resolve()),
+            "source_path": str(source),
         }
         return self.update_linked_layer()
 
@@ -285,15 +305,19 @@ class SmartObjectsDocumentMixin:
 
     def replace_active_smart_contents(self, path: str | Path, linked: bool | None = None) -> bool:
         layer = self.layer
-        if layer.kind not in {"linked", "embedded"} or not Path(path).exists():
+        if layer.kind not in {"linked", "embedded"}:
+            return False
+        try:
+            source = _smart_source_path(path)
+        except (OSError, ValueError):
             return False
         advanced = self._prepare_smart_source_replacement(layer)
-        if Path(path).suffix.lower() == ".prdx":
-            nested = type(self).open_project(path)
+        if source.suffix.lower() == ".prdx":
+            nested = type(self).open_project(source)
             pixels = nested.composite(False)
             nested_snapshot = nested.snapshot()
         else:
-            pixels = pil_to_rgba_array(Image.open(path))
+            pixels = pil_to_rgba_array(load_pillow_image(source))
             nested_snapshot = None
         h, w = pixels.shape[:2]
         keep_linked = layer.kind == "linked" if linked is None else bool(linked)
@@ -302,9 +326,9 @@ class SmartObjectsDocumentMixin:
         layer.smart_data = {
             **(layer.smart_data or {}),
             "linked": keep_linked,
-            "source_path": str(Path(path).resolve()),
+            "source_path": str(source),
             "original_size": [w, h],
-            "fingerprint": file_fingerprint(path),
+            "fingerprint": file_fingerprint(source),
         }
         if nested_snapshot is not None:
             layer.smart_data["content_type"] = "document"

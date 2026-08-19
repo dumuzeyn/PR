@@ -9,7 +9,6 @@ import os
 from pathlib import Path
 import socket
 import subprocess
-import tempfile
 import threading
 import time
 from urllib.error import HTTPError, URLError
@@ -20,6 +19,13 @@ import numpy as np
 from PIL import Image
 
 from .generative_api import GeneratedVariant, GenerativeAPIError, strict_outpaint_result, variant_seeds
+from .security.errors import ResourceLimitError, SecurityValidationError
+from .security.files import load_pillow_image, validate_array
+from .security.network import validate_loopback_url
+from .security.paths import validate_local_input
+from .security.processes import run_checked, validate_executable
+from .security.temporary import secure_temporary_directory
+from .security.validation import bounded_int, bounded_string, finite_float, loads_bounded_json
 
 
 SAMPLERS = {
@@ -30,6 +36,8 @@ SAMPLERS = {
 }
 PERFORMANCE_LABELS = {"Быстро": "fast", "Баланс": "balanced", "Качество": "quality", "Вручную": "custom"}
 PERFORMANCE_VALUES = {"fast": (4, 1.2, "LCM"), "balanced": (6, 1.5, "LCM"), "quality": (22, 7.0, "DPM++ 2M")}
+MAX_LOCAL_RESPONSE = 64 * 1024 * 1024
+MODEL_SUFFIXES = {".safetensors", ".ckpt", ".gguf"}
 
 
 def _creation_flags() -> int:
@@ -77,11 +85,14 @@ class _LocalServer:
             if self.alive:
                 return
             server = self.executable.with_name("sd-server.exe")
-            if not server.is_file():
+            try:
+                server = validate_executable(server)
+                model = validate_local_input(self.model, allowed_suffixes=MODEL_SUFFIXES)
+            except SecurityValidationError as exc:
                 raise GenerativeAPIError("Сервер локальной модели не найден")
             self.port = self._free_port()
             command = [
-                str(server), "--model", str(self.model), "--listen-ip", "127.0.0.1",
+                str(server), "--model", str(model), "--listen-ip", "127.0.0.1",
                 "--listen-port", str(self.port), "--backend", self._backend_assignment(),
                 "--rng", "cpu", "--mmap", "--vae-tiling", "--fa",
             ]
@@ -97,7 +108,8 @@ class _LocalServer:
                 raise GenerativeAPIError("Локальный сервер модели не запустился")
             try:
                 endpoint = "loras" if self.lora is not None else "options"
-                with urlopen(f"http://127.0.0.1:{self.port}/sdapi/v1/{endpoint}", timeout=1):
+                url = validate_loopback_url(f"http://127.0.0.1:{self.port}/sdapi/v1/{endpoint}")
+                with urlopen(url, timeout=1):
                     return
             except (OSError, URLError):
                 time.sleep(0.2)
@@ -121,6 +133,13 @@ class _LocalServer:
         seed: int, options: "LocalGenerationOptions", cancel: threading.Event | None,
     ) -> np.ndarray:
         self.start()
+        validate_array(image, expected_channels={4})
+        validate_array(mask, expected_channels={1})
+        if mask.shape != image.shape[:2]:
+            raise GenerativeAPIError("Размер маски не совпадает с изображением")
+        prompt = bounded_string(prompt, "Промпт", 4096)
+        negative = bounded_string(negative, "Негативный промпт", 4096)
+        seed = bounded_int(seed, "Seed", -1, 2**31 - 1)
         payload = {
             "prompt": prompt,
             "negative_prompt": negative,
@@ -138,7 +157,7 @@ class _LocalServer:
         if options.sampler == "LCM" and self.lora is not None:
             payload["lora"] = [{"path": self.lora.name, "multiplier": 1.0}]
         request = Request(
-            f"http://127.0.0.1:{self.port}/sdapi/v1/img2img",
+            validate_loopback_url(f"http://127.0.0.1:{self.port}/sdapi/v1/img2img"),
             data=json.dumps(payload).encode("utf-8"),
             headers={"Content-Type": "application/json"},
         )
@@ -147,7 +166,10 @@ class _LocalServer:
         def worker() -> None:
             try:
                 with urlopen(request, timeout=3600) as response:
-                    state["result"] = json.load(response)
+                    body = response.read(MAX_LOCAL_RESPONSE + 1)
+                    if len(body) > MAX_LOCAL_RESPONSE:
+                        raise ResourceLimitError("Ответ локальной модели слишком велик")
+                    state["result"] = loads_bounded_json(body, maximum=MAX_LOCAL_RESPONSE)
             except Exception as exc:
                 state["error"] = exc
 
@@ -162,7 +184,7 @@ class _LocalServer:
             error = state["error"]
             if isinstance(error, HTTPError):
                 try:
-                    details = error.read().decode("utf-8", errors="replace")
+                    details = error.read(4096).decode("utf-8", errors="replace")
                 except OSError:
                     details = str(error)
                 raise GenerativeAPIError(f"Локальная модель вернула ошибку: {details}") from error
@@ -172,10 +194,16 @@ class _LocalServer:
         if not images:
             raise GenerativeAPIError("Локальная модель не вернула изображение")
         try:
-            raw = base64.b64decode(str(images[0]).split(",", 1)[-1], validate=True)
-            with Image.open(io.BytesIO(raw)) as generated:
-                return np.asarray(generated.convert("RGBA"), dtype=np.uint8)
-        except (OSError, ValueError) as exc:
+            encoded = bounded_string(images[0], "Изображение модели", MAX_LOCAL_RESPONSE)
+            raw = base64.b64decode(encoded.split(",", 1)[-1], validate=True)
+            if len(raw) > MAX_LOCAL_RESPONSE:
+                raise ResourceLimitError("Изображение модели слишком велико")
+            from .security.files import load_pillow_bytes
+            generated = load_pillow_bytes(raw)
+            if generated.size != image.shape[1::-1]:
+                raise SecurityValidationError("Локальная модель вернула изображение другого размера")
+            return np.asarray(generated, dtype=np.uint8)
+        except (OSError, ValueError, SecurityValidationError, ResourceLimitError) as exc:
             raise GenerativeAPIError("Локальная модель вернула повреждённое изображение") from exc
 
 
@@ -225,13 +253,16 @@ class LocalGenerationOptions:
     max_side: int = 768
 
     def normalized(self) -> "LocalGenerationOptions":
-        return LocalGenerationOptions(
-            steps=max(4, min(80, int(self.steps))),
-            cfg_scale=max(1.0, min(20.0, float(self.cfg_scale))),
-            strength=max(0.05, min(1.0, float(self.strength))),
+        try:
+            return LocalGenerationOptions(
+            steps=bounded_int(self.steps, "Шаги", 4, 80),
+            cfg_scale=finite_float(self.cfg_scale, "CFG", 1.0, 20.0),
+            strength=finite_float(self.strength, "Сила", 0.05, 1.0),
             sampler=self.sampler if self.sampler in SAMPLERS else "DPM++ 2M",
-            max_side=max(512, min(1280, int(self.max_side))),
-        )
+            max_side=bounded_int(self.max_side, "Максимальная сторона", 512, 1280),
+            )
+        except (SecurityValidationError, ResourceLimitError) as exc:
+            raise GenerativeAPIError(str(exc)) from exc
 
 
 def _multiple_of_64(value: float) -> int:
@@ -279,7 +310,12 @@ class LocalImageClient:
         self.options = (options or LocalGenerationOptions()).normalized()
         self.cancel = cancel
         self.lora = None if lora is None else Path(lora)
-        if not self.executable.is_file() or not self.model.is_file():
+        try:
+            self.executable = validate_executable(self.executable)
+            self.model = validate_local_input(self.model, allowed_suffixes=MODEL_SUFFIXES)
+            if self.lora is not None:
+                self.lora = validate_local_input(self.lora, allowed_suffixes={".safetensors"})
+        except SecurityValidationError as exc:
             raise GenerativeAPIError("Локальная модель или движок не установлены")
         if self.options.sampler == "LCM" and (self.lora is None or not self.lora.is_file()):
             raise GenerativeAPIError("Ускоритель LCM не установлен")
@@ -288,10 +324,7 @@ class LocalImageClient:
         if self.backend == "cpu":
             return "CPU"
         try:
-            result = subprocess.run(
-                [str(self.executable), "--list-devices"], capture_output=True, text=True,
-                timeout=20, creationflags=_creation_flags(),
-            )
+            result = run_checked([self.executable, "--list-devices"], timeout=20)
             devices = []
             for line in (result.stdout + "\n" + result.stderr).splitlines():
                 if "\t" in line:
@@ -300,7 +333,7 @@ class LocalImageClient:
                         devices.append((name, description.lower()))
             preferred = next((name for name, text in devices if "nvidia" in text or "amd" in text or "radeon" in text), None)
             return preferred or (devices[0][0] if devices else self.backend)
-        except (OSError, subprocess.SubprocessError):
+        except (OSError, TimeoutError, SecurityValidationError, ResourceLimitError):
             return self.backend
 
     def _run(self, image: np.ndarray, mask: np.ndarray, prompt: str, negative: str, seed: int) -> np.ndarray:
@@ -312,7 +345,10 @@ class LocalImageClient:
         server = _SERVER_POOL.get(self.executable, self.model, self.backend, device, self.lora)
         if server.available:
             return server.generate(resized, resized_mask, prompt, negative, seed, options, self.cancel)
-        with tempfile.TemporaryDirectory(prefix="uzyro-ai-") as temp:
+        prompt = bounded_string(prompt, "Промпт", 4096)
+        negative = bounded_string(negative, "Негативный промпт", 4096)
+        seed = bounded_int(seed, "Seed", -1, 2**31 - 1)
+        with secure_temporary_directory(prefix="ai-") as temp:
             root = Path(temp)
             input_path, mask_path, output_path = root / "input.png", root / "mask.png", root / "result.png"
             Image.fromarray(resized, "RGBA").convert("RGB").save(input_path)
@@ -330,7 +366,7 @@ class LocalImageClient:
                 command.extend(("--lora-model-dir", str(self.lora.parent)))
                 command[command.index("--prompt") + 1] = f"{prompt}<lora:{self.lora.stem}:1>"
             process = subprocess.Popen(
-                command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace",
+                command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, shell=False,
                 creationflags=_creation_flags(),
             )
             while True:
@@ -342,16 +378,16 @@ class LocalImageClient:
                         process.kill()
                     raise GenerativeAPIError("Локальная генерация отменена")
                 try:
-                    stdout, stderr = process.communicate(timeout=0.25)
+                    process.wait(timeout=0.25)
                     break
                 except subprocess.TimeoutExpired:
                     continue
             if process.returncode != 0 or not output_path.is_file():
-                details = (stderr or stdout).strip().splitlines()
-                message = details[-1] if details else f"код {process.returncode}"
-                raise GenerativeAPIError(f"Локальная генерация завершилась с ошибкой: {message}")
-            with Image.open(output_path) as result:
-                return np.asarray(result.convert("RGBA"), dtype=np.uint8)
+                raise GenerativeAPIError(f"Локальная генерация завершилась с ошибкой: код {process.returncode}")
+            result = load_pillow_image(output_path)
+            if result.size != (width, height):
+                raise GenerativeAPIError("Локальная модель вернула изображение другого размера")
+            return np.asarray(result, dtype=np.uint8)
 
     def inpaint(self, image: np.ndarray, mask: np.ndarray, prompt: str, negative: str, seed: int, style: str = "") -> np.ndarray:
         x1, y1, x2, y2 = _selection_region(mask)

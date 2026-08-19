@@ -68,7 +68,7 @@ class ToolPaletteDialog(tk.Toplevel):
         self.listbox.bind("<space>", self.toggle_selected_from_keyboard)
         self.listbox.bind("<Return>", self.toggle_selected_from_keyboard)
         self.protocol("WM_DELETE_WINDOW", self.cancel)
-        self._drop_indicator = tk.Frame(self.listbox, height=3, background="#258cf4")
+        self._drop_indicator = tk.Frame(self.listbox, height=3, background=TOKENS.ACCENT)
         self._drag_handle = tk.Label(
             self.listbox,
             text="≡",
@@ -76,8 +76,8 @@ class ToolPaletteDialog(tk.Toplevel):
             relief=tk.RAISED,
             borderwidth=1,
             padx=4,
-            background="#e8f2fc",
-            foreground="#1769aa",
+            background=TOKENS.SURFACE_ELEVATED,
+            foreground=TOKENS.ACCENT_HOVER,
             font=("Segoe UI", 11, "bold"),
             takefocus=False,
         )
@@ -97,7 +97,7 @@ class ToolPaletteDialog(tk.Toplevel):
             state = "на панели" if value in self.visible else "скрыт"
             self.listbox.insert(tk.END, f"{self.label_by_id.get(value, value)}  ({state})")
             if value not in self.visible:
-                self.listbox.itemconfigure(tk.END, foreground="#777777")
+                self.listbox.itemconfigure(tk.END, foreground=TOKENS.TEXT_DISABLED)
         if selected in self.order:
             index = self.order.index(selected)
             self.listbox.selection_set(index)
@@ -318,7 +318,7 @@ class ToolPaletteDialog(tk.Toplevel):
         if self._drag_tool is None or not self._dragged:
             self._indicator_after_id = None
             return
-        colors = ("#258cf4", "#72b7ff", "#b7dcff", "#72b7ff")
+        colors = (TOKENS.ACCENT, TOKENS.ACCENT_HOVER, TOKENS.FOCUS, TOKENS.ACCENT_HOVER)
         self._drop_indicator.configure(background=colors[self._indicator_phase % len(colors)])
         self._indicator_phase += 1
         self._indicator_after_id = self.after(85, self.animate_drop_indicator)
@@ -354,7 +354,7 @@ class ToolPaletteDialog(tk.Toplevel):
         self._highlight_after_ids.clear()
         normal = str(self.listbox.cget("background"))
         selected = str(self.listbox.cget("selectbackground"))
-        colors = (("#6fb8ff", "#258cf4"), ("#9dceff", "#5ca8f4"), ("#c9e5ff", "#83bdf4"), (normal, selected))
+        colors = ((TOKENS.SELECTION, TOKENS.ACCENT), (TOKENS.SURFACE_SELECTED, TOKENS.ACCENT_HOVER), (TOKENS.SURFACE_HOVER, TOKENS.FOCUS), (normal, selected))
         for step, (background, selected_background) in enumerate(colors):
             after_id = self.after(
                 step * 70,

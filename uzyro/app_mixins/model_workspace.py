@@ -53,7 +53,7 @@ class ModelWorkspaceMixin:
             backend = self.local_hardware_profile().recommended_backend
         model = MODEL_BY_ID.get(model_id)
         engine = store.engine_executable(backend)
-        if model is None or engine is None or not store.model_installed(model):
+        if model is None or engine is None or not store.model_verified(model):
             raise GenerativeAPIError("Локальная модель не установлена. Откройте «Модели» и нажмите «Скачать и выбрать».")
         profile = self.local_hardware_profile()
         quality = str(settings.get("performance_profile", "balanced"))
@@ -130,6 +130,8 @@ class ModelWorkspaceMixin:
         tree.column("size", width=85, anchor=tk.E, stretch=False)
         tree.column("state", width=120, anchor=tk.CENTER, stretch=False)
         tree.pack(fill=tk.BOTH, expand=True)
+        tree.tag_configure("verified", foreground=TOKENS.SUCCESS)
+        tree.tag_configure("missing", foreground=TOKENS.TEXT_SECONDARY)
 
         name_text = tk.StringVar()
         description_text = tk.StringVar()
@@ -148,7 +150,8 @@ class ModelWorkspaceMixin:
 
         footer = ttk.Frame(dialog, padding=16)
         footer.pack(fill=tk.X)
-        ttk.Label(footer, textvariable=status).pack(side=tk.LEFT)
+        status_label = ttk.Label(footer, textvariable=status)
+        status_label.pack(side=tk.LEFT)
         close_button = ttk.Button(footer, text="Закрыть", command=dialog.destroy)
         close_button.pack(side=tk.RIGHT)
         remove_button = ttk.Button(footer, text="Удалить")
@@ -170,14 +173,14 @@ class ModelWorkspaceMixin:
             active = self.active_local_model_id()
             for model in MODEL_CATALOG:
                 complete = store.model_installed(model) and store.accelerator_installed()
-                state = "Установлена" if complete else "Не загружена"
+                state = "Проверено" if complete else "Не загружена"
                 if model.model_id == active and complete:
-                    state = "Выбрана"
+                    state = "Выбрана · Проверено"
                 values = (f"{model.size_gb + LCM_ACCELERATOR.size_gb:.1f} ГБ", state)
                 if tree.exists(model.model_id):
-                    tree.item(model.model_id, text=model.name, values=values)
+                    tree.item(model.model_id, text=model.name, values=values, tags=("verified" if complete else "missing",))
                 else:
-                    tree.insert("", tk.END, iid=model.model_id, text=model.name, values=values)
+                    tree.insert("", tk.END, iid=model.model_id, text=model.name, values=values, tags=("verified" if complete else "missing",))
 
         def show_details(_event=None) -> None:
             model = current_model()
@@ -218,6 +221,7 @@ class ModelWorkspaceMixin:
             cancel_event.clear()
             set_busy(True)
             status.set("Подготовка движка и модели...")
+            status_label.configure(style="TLabel")
             progress.configure(value=0)
 
             def worker():
@@ -230,6 +234,7 @@ class ModelWorkspaceMixin:
                 set_busy(False)
                 if isinstance(result, Exception):
                     status.set(str(result))
+                    status_label.configure(style="Danger.TLabel")
                     return
                 self.generative_settings.update({
                     "provider": "local", "local_model_id": model.model_id,
@@ -237,7 +242,8 @@ class ModelWorkspaceMixin:
                     "steps": 6, "cfg_scale": 1.5, "sampler": "LCM",
                 })
                 self.save_settings()
-                status.set("Модель установлена и выбрана")
+                status.set("Модель установлена, проверена и выбрана")
+                status_label.configure(style="Success.TLabel")
                 progress.configure(value=100)
                 refresh_rows()
                 show_details()
@@ -253,6 +259,7 @@ class ModelWorkspaceMixin:
             shutdown_local_servers()
             store.remove_model(model)
             status.set("Модель удалена")
+            status_label.configure(style="TLabel")
             refresh_rows()
             show_details()
 

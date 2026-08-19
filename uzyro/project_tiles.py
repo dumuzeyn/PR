@@ -4,10 +4,15 @@ import hashlib
 import io
 from pathlib import Path
 from typing import Any, Callable
+import uuid
 import zipfile
 
 import numpy as np
 from PIL import Image
+
+from .security.files import validate_zip_archive, validate_zip_info
+from .security.limits import LIMITS
+from .security.project import validate_tile_descriptor
 
 
 PROJECT_FORMAT_VERSION = 3
@@ -100,12 +105,14 @@ def read_tiled_array(
     archive: zipfile.ZipFile,
     descriptor: dict[str, Any],
     progress: TileProgress | None = None,
+    *,
+    archive_infos: dict[str, zipfile.ZipInfo] | None = None,
 ) -> np.ndarray:
     if not is_tiled_array(descriptor):
         raise ValueError("Unsupported project tile descriptor")
+    infos = validate_zip_archive(archive) if archive_infos is None else archive_infos
+    validate_tile_descriptor(descriptor, infos)
     shape = tuple(int(item) for item in descriptor.get("shape", []))
-    if len(shape) not in {2, 3} or any(item <= 0 for item in shape) or shape[0] > 100000 or shape[1] > 100000:
-        raise ValueError("Invalid project tile dimensions")
     try:
         dtype = np.dtype(str(descriptor["dtype"]))
     except (KeyError, TypeError) as exc:
@@ -115,14 +122,15 @@ def read_tiled_array(
     if not isinstance(tiles, list) or not tiles:
         raise ValueError("Project tile list is empty")
     result = np.zeros(shape, dtype=dtype)
-    names = set(archive.namelist())
     total = len(tiles)
     covered = np.zeros(shape[:2], dtype=np.bool_)
     for index, raw in enumerate(tiles, 1):
         path = str(raw.get("path", ""))
-        if not path or path not in names:
+        info = infos.get(path)
+        if not path or info is None:
             raise ValueError(f"Project tile is missing: {path or '<unknown>'}")
-        payload = archive.read(path)
+        validate_zip_info(info, maximum=LIMITS.max_tile_bytes)
+        payload = archive.read(info)
         if hashlib.sha256(payload).hexdigest() != str(raw.get("sha256", "")):
             raise ValueError(f"Project tile checksum mismatch: {path}")
         x, y = int(raw.get("x", -1)), int(raw.get("y", -1))
@@ -154,7 +162,7 @@ def tiled_payload_stats(descriptor: object) -> dict[str, int]:
 
 def temporary_project_path(path: str | Path) -> Path:
     target = Path(path)
-    return target.with_name(f".{target.name}.saving")
+    return target.with_name(f".{target.name}.{uuid.uuid4().hex}.saving")
 
 
 __all__ = [name for name in globals() if not name.startswith("__")]

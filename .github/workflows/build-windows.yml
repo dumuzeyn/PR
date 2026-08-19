@@ -28,9 +28,12 @@ jobs:
         shell: powershell
         run: |
           python -m venv .venv
-          .\.venv\Scripts\python.exe -m pip install --disable-pip-version-check --no-cache-dir -r requirements.txt
-          .\.venv\Scripts\python.exe -m pip install --disable-pip-version-check --no-cache-dir --force-reinstall "https://files.pythonhosted.org/packages/74/0a/d4ce3c44bca8635bd29a2eab5aa181b654a734a29b263ca8efe013beea98/pillow-10.4.0-cp312-cp312-win_amd64.whl#sha256=1d846aea995ad352d4bdcc847535bd56e0fd88d36829d2c90be880ef1ee4668a"
+          .\.venv\Scripts\python.exe -m pip install --disable-pip-version-check --no-cache-dir -r requirements-dev.txt
           (Resolve-Path .\uzyro\assets\native).Path | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Audit dependencies
+        shell: powershell
+        run: .\.venv\Scripts\python.exe -m pip_audit -r requirements.txt --progress-spinner off
 
       - name: Verify text shaping engine
         shell: powershell

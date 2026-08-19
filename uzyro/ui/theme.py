@@ -7,20 +7,27 @@ from tkinter import ttk
 
 @dataclass(frozen=True)
 class DesignTokens:
-    BACKGROUND: str = "#e8e9eb"
-    WORKSPACE: str = "#34363a"
-    SURFACE: str = "#f4f4f5"
-    SURFACE_HOVER: str = "#e4e6e8"
-    SURFACE_ACTIVE: str = "#d7dade"
-    SURFACE_SELECTED: str = "#d6e7f4"
-    BORDER: str = "#b8bdc3"
-    BORDER_ACTIVE: str = "#2f78b7"
-    TEXT_PRIMARY: str = "#1d2329"
-    TEXT_SECONDARY: str = "#5f6872"
-    TEXT_DISABLED: str = "#989fa7"
-    ACCENT: str = "#2f78b7"
-    ACCENT_HOVER: str = "#3f87c2"
-    DANGER: str = "#b23b45"
+    BACKGROUND: str = "#111216"
+    WORKSPACE: str = "#0c0d10"
+    SURFACE: str = "#191a1f"
+    SURFACE_ELEVATED: str = "#222329"
+    SURFACE_HOVER: str = "#282a31"
+    SURFACE_ACTIVE: str = "#31333c"
+    SURFACE_SELECTED: str = "#312944"
+    BORDER: str = "#353740"
+    SEPARATOR: str = "#2b2d34"
+    BORDER_ACTIVE: str = "#9b73ff"
+    TEXT_PRIMARY: str = "#f5f5f7"
+    TEXT_SECONDARY: str = "#b2b4bd"
+    TEXT_DISABLED: str = "#727680"
+    ACCENT: str = "#9568fb"
+    ACCENT_HOVER: str = "#a77cff"
+    ACCENT_PRESSED: str = "#8054e8"
+    SELECTION: str = "#3b3151"
+    FOCUS: str = "#b190ff"
+    SUCCESS: str = "#56b889"
+    WARNING: str = "#e1b65f"
+    DANGER: str = "#e06c78"
     SPACING_XS: int = 4
     SPACING_SM: int = 8
     SPACING_MD: int = 12
@@ -45,10 +52,20 @@ def configure_theme(root: tk.Misc, tokens: DesignTokens = TOKENS) -> ttk.Style:
     root.option_add("*Menu.activeBackground", tokens.SURFACE_SELECTED)
     root.option_add("*Menu.activeForeground", tokens.TEXT_PRIMARY)
     root.option_add("*Menu.selectColor", tokens.ACCENT)
+    root.option_add("*Listbox.background", tokens.SURFACE)
+    root.option_add("*Listbox.foreground", tokens.TEXT_PRIMARY)
+    root.option_add("*Listbox.selectBackground", tokens.SELECTION)
+    root.option_add("*Listbox.selectForeground", tokens.TEXT_PRIMARY)
+    root.option_add("*Listbox.highlightColor", tokens.FOCUS)
+    root.option_add("*Listbox.highlightBackground", tokens.BORDER)
+    root.option_add("*Text.background", tokens.SURFACE_ELEVATED)
+    root.option_add("*Text.foreground", tokens.TEXT_PRIMARY)
+    root.option_add("*Text.insertBackground", tokens.TEXT_PRIMARY)
 
     style.configure(".", background=tokens.SURFACE, foreground=tokens.TEXT_PRIMARY, bordercolor=tokens.BORDER)
     style.configure("App.TFrame", background=tokens.BACKGROUND)
     style.configure("Panel.TFrame", background=tokens.SURFACE)
+    style.configure("Elevated.TFrame", background=tokens.SURFACE_ELEVATED)
     style.configure("Workspace.TFrame", background=tokens.WORKSPACE)
     style.configure("Topbar.TFrame", background=tokens.BACKGROUND)
     style.configure("Status.TFrame", background=tokens.BACKGROUND)
@@ -56,6 +73,11 @@ def configure_theme(root: tk.Misc, tokens: DesignTokens = TOKENS) -> ttk.Style:
     style.configure("Topbar.TLabel", background=tokens.BACKGROUND, foreground=tokens.TEXT_PRIMARY)
     style.configure("Status.TLabel", background=tokens.BACKGROUND, foreground=tokens.TEXT_SECONDARY, padding=(8, 3))
     style.configure("Secondary.TLabel", foreground=tokens.TEXT_SECONDARY)
+    style.configure("Accent.TLabel", foreground=tokens.ACCENT_HOVER, font=("Segoe UI Semibold", 9))
+    style.configure("Elevated.TLabel", background=tokens.SURFACE_ELEVATED, foreground=tokens.TEXT_PRIMARY)
+    style.configure("Success.TLabel", foreground=tokens.SUCCESS)
+    style.configure("Warning.TLabel", foreground=tokens.WARNING)
+    style.configure("Danger.TLabel", foreground=tokens.DANGER)
     style.configure("PanelTitle.TLabel", font=("Segoe UI Semibold", 9), foreground=tokens.TEXT_PRIMARY)
     style.configure(
         "TButton",
@@ -73,8 +95,8 @@ def configure_theme(root: tk.Misc, tokens: DesignTokens = TOKENS) -> ttk.Style:
         foreground=[("disabled", tokens.TEXT_DISABLED)],
         bordercolor=[("focus", tokens.BORDER_ACTIVE)],
     )
-    style.configure("Primary.TButton", background=tokens.ACCENT, foreground="#ffffff", bordercolor=tokens.ACCENT, padding=(10, 5))
-    style.map("Primary.TButton", background=[("active", tokens.ACCENT_HOVER), ("pressed", tokens.ACCENT)])
+    style.configure("Primary.TButton", background=tokens.ACCENT, foreground="#ffffff", bordercolor=tokens.ACCENT, padding=(11, 5))
+    style.map("Primary.TButton", background=[("active", tokens.ACCENT_HOVER), ("pressed", tokens.ACCENT_PRESSED), ("disabled", tokens.SURFACE_ACTIVE)], foreground=[("disabled", tokens.TEXT_DISABLED)])
     style.configure("Quiet.TButton", background=tokens.SURFACE, bordercolor=tokens.SURFACE, padding=(5, 3))
     style.map("Quiet.TButton", background=[("active", tokens.SURFACE_HOVER), ("pressed", tokens.SURFACE_ACTIVE)])
     style.configure("PanelIcon.TButton", padding=(4, 4))
@@ -95,7 +117,7 @@ def configure_theme(root: tk.Misc, tokens: DesignTokens = TOKENS) -> ttk.Style:
     style.map(
         "Tool.TRadiobutton",
         background=[("selected", tokens.SURFACE_SELECTED), ("active", tokens.SURFACE_HOVER)],
-        foreground=[("selected", tokens.TEXT_PRIMARY)],
+        foreground=[("selected", "#ffffff")],
         indicatorcolor=[("selected", tokens.ACCENT)],
     )
     style.configure(
@@ -120,5 +142,14 @@ def configure_theme(root: tk.Misc, tokens: DesignTokens = TOKENS) -> ttk.Style:
     style.configure("Sidebar.TNotebook.Tab", background=tokens.SURFACE_HOVER, foreground=tokens.TEXT_SECONDARY, padding=(6, 7), borderwidth=0)
     style.map("Sidebar.TNotebook.Tab", background=[("selected", tokens.SURFACE_SELECTED), ("active", tokens.SURFACE_HOVER)], foreground=[("selected", tokens.TEXT_PRIMARY)])
     style.configure("TPanedwindow", background=tokens.BORDER, sashwidth=1)
-    style.configure("TSeparator", background=tokens.BORDER)
+    style.configure("TSeparator", background=tokens.SEPARATOR)
+    style.configure("TLabelframe", background=tokens.SURFACE, bordercolor=tokens.BORDER, relief="solid")
+    style.configure("TLabelframe.Label", background=tokens.SURFACE, foreground=tokens.TEXT_SECONDARY, font=("Segoe UI Semibold", 9))
+    style.configure("Treeview", background=tokens.SURFACE, fieldbackground=tokens.SURFACE, foreground=tokens.TEXT_PRIMARY, bordercolor=tokens.BORDER, rowheight=28)
+    style.map("Treeview", background=[("selected", tokens.SELECTION)], foreground=[("selected", tokens.TEXT_PRIMARY)])
+    style.configure("Treeview.Heading", background=tokens.SURFACE_ELEVATED, foreground=tokens.TEXT_SECONDARY, bordercolor=tokens.BORDER, padding=(8, 6), relief="flat", font=("Segoe UI Semibold", 9))
+    style.map("Treeview.Heading", background=[("active", tokens.SURFACE_HOVER)])
+    style.configure("TProgressbar", background=tokens.ACCENT, troughcolor=tokens.SURFACE_ELEVATED, bordercolor=tokens.BORDER, lightcolor=tokens.ACCENT, darkcolor=tokens.ACCENT)
+    style.configure("Vertical.TProgressbar", background=tokens.ACCENT, troughcolor=tokens.SURFACE_ELEVATED)
+    style.configure("TMenubutton", background=tokens.SURFACE_HOVER, foreground=tokens.TEXT_PRIMARY, bordercolor=tokens.BORDER, arrowcolor=tokens.TEXT_SECONDARY, padding=(8, 4))
     return style

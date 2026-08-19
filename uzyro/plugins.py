@@ -4,14 +4,18 @@ from dataclasses import dataclass, field
 import json
 import os
 from pathlib import Path
-import subprocess
 import sys
-import tempfile
 from typing import Any, Callable
 
 import numpy as np
 
 from .core import Document
+from .security.files import load_pillow_image, validate_array
+from .security.limits import LIMITS
+from .security.paths import canonical_path, ensure_within, validate_local_input
+from .security.processes import run_checked, validate_executable
+from .security.temporary import secure_temporary_directory
+from .security.validation import load_bounded_json, loads_bounded_json, validate_identifier, validate_json_tree
 
 
 PLUGIN_API_VERSION = 2
@@ -30,6 +34,7 @@ class PluginInfo:
     requested_permissions: set[str] = field(default_factory=set)
     granted_permissions: set[str] = field(default_factory=set)
     description: str = ""
+    author: str = ""
     legacy: bool = False
 
     @property
@@ -90,25 +95,26 @@ class PluginAPI:
     def register_external_filter(self, name: str, executable: str | Path, description: str = "", timeout: int = 120) -> None:
         self._require("pixels")
         self._require("process")
-        command = str(Path(executable).resolve())
+        command = validate_executable(executable)
 
         def callback(pixels: np.ndarray, params: dict[str, Any]) -> np.ndarray:
             from PIL import Image
             from .core import pil_to_rgba_array, rgba_array_to_pil
 
-            with tempfile.TemporaryDirectory(prefix="uzyro-external-") as temp:
-                source, target = Path(temp) / "input.png", Path(temp) / "output.png"
+            validate_json_tree(params)
+            with secure_temporary_directory("external-") as temp:
+                source, target = temp / "input.png", temp / "output.png"
                 rgba_array_to_pil(pixels).save(source)
-                completed = subprocess.run(
-                    [command, str(source), str(target), json.dumps(params, ensure_ascii=False)],
-                    timeout=max(1, int(timeout)),
-                    capture_output=True,
-                    text=True,
-                    creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+                completed = run_checked(
+                    [command, source, target, json.dumps(params, ensure_ascii=False)],
+                    timeout=max(1, min(600, int(timeout))), maximum_output=LIMITS.max_process_output_bytes,
                 )
                 if completed.returncode != 0 or not target.exists():
                     raise RuntimeError(completed.stderr.strip() or f"Внешний фильтр завершился с кодом {completed.returncode}")
-                return pil_to_rgba_array(Image.open(target))
+                output = pil_to_rgba_array(load_pillow_image(target))
+                if output.shape != pixels.shape:
+                    raise ValueError("Внешний фильтр вернул изображение другого размера")
+                return output
 
         self.filters[name] = (callback, description)
 
@@ -158,10 +164,16 @@ class PluginRegistry:
             directory.mkdir(parents=True, exist_ok=True)
             for manifest_path in sorted(directory.glob("*/plugin.json")):
                 try:
-                    raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+                    root = canonical_path(directory, must_exist=True)
+                    manifest_path = ensure_within(manifest_path, root, must_exist=True)
+                    if manifest_path.is_symlink() or manifest_path.parent.is_symlink():
+                        raise ValueError("ссылки и junction в каталоге плагина запрещены")
+                    raw = load_bounded_json(manifest_path, maximum=1024 * 1024)
+                    if not isinstance(raw, dict):
+                        raise ValueError("манифест должен быть JSON-объектом")
                     if raw.get("format") not in {MANIFEST_FORMAT, LEGACY_MANIFEST_FORMAT}:
                         raise ValueError("неподдерживаемый формат манифеста")
-                    plugin_id = str(raw["id"])
+                    plugin_id = validate_identifier(raw["id"], "ID плагина")
                     requested = {str(item) for item in raw.get("permissions", [])}
                     unknown = requested - KNOWN_PERMISSIONS
                     if unknown:
@@ -169,16 +181,21 @@ class PluginRegistry:
                     api_version = int(raw.get("api_version", 0))
                     if api_version != PLUGIN_API_VERSION:
                         raise ValueError(f"нужен API {api_version}, редактор предоставляет {PLUGIN_API_VERSION}")
-                    entrypoint = (manifest_path.parent / str(raw.get("entrypoint", "plugin.py"))).resolve()
-                    if not entrypoint.is_file() or entrypoint.parent != manifest_path.parent.resolve():
+                    entrypoint = ensure_within(manifest_path.parent / str(raw.get("entrypoint", "plugin.py")), manifest_path.parent, must_exist=True)
+                    if not entrypoint.is_file() or entrypoint.is_symlink() or entrypoint.suffix.lower() != ".py":
                         raise ValueError("entrypoint должен быть файлом внутри папки плагина")
                     grants = set(self._grants.get(plugin_id, [])) & requested
-                    result.append(PluginInfo(plugin_id, str(raw.get("name", plugin_id)), str(raw.get("version", "0.0.0")), api_version, entrypoint, requested, grants, str(raw.get("description", ""))))
+                    result.append(PluginInfo(
+                        plugin_id, str(raw.get("name", plugin_id))[:128], str(raw.get("version", "0.0.0"))[:64],
+                        api_version, entrypoint, requested, grants, str(raw.get("description", ""))[:4096],
+                        str(raw.get("author", "Не указан"))[:128],
+                    ))
                 except Exception as exc:
                     self.errors.append(f"{manifest_path}: {exc}")
             for path in sorted(directory.glob("*.py")):
                 plugin_id = f"legacy.{path.stem}"
-                result.append(PluginInfo(plugin_id, path.stem, "legacy", 1, path.resolve(), {"pixels"}, {"pixels"}, legacy=True))
+                grants = set(self._grants.get(plugin_id, [])) & {"pixels"}
+                result.append(PluginInfo(plugin_id, path.stem, "legacy", 1, path.resolve(), {"pixels"}, grants, legacy=True))
         return result
 
     def _register_metadata(self, info: PluginInfo, metadata: dict[str, Any]) -> None:
@@ -209,19 +226,22 @@ class PluginRegistry:
         if extension is None:
             raise KeyError(f"Фильтр-плагин не найден: {name}")
         info = self.plugins[extension.plugin_id]
-        with tempfile.TemporaryDirectory(prefix="uzyro-plugin-") as temp:
-            source, target, parameters = Path(temp) / "input.npy", Path(temp) / "output.npy", Path(temp) / "params.json"
+        validate_json_tree(params or {})
+        validate_array(pixels, expected_channels={4})
+        with secure_temporary_directory("plugin-") as temp:
+            source, target, parameters = temp / "input.npy", temp / "output.npy", temp / "params.json"
             np.save(source, pixels, allow_pickle=False)
             parameters.write_text(json.dumps(params or {}, ensure_ascii=False), encoding="utf-8")
             self._host(info, "filter", name, source, target, parameters, allowed_paths=[source, target, parameters])
-            output = np.load(target, allow_pickle=False)
+            output = validate_array(np.load(target, allow_pickle=False), expected_channels={4})
         if output.shape != pixels.shape or output.dtype != np.uint8:
             raise ValueError("Фильтр должен вернуть uint8 RGBA исходного размера")
         return np.ascontiguousarray(output)
 
     def _run_document_action(self, info: PluginInfo, name: str, document: Document, params: dict[str, Any]) -> None:
-        with tempfile.TemporaryDirectory(prefix="uzyro-plugin-") as temp:
-            source, target, parameters = Path(temp) / "input.prdx", Path(temp) / "output.prdx", Path(temp) / "params.json"
+        validate_json_tree(params)
+        with secure_temporary_directory("plugin-") as temp:
+            source, target, parameters = temp / "input.prdx", temp / "output.prdx", temp / "params.json"
             document.save_project(source)
             parameters.write_text(json.dumps(params, ensure_ascii=False), encoding="utf-8")
             self._host(info, "action", name, source, target, parameters, allowed_paths=[source, target, parameters])
@@ -234,9 +254,10 @@ class PluginRegistry:
         if extension is None:
             raise KeyError(f"Импортёр не найден: {name}")
         info = self.plugins[extension.plugin_id]
-        source_path = Path(source).resolve()
-        with tempfile.TemporaryDirectory(prefix="uzyro-plugin-") as temp:
-            target, parameters = Path(temp) / "output.prdx", Path(temp) / "params.json"
+        source_path = validate_local_input(source)
+        validate_json_tree(params or {})
+        with secure_temporary_directory("plugin-") as temp:
+            target, parameters = temp / "output.prdx", temp / "params.json"
             parameters.write_text(json.dumps(params or {}, ensure_ascii=False), encoding="utf-8")
             self._host(info, "import", name, source_path, target, parameters, allowed_paths=[source_path, target, parameters])
             return Document.open_project(target)
@@ -246,9 +267,10 @@ class PluginRegistry:
         if extension is None:
             raise KeyError(f"Экспортёр не найден: {name}")
         info = self.plugins[extension.plugin_id]
-        target_path = Path(target).resolve()
-        with tempfile.TemporaryDirectory(prefix="uzyro-plugin-") as temp:
-            source, parameters = Path(temp) / "input.prdx", Path(temp) / "params.json"
+        target_path = canonical_path(target)
+        validate_json_tree(params or {})
+        with secure_temporary_directory("plugin-") as temp:
+            source, parameters = temp / "input.prdx", temp / "params.json"
             document.save_project(source)
             parameters.write_text(json.dumps(params or {}, ensure_ascii=False), encoding="utf-8")
             self._host(info, "export", name, source, target_path, parameters, allowed_paths=[source, target_path, parameters])
@@ -266,27 +288,38 @@ class PluginRegistry:
             "args": [str(item) for item in args],
             "allowed_paths": [str(item.resolve()) for item in (allowed_paths or [])],
         }
-        completed = subprocess.run(
-            command,
-            input=json.dumps(request, ensure_ascii=False),
-            text=True,
-            encoding="utf-8",
-            capture_output=True,
-            timeout=180,
-            env={**os.environ, "PYTHONIOENCODING": "utf-8"},
-            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+        request_payload = json.dumps(request, ensure_ascii=False)
+        if len(request_payload.encode("utf-8")) > LIMITS.max_plugin_message_bytes:
+            raise ValueError("Запрос к плагину превышает безопасный размер")
+        host_env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
+        if not getattr(sys, "frozen", False):
+            package_root = str(Path(__file__).resolve().parent.parent)
+            current_pythonpath = host_env.get("PYTHONPATH", "")
+            host_env["PYTHONPATH"] = package_root if not current_pythonpath else os.pathsep.join((package_root, current_pythonpath))
+        completed = run_checked(
+            command, input_data=request_payload, timeout=180, maximum_output=LIMITS.max_plugin_message_bytes,
+            env=host_env,
+            cwd=info.entrypoint.parent, allow_python=True,
         )
         if completed.returncode != 0:
             raise RuntimeError(completed.stderr.strip() or "Изолированный процесс плагина завершился с ошибкой")
         lines = [line for line in completed.stdout.splitlines() if line.startswith("UZYRO_PLUGIN_RESULT=")]
         if not lines:
             raise RuntimeError("Плагин не вернул корректный ответ")
-        return json.loads(lines[-1].split("=", 1)[1])
+        result = loads_bounded_json(lines[-1].split("=", 1)[1], maximum=LIMITS.max_plugin_message_bytes)
+        if not isinstance(result, dict):
+            raise RuntimeError("Плагин вернул ответ неверного типа")
+        return result
 
     def _load_grants(self) -> dict[str, list[str]]:
         try:
-            raw = json.loads(self.permission_file.read_text(encoding="utf-8"))
-            return raw if isinstance(raw, dict) else {}
+            raw = load_bounded_json(self.permission_file, maximum=1024 * 1024)
+            if not isinstance(raw, dict):
+                return {}
+            return {
+                validate_identifier(key, "ID плагина"): [item for item in value if item in KNOWN_PERMISSIONS]
+                for key, value in raw.items() if isinstance(value, list)
+            }
         except (OSError, ValueError):
             return {}
 
