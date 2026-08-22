@@ -10,6 +10,7 @@ class CommandsMixin:
         self.record_history_action(command)
         self.status_text(command.label)
         self.refresh_history_panel()
+        self.refresh_document_tabs()
 
     def run_document_command(self, label: str, fn) -> None:
         before = self.doc.raw_state()
@@ -22,6 +23,7 @@ class CommandsMixin:
         self._edit_generation += 1
         self.status_text(label)
         self.refresh_history_panel()
+        self.refresh_document_tabs()
 
     @classmethod
     def state_value_equal(cls, left, right) -> bool:
@@ -84,6 +86,7 @@ class CommandsMixin:
         self._selection_contour_signature = None
         self.update_selection_overlay()
         self.status_text(label)
+        self.refresh_document_tabs()
 
     def record_history_action(self, command) -> None:
         try:
@@ -118,9 +121,7 @@ class CommandsMixin:
         if not self.recovery_path.exists():
             messagebox.showinfo("Восстановление", "Файл восстановления не найден.")
             return
-        self.doc = Document.open_project(self.recovery_path)
-        self.history.clear()
-        self.selection_box = self.doc.selection_bounds()
+        self.open_document_session(Document.open_project(self.recovery_path))
 
     def run_pixel_delta_command(self, label: str, fn) -> tuple[int, int, int, int] | None:
         layer = self.doc.layer
@@ -185,6 +186,7 @@ class CommandsMixin:
             self._edit_generation += 1
             self.refresh_history_command(self.history.last_command)
             self.status_text(f"Undo: {label}")
+            self.refresh_document_tabs()
 
     def redo(self) -> None:
         label = self.history.redo(self.doc)
@@ -192,6 +194,7 @@ class CommandsMixin:
             self._edit_generation += 1
             self.refresh_history_command(self.history.last_command)
             self.status_text(f"Redo: {label}")
+            self.refresh_document_tabs()
 
     def refresh_history_command(self, command) -> None:
         if isinstance(command, (PixelPatchCommand, PixelTilePatchCommand, MaskPatchCommand, MaskTilePatchCommand)):

@@ -14,6 +14,7 @@ if ($Python) {
 & $py -m PyInstaller --noconfirm --clean --onefile --windowed --name UZYRO `
   --icon "uzyro/assets/branding/uzyro.ico" `
   --exclude-module scipy --exclude-module skimage --exclude-module aggdraw `
+  --exclude-module matplotlib --exclude-module PyQt5 --exclude-module PySide6 `
   --add-binary "uzyro/assets/native/fribidi-0.dll;." `
   --add-data "uzyro/assets/native/LICENSE.fribidi.txt;licenses" `
   --add-data "uzyro/assets/tool_demos;uzyro/assets/tool_demos" `

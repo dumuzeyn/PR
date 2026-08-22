@@ -54,7 +54,7 @@ class PointerSupportMixin:
                 if handle:
                     self.canvas.configure(cursor=cursor_by_handle.get(handle, "arrow"))
                 else:
-                    hit = topmost_layer_at(self.doc, point, tolerance=max(2, round(5 / max(self.zoom.get(), 0.01))))
+                    hit = hit_test_document(self.doc, point, tolerance=max(2, round(5 / max(self.zoom.get(), 0.01))))
                     self.canvas.configure(cursor="fleur" if hit is not None else "arrow")
         if not self._panning:
             self.update_brush_preview(event)
@@ -131,18 +131,27 @@ class PointerSupportMixin:
         self.canvas.tag_raise(self._object_bounds_ids[0])
         self.update_path_overlay()
 
-    def select_object_at(self, point: tuple[int, int], add: bool = False) -> Layer | None:
-        index = topmost_layer_at(self.doc, point, tolerance=max(2, round(5 / max(self.zoom.get(), 0.01))))
-        if index is None:
+    def select_object_at(self, point: tuple[int, int], add: bool = False, cycle: bool = False) -> Layer | None:
+        tolerance = max(2, round(5 / max(self.zoom.get(), 0.01)))
+        hits = hit_test_stack(self.doc, point, tolerance)
+        hit = hits[0] if hits else None
+        if cycle and hits:
+            active_id = self.doc.layer.id
+            active_index = next((index for index, item in enumerate(hits) if item.layer_id == active_id), -1)
+            hit = hits[(active_index + 1) % len(hits)]
+        if hit is None:
             if not add:
                 self.selected_layer_ids.clear()
                 self.refresh_layers()
                 self.update_object_bounds()
             return None
-        layer = self.doc.layers[index]
-        self.doc.active_layer = index
+        layer = self.doc.layers[hit.layer_index]
+        self.doc.active_layer = hit.layer_index
         if add:
-            self.selected_layer_ids.add(layer.id)
+            if layer.id in self.selected_layer_ids:
+                self.selected_layer_ids.remove(layer.id)
+            else:
+                self.selected_layer_ids.add(layer.id)
         else:
             self.selected_layer_ids = {layer.id}
         self.refresh_layers()

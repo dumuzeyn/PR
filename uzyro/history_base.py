@@ -218,6 +218,40 @@ class ShapeDataCommand:
     def redo(self, document: Document) -> None:
         self._apply(document, self.after, self.after_name)
 
+
+@dataclass
+class ObjectStatesCommand:
+    label: str
+    before: dict[str, dict[str, Any]]
+    after: dict[str, dict[str, Any]]
+
+    @property
+    def memory_bytes(self) -> int:
+        return max(128, _value_memory(self.before) + _value_memory(self.after))
+
+    @staticmethod
+    def _apply(document: Document, states: dict[str, dict[str, Any]]) -> None:
+        for layer_id, state in states.items():
+            layer = document.get_layer(layer_id)
+            if layer is None:
+                continue
+            layer.x = int(state.get("x", layer.x))
+            layer.y = int(state.get("y", layer.y))
+            if state.get("shape_data") is not None:
+                layer.shape_data = copy.deepcopy(state["shape_data"])
+                render_shape_layer(layer)
+            elif state.get("text_data") is not None:
+                layer.text_data = copy.deepcopy(state["text_data"])
+                render_text_layer(layer)
+            layer.touch_pixels()
+        document.dirty = True
+
+    def undo(self, document: Document) -> None:
+        self._apply(document, self.before)
+
+    def redo(self, document: Document) -> None:
+        self._apply(document, self.after)
+
 @dataclass
 class DocumentFieldsCommand:
     label: str

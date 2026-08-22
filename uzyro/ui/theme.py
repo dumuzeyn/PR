@@ -14,7 +14,7 @@ class DesignTokens:
     SURFACE_HOVER: str = "#282a31"
     SURFACE_ACTIVE: str = "#31333c"
     SURFACE_SELECTED: str = "#312944"
-    BORDER: str = "#353740"
+    BORDER: str = "#292b32"
     SEPARATOR: str = "#2b2d34"
     BORDER_ACTIVE: str = "#9b73ff"
     TEXT_PRIMARY: str = "#f5f5f7"
@@ -88,6 +88,7 @@ def configure_theme(root: tk.Misc, tokens: DesignTokens = TOKENS) -> ttk.Style:
         darkcolor=tokens.SURFACE_HOVER,
         padding=(8, 4),
         relief="flat",
+        borderwidth=0,
     )
     style.map(
         "TButton",
@@ -128,11 +129,11 @@ def configure_theme(root: tk.Misc, tokens: DesignTokens = TOKENS) -> ttk.Style:
         padding=(10, 5),
     )
     for widget in ("TEntry", "TSpinbox", "TCombobox"):
-        style.configure(widget, fieldbackground=tokens.SURFACE_HOVER, background=tokens.SURFACE_HOVER, foreground=tokens.TEXT_PRIMARY, bordercolor=tokens.BORDER, arrowcolor=tokens.TEXT_SECONDARY, padding=4)
+        style.configure(widget, fieldbackground=tokens.SURFACE_HOVER, background=tokens.SURFACE_HOVER, foreground=tokens.TEXT_PRIMARY, bordercolor=tokens.SURFACE_HOVER, lightcolor=tokens.SURFACE_HOVER, darkcolor=tokens.SURFACE_HOVER, arrowcolor=tokens.TEXT_SECONDARY, padding=4, borderwidth=0, relief="flat")
         style.map(widget, bordercolor=[("focus", tokens.BORDER_ACTIVE)], fieldbackground=[("readonly", tokens.SURFACE_HOVER)], foreground=[("disabled", tokens.TEXT_DISABLED)])
     style.configure("TCheckbutton", background=tokens.SURFACE, foreground=tokens.TEXT_PRIMARY, indicatorcolor=tokens.SURFACE_HOVER, padding=3)
     style.map("TCheckbutton", indicatorcolor=[("selected", tokens.ACCENT), ("active", tokens.SURFACE_HOVER)])
-    style.configure("TScale", background=tokens.SURFACE, troughcolor=tokens.SURFACE_HOVER, bordercolor=tokens.SURFACE, lightcolor=tokens.ACCENT, darkcolor=tokens.ACCENT)
+    style.configure("TScale", background=tokens.SURFACE, troughcolor=tokens.SURFACE_HOVER, bordercolor=tokens.SURFACE, lightcolor=tokens.ACCENT, darkcolor=tokens.ACCENT, borderwidth=0, relief="flat", sliderlength=14, sliderthickness=12)
     style.configure("TScrollbar", background=tokens.SURFACE_HOVER, troughcolor=tokens.SURFACE, bordercolor=tokens.SURFACE, arrowcolor=tokens.TEXT_SECONDARY, width=9)
     style.map("TScrollbar", background=[("active", tokens.TEXT_DISABLED)])
     style.configure("TNotebook", background=tokens.SURFACE, borderwidth=0, tabmargins=0)
@@ -143,9 +144,16 @@ def configure_theme(root: tk.Misc, tokens: DesignTokens = TOKENS) -> ttk.Style:
     style.map("Sidebar.TNotebook.Tab", background=[("selected", tokens.SURFACE_SELECTED), ("active", tokens.SURFACE_HOVER)], foreground=[("selected", tokens.TEXT_PRIMARY)])
     style.configure("TPanedwindow", background=tokens.BORDER, sashwidth=1)
     style.configure("TSeparator", background=tokens.SEPARATOR)
-    style.configure("TLabelframe", background=tokens.SURFACE, bordercolor=tokens.BORDER, relief="solid")
+    style.configure("DocumentTabs.TFrame", background=tokens.BACKGROUND)
+    style.configure("DocumentTab.TButton", background=tokens.BACKGROUND, foreground=tokens.TEXT_SECONDARY, padding=(12, 6), borderwidth=0)
+    style.map("DocumentTab.TButton", background=[("active", tokens.SURFACE_HOVER)], foreground=[("active", tokens.TEXT_PRIMARY)])
+    style.configure("ActiveDocumentTab.TButton", background=tokens.SURFACE_SELECTED, foreground=tokens.TEXT_PRIMARY, padding=(12, 6), borderwidth=0)
+    style.map("ActiveDocumentTab.TButton", background=[("active", tokens.SURFACE_SELECTED), ("pressed", tokens.SURFACE_ACTIVE)])
+    style.configure("DocumentTabClose.TButton", background=tokens.BACKGROUND, foreground=tokens.TEXT_SECONDARY, padding=(5, 6), borderwidth=0)
+    style.map("DocumentTabClose.TButton", background=[("active", tokens.SURFACE_HOVER)], foreground=[("active", tokens.TEXT_PRIMARY)])
+    style.configure("TLabelframe", background=tokens.SURFACE, bordercolor=tokens.SURFACE, relief="flat", borderwidth=0)
     style.configure("TLabelframe.Label", background=tokens.SURFACE, foreground=tokens.TEXT_SECONDARY, font=("Segoe UI Semibold", 9))
-    style.configure("Treeview", background=tokens.SURFACE, fieldbackground=tokens.SURFACE, foreground=tokens.TEXT_PRIMARY, bordercolor=tokens.BORDER, rowheight=28)
+    style.configure("Treeview", background=tokens.SURFACE, fieldbackground=tokens.SURFACE, foreground=tokens.TEXT_PRIMARY, bordercolor=tokens.SURFACE, rowheight=28, borderwidth=0, relief="flat")
     style.map("Treeview", background=[("selected", tokens.SELECTION)], foreground=[("selected", tokens.TEXT_PRIMARY)])
     style.configure("Treeview.Heading", background=tokens.SURFACE_ELEVATED, foreground=tokens.TEXT_SECONDARY, bordercolor=tokens.BORDER, padding=(8, 6), relief="flat", font=("Segoe UI Semibold", 9))
     style.map("Treeview.Heading", background=[("active", tokens.SURFACE_HOVER)])

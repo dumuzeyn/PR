@@ -138,6 +138,8 @@ class MenusToolsMixin:
         layer.add_separator()
         layer.add_command(label="Поднять выше", command=lambda: self.move_layer(1))
         layer.add_command(label="Опустить ниже", command=lambda: self.move_layer(-1))
+        layer.add_command(label="На передний план", command=lambda: self.move_layer_to(len(self.doc.layers) - 1))
+        layer.add_command(label="На задний план", command=lambda: self.move_layer_to(0))
         layer.add_command(label="Свободная трансформация", command=self.free_transform_layer, accelerator=accelerator("free_transform"))
         layer.add_command(label="Трансформировать выделенные пиксели", command=self.transform_selected_pixels)
         layer.add_command(label="Перспективная трансформация", command=self.perspective_transform_layer)

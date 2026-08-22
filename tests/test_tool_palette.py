@@ -16,8 +16,16 @@ DEFINITIONS = [
 
 
 class ToolPaletteDialogTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.root = tk.Tk()
+        cls.root.geometry("1x1+0+0")
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls.root.destroy()
+
     def setUp(self) -> None:
-        self.root = tk.Tk()
         self.dialog = ToolPaletteDialog(
             self.root,
             definitions=DEFINITIONS,
@@ -25,11 +33,13 @@ class ToolPaletteDialogTests(unittest.TestCase):
             visible=["first", "second", "third"],
         )
         self.dialog.update()
+        self.dialog.deiconify()
+        self.dialog.update_idletasks()
 
     def tearDown(self) -> None:
         if self.dialog.winfo_exists():
             self.dialog.destroy()
-        self.root.destroy()
+        self.root.update_idletasks()
 
     def row_center(self, index: int) -> int:
         bounds = self.dialog.listbox.bbox(index)

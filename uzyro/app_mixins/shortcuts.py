@@ -13,6 +13,7 @@ class ShortcutsMixin:
         options_bar.pack_propagate(False)
         self._build_tool_options(options_bar)
         ttk.Separator(self.editor_root).pack(fill=tk.X)
+        self._build_document_tabs(self.editor_root)
         root = ttk.PanedWindow(self.editor_root, orient=tk.HORIZONTAL)
         root.pack(fill=tk.BOTH, expand=True)
 
@@ -56,7 +57,13 @@ class ShortcutsMixin:
         self.bind_all("<KeyPress>", self.shortcut_plain_key)
 
     def shortcut_control_key(self, event):
-        if event_key(event) == "p" and not (int(getattr(event, "state", 0)) & 0x0001):
+        key = event_key(event)
+        state = int(getattr(event, "state", 0))
+        if key == "tab":
+            return self.cycle_document(-1 if state & 0x0001 else 1)
+        if key == "w":
+            return self.close_active_document()
+        if key == "p" and not (state & 0x0001):
             return self.shortcut_print(event)
         callbacks = {
             "undo": self.shortcut_undo, "redo": self.shortcut_redo, "save": self.shortcut_save,
@@ -303,19 +310,25 @@ class ShortcutsMixin:
         return None
 
     def nudge_selected_object(self, event):
-        if self.shortcut_context() != "canvas" or self.tool.get() != "move" or self.doc.layer.id not in self.selected_layer_ids:
+        if self.shortcut_context() != "canvas" or self.tool.get() != "move":
             return None
-        layer = self.doc.layer
-        if layer.kind not in {"shape", "text"} or layer.locked:
+        layers = [layer for layer in self.selected_object_layers() if not layer.locked]
+        if not layers:
             return None
         step = 10 if event.state & 0x0001 else 1
         dx = -step if event.keysym == "Left" else step if event.keysym == "Right" else 0
         dy = -step if event.keysym == "Up" else step if event.keysym == "Down" else 0
-        before = (layer.x, layer.y)
-        layer.x += dx
-        layer.y += dy
+        before = {layer.id: (layer.x, layer.y) for layer in layers}
+        for layer in layers:
+            layer.x += dx
+            layer.y += dy
+        after = {layer.id: (layer.x, layer.y) for layer in layers}
         self.doc.dirty = True
-        self.push_command(LayerMoveCommand("Сдвинуть объект", layer.id, before, (layer.x, layer.y)))
+        if len(layers) == 1:
+            layer = layers[0]
+            self.push_command(LayerMoveCommand("Сдвинуть объект", layer.id, before[layer.id], after[layer.id]))
+        else:
+            self.push_command(LayerGroupMoveCommand("Сдвинуть объекты", before, after))
         self.refresh()
         return "break"
 
@@ -338,6 +351,7 @@ class ShortcutsMixin:
             return "break"
         if hasattr(self, "canvas"):
             self.clear_drag_preview()
+            self.cancel_move_selection_preview()
             self.clear_lasso_overlay()
             self.clear_quick_selection_preview()
             self.clear_gradient_preview()
@@ -345,6 +359,8 @@ class ShortcutsMixin:
         self.drag_start = None
         self.last_point = None
         self._shape_drag_options = None
+        self._object_marquee_start = None
+        self._object_marquee_add = False
         self._crop_box = None
         self._crop_drag_handle = None
         self._crop_drag_origin_box = None

@@ -2,6 +2,7 @@ from .app_shared import *
 from .brand import apply_window_branding
 from .app_mixins.startup_settings import StartupSettingsMixin
 from .app_mixins.startup_screen import StartupScreenMixin
+from .app_mixins.document_workspace import DocumentWorkspaceMixin
 from .app_mixins.shortcuts import ShortcutsMixin
 from .app_mixins.menus_tools import MenusToolsMixin
 from .app_mixins.colors_canvas import ColorsCanvasMixin
@@ -11,6 +12,7 @@ from .app_mixins.action_workflows import ActionWorkflowsMixin
 from .app_mixins.rendering_view import RenderingViewMixin
 from .app_mixins.object_properties import ObjectPropertiesMixin
 from .app_mixins.direct_manipulation import DirectManipulationMixin
+from .app_mixins.selection_move_preview import SelectionMovePreviewMixin
 from .app_mixins.pointer_support import PointerSupportMixin
 from .app_mixins.source_overlay import SourceOverlayMixin
 from .app_mixins.pointer_events import PointerEventsMixin
@@ -52,7 +54,7 @@ from .app_mixins.content_aware import ContentAwareMixin
 from .app_mixins.plugins_view import PluginsViewMixin
 
 
-class UZYROApp(StartupSettingsMixin, StartupScreenMixin, ShortcutsMixin, MenusToolsMixin, ColorsCanvasMixin, ColorPickerMixin, CommandsMixin, ActionWorkflowsMixin, RenderingViewMixin, ObjectPropertiesMixin, DirectManipulationMixin, PointerSupportMixin, SourceOverlayMixin, PathEditingMixin, PointerEventsMixin, PaintingMixin, BrushSettingsMixin, PatchInteractionMixin, GradientEditorMixin, TextGradientMixin, CropOverlaysMixin, SelectMaskMixin, ColorRangeMixin, AutomaticSelectionMixin, DocumentsMixin, PSDFileMixin, SmartFilesMixin, TextLayersMixin, FreeTransformMixin, TransformWorkspaceMixin, TransformCommandsMixin, LayerStylesMixin, FilterDialogsMixin, FilterMasksMixin, LayerMasksMixin, TextVectorMixin, ShapeVectorMixin, BooleanShapesMixin, ModelWorkspaceMixin, GenerativeHistoryMixin, GenerativeWorkspaceMixin, ImageGeometryMixin, ColorWorkspaceMixin, PrintSpotWorkspaceMixin, AdjustmentsMixin, DestructiveFiltersMixin, RetouchMixin, AdvancedRetouchMixin, ContentAwareMixin, PluginsViewMixin, tk.Tk):
+class UZYROApp(StartupSettingsMixin, StartupScreenMixin, DocumentWorkspaceMixin, ShortcutsMixin, MenusToolsMixin, ColorsCanvasMixin, ColorPickerMixin, CommandsMixin, ActionWorkflowsMixin, RenderingViewMixin, ObjectPropertiesMixin, SelectionMovePreviewMixin, DirectManipulationMixin, PointerSupportMixin, SourceOverlayMixin, PathEditingMixin, PointerEventsMixin, PaintingMixin, BrushSettingsMixin, PatchInteractionMixin, GradientEditorMixin, TextGradientMixin, CropOverlaysMixin, SelectMaskMixin, ColorRangeMixin, AutomaticSelectionMixin, DocumentsMixin, PSDFileMixin, SmartFilesMixin, TextLayersMixin, FreeTransformMixin, TransformWorkspaceMixin, TransformCommandsMixin, LayerStylesMixin, FilterDialogsMixin, FilterMasksMixin, LayerMasksMixin, TextVectorMixin, ShapeVectorMixin, BooleanShapesMixin, ModelWorkspaceMixin, GenerativeHistoryMixin, GenerativeWorkspaceMixin, ImageGeometryMixin, ColorWorkspaceMixin, PrintSpotWorkspaceMixin, AdjustmentsMixin, DestructiveFiltersMixin, RetouchMixin, AdvancedRetouchMixin, ContentAwareMixin, PluginsViewMixin, tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         apply_window_branding(self)
@@ -74,11 +76,7 @@ def main() -> None:
     if len(sys.argv) >= 3 and sys.argv[1] == "--smart-edit":
         project_path = Path(sys.argv[2]).resolve()
         try:
-            app.doc = Document.open_project(project_path)
-            app._edit_generation += 1
-            app.history.clear()
-            app.selection_box = app.doc.selection_bounds()
-            app.show_editor()
+            app.open_document_session(Document.open_project(project_path), replace_startup=True)
             app.title(f"Содержимое Smart Object - {project_path.stem}")
 
             def save_nested_and_close() -> None:

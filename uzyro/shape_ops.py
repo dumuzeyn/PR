@@ -56,12 +56,12 @@ def render_shape_layer(layer: Layer) -> None:
             interpolation_space=str(gradient.get("interpolation_space", "srgb")),
             noise=gradient.get("noise") if isinstance(gradient.get("noise"), dict) else None,
         )
-        opacity = float(np.clip(gradient.get("opacity", 1.0), 0.0, 1.0))
+        opacity = float(np.clip(gradient.get("opacity", 1.0), 0.0, 1.0)) * float(np.clip(data.get("fill_opacity", 1.0), 0.0, 1.0))
         pixels[:, :, 3] = np.clip(pixels[:, :, 3].astype(np.float32) * (mask.astype(np.float32) / 255.0) * opacity, 0, 255).astype(np.uint8)
-        stroke = data.get("stroke")
+        stroke = data.get("stroke") if bool(data.get("stroke_enabled", True)) else None
         stroke_width = max(0, int(data.get("stroke_width", 0)))
         if stroke is not None and stroke_width > 0:
-            stroke_color = np.array(stroke, dtype=np.uint8)
+            stroke_color = _shape_color(stroke, data.get("stroke_opacity", 1.0))
             edge = shape_stroke_mask(mask, stroke_width, str(data.get("stroke_alignment", "center")))
             _paint_solid(pixels, edge, stroke_color)
         layer.pixels[y1:y2, x1:x2] = pixels
@@ -90,20 +90,20 @@ def render_shape_layer(layer: Layer) -> None:
         first = np.array(texture.get("color_a", data.get("fill", [255, 255, 255, 255])), dtype=np.uint8)
         second = np.array(texture.get("color_b", data.get("stroke", [0, 0, 0, 255]) or [0, 0, 0, 255]), dtype=np.uint8)
         pixels = np.where(selector[:, :, None], first, second).astype(np.uint8)
-        pixels[:, :, 3] = np.clip(pixels[:, :, 3].astype(np.float32) * (mask.astype(np.float32) / 255.0), 0, 255).astype(np.uint8)
-        stroke = data.get("stroke")
+        pixels[:, :, 3] = np.clip(pixels[:, :, 3].astype(np.float32) * (mask.astype(np.float32) / 255.0) * float(np.clip(data.get("fill_opacity", 1.0), 0.0, 1.0)), 0, 255).astype(np.uint8)
+        stroke = data.get("stroke") if bool(data.get("stroke_enabled", True)) else None
         stroke_width = max(0, int(data.get("stroke_width", 0)))
         if stroke is not None and stroke_width > 0:
-            stroke_color = np.array(stroke, dtype=np.uint8)
+            stroke_color = _shape_color(stroke, data.get("stroke_opacity", 1.0))
             edge = shape_stroke_mask(mask, stroke_width, str(data.get("stroke_alignment", "center")))
             _paint_solid(pixels, edge, stroke_color)
         layer.pixels[y1:y2, x1:x2] = pixels
         apply_shape_postprocess(layer)
         return
     box = tuple(float(v) for v in data.get("box", [0, 0, 1, 1]))
-    fill = tuple(int(v) for v in data.get("fill", [255, 255, 255, 255]))
-    stroke = data.get("stroke")
-    outline = None if stroke is None else tuple(int(v) for v in stroke)
+    fill = _shape_color(data.get("fill", [255, 255, 255, 255]), data.get("fill_opacity", 1.0))
+    stroke = data.get("stroke") if bool(data.get("stroke_enabled", True)) else None
+    outline = None if stroke is None else _shape_color(stroke, data.get("stroke_opacity", 1.0))
     stroke_width = max(0, int(data.get("stroke_width", 0)))
     shape = str(data.get("shape", "rectangle")).lower()
     angle = float(data.get("rotation", 0.0))
@@ -130,6 +130,14 @@ def render_shape_layer(layer: Layer) -> None:
         if outline is not None and stroke_width > 0:
             _paint_solid(layer.pixels, shape_stroke_mask(mask, stroke_width, str(data.get("stroke_alignment", "center"))), outline)
     apply_shape_postprocess(layer, rotation_applied=True)
+
+
+def _shape_color(color, opacity: float) -> tuple[int, int, int, int]:
+    values = [int(value) for value in color]
+    while len(values) < 4:
+        values.append(255)
+    values[3] = round(values[3] * float(np.clip(opacity, 0.0, 1.0)))
+    return tuple(values[:4])
 
 
 def _paint_solid(pixels: np.ndarray, mask: np.ndarray, color: np.ndarray | tuple[int, ...]) -> None:

@@ -294,21 +294,18 @@ class DocumentsMixin:
         dpi = int(settings["dpi"])
         background = tuple(settings["background"])
         include_clipboard = bool(settings.get("include_clipboard", False) and clipboard_image is not None)
-        self.doc = Document.new(width, height, background)
-        self._edit_generation += 1
-        self.doc.dpi = dpi
-        self.doc.metadata = {"source": "clipboard" if include_clipboard else "new document", "preset_size": [width, height]}
+        document = Document.new(width, height, background)
+        document.dpi = dpi
+        document.metadata = {"source": "clipboard" if include_clipboard else "new document", "preset_size": [width, height]}
         if include_clipboard and clipboard_image is not None:
             canvas = Image.new("RGBA", (width, height), background)
             image = clipboard_image.convert("RGBA").copy()
             if image.width > width or image.height > height:
                 image.thumbnail((width, height), Image.Resampling.LANCZOS)
             canvas.alpha_composite(image, ((width - image.width) // 2, (height - image.height) // 2))
-            self.doc.layer.pixels = np.array(canvas, dtype=np.uint8)
-            self.doc.layer.name = "Из буфера обмена"
-        self.history.clear()
-        self.selection_box = None
-        self.show_editor()
+            document.layer.pixels = np.array(canvas, dtype=np.uint8)
+            document.layer.name = "Из буфера обмена"
+        self.open_document_session(document)
 
     def create_from_clipboard(self) -> None:
         image = self.read_clipboard_image() or getattr(self, "_startup_clipboard_image", None)

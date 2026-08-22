@@ -35,6 +35,11 @@ class ObjectPropertiesMixin:
             combo.pack(side=tk.RIGHT)
             combo.bind("<<ComboboxSelected>>", lambda _event: apply(variable.get()))
 
+        def boolean_row(label: str, initial: bool, apply) -> None:
+            variable = tk.BooleanVar(value=bool(initial))
+            control = ttk.Checkbutton(panel, text=label, variable=variable, command=lambda: apply(bool(variable.get())))
+            control.pack(anchor=tk.W, padx=10, pady=2)
+
         def color_row(label: str, color, command) -> None:
             row = ttk.Frame(panel)
             row.pack(fill=tk.X, padx=10, pady=2)
@@ -57,16 +62,22 @@ class ObjectPropertiesMixin:
         bounds = self.object_document_bounds(layer)
         display_x = bounds[0] if bounds is not None else layer.x
         display_y = bounds[1] if bounds is not None else layer.y
+        ttk.Label(panel, text="Трансформация", style="PanelTitle.TLabel").pack(anchor=tk.W, padx=10, pady=(7, 3))
         numeric_row("X", display_x, lambda value, y=display_y: self.set_object_position(int(value), y))
         numeric_row("Y", display_y, lambda value, x=display_x: self.set_object_position(x, int(value)))
         if layer.kind == "shape" and layer.shape_data is not None:
             box = shape_data_bounds(layer.shape_data) or (0, 0, 1, 1)
-            ttk.Label(panel, text="Геометрия", style="PanelTitle.TLabel").pack(anchor=tk.W, padx=10, pady=(7, 3))
             numeric_row("Ширина", box[2] - box[0], lambda value: self.set_shape_size(int(value), None), 2, 100000)
             numeric_row("Высота", box[3] - box[1], lambda value: self.set_shape_size(None, int(value)), 2, 100000)
             numeric_row("Поворот", float(layer.shape_data.get("rotation", 0.0)), lambda value: self.set_shape_property("rotation", float(value)), -360.0, 360.0, 1.0)
-            ttk.Label(panel, text="Внешний вид", style="PanelTitle.TLabel").pack(anchor=tk.W, padx=10, pady=(7, 3))
+            ttk.Label(panel, text="Заливка", style="PanelTitle.TLabel").pack(anchor=tk.W, padx=10, pady=(7, 3))
+            color_row("Цвет", layer.shape_data.get("fill") or [0, 0, 0, 0], lambda: self.pick_shape_property_color("fill"))
+            numeric_row("Непрозрачность, %", round(float(layer.shape_data.get("fill_opacity", 1.0)) * 100), lambda value: self.set_shape_property("fill_opacity", float(value) / 100.0), 0, 100)
+            ttk.Label(panel, text="Граница", style="PanelTitle.TLabel").pack(anchor=tk.W, padx=10, pady=(7, 3))
+            boolean_row("Показывать границу", bool(layer.shape_data.get("stroke_enabled", int(layer.shape_data.get("stroke_width", 0)) > 0)), lambda value: self.set_shape_property("stroke_enabled", value))
+            color_row("Цвет", layer.shape_data.get("stroke") or [0, 0, 0, 0], lambda: self.pick_shape_property_color("stroke"))
             numeric_row("Толщина обводки", int(layer.shape_data.get("stroke_width", 0)), lambda value: self.set_shape_property("stroke_width", int(value)), 0, 100)
+            numeric_row("Непрозрачность, %", round(float(layer.shape_data.get("stroke_opacity", 1.0)) * 100), lambda value: self.set_shape_property("stroke_opacity", float(value) / 100.0), 0, 100)
             combo_row("Обводка", str(layer.shape_data.get("stroke_alignment", "center")), ["inside", "center", "outside"], lambda value: self.set_shape_property("stroke_alignment", value))
             combo_row("Концы линии", str(layer.shape_data.get("stroke_cap", "round")), ["butt", "round", "square"], lambda value: self.set_shape_property("stroke_cap", value))
             combo_row("Соединения", str(layer.shape_data.get("stroke_join", "round")), ["miter", "round", "bevel"], lambda value: self.set_shape_property("stroke_join", value))
@@ -78,7 +89,7 @@ class ObjectPropertiesMixin:
             current_dash = next((name for name, pattern in dash_patterns.items() if pattern == layer.shape_data.get("dash_pattern", [])), "Сплошная")
             combo_row("Штриховка", current_dash, list(dash_patterns), lambda value: self.set_shape_property("dash_pattern", dash_patterns[value]))
             numeric_row("Смещение штрихов", float(layer.shape_data.get("dash_offset", 0.0)), lambda value: self.set_shape_property("dash_offset", float(value)), -1000.0, 1000.0, 1.0)
-            numeric_row("Непрозрачность", float(layer.shape_data.get("opacity", 1.0)), lambda value: self.set_shape_property("opacity", float(value)), 0.0, 1.0, 0.05)
+            numeric_row("Непрозрачность объекта, %", round(float(layer.shape_data.get("opacity", 1.0)) * 100), lambda value: self.set_shape_property("opacity", float(value) / 100.0), 0, 100)
             kind = str(layer.shape_data.get("shape", "rectangle"))
             if kind in {"polygon", "star"}:
                 numeric_row("Стороны" if kind == "polygon" else "Лучи", int(layer.shape_data.get("sides", 5)), lambda value: self.set_shape_property("sides", int(value)), 3, 64)
@@ -86,8 +97,6 @@ class ObjectPropertiesMixin:
                 numeric_row("Внутренний радиус", float(layer.shape_data.get("inner_ratio", 0.5)), lambda value: self.set_shape_property("inner_ratio", float(value)), 0.05, 0.95, 0.05)
             if kind == "rectangle":
                 numeric_row("Радиус углов", int(layer.shape_data.get("corner_radius", 0)), lambda value: self.set_shape_property("corner_radius", int(value)), 0, 10000)
-            color_row("Заливка", layer.shape_data.get("fill") or [0, 0, 0, 0], lambda: self.pick_shape_property_color("fill"))
-            color_row("Обводка", layer.shape_data.get("stroke") or [0, 0, 0, 0], lambda: self.pick_shape_property_color("stroke"))
             if isinstance(layer.shape_data.get("gradient"), dict):
                 gradient = layer.shape_data["gradient"]
                 ttk.Label(panel, text="Градиент", style="PanelTitle.TLabel").pack(anchor=tk.W, padx=10, pady=(7, 3))
@@ -133,6 +142,9 @@ class ObjectPropertiesMixin:
             ttk.Button(panel, text="Текст по контуру...", command=self.edit_text_path).pack(fill=tk.X, padx=10, pady=(0, 6))
         else:
             ttk.Button(panel, text="Фильтры слоя", command=self.edit_layer_filters).pack(fill=tk.X, padx=10, pady=5)
+        ttk.Label(panel, text="Объект", style="PanelTitle.TLabel").pack(anchor=tk.W, padx=10, pady=(7, 3))
+        boolean_row("Видимый", bool(layer.visible), lambda value: self.set_layer_property("Видимость объекта", "visible", value))
+        boolean_row("Заблокирован", bool(layer.locked), lambda value: self.set_layer_property("Блокировка объекта", "locked", value, affects_canvas=False))
 
     def set_object_position(self, x: int, y: int) -> None:
         layer = self.doc.layer

@@ -102,6 +102,7 @@ class PointerEventsMixin:
                 self._move_selection_start = point
                 self._move_selection_bounds = self.doc.selection_bounds()
                 self._move_selection_delta = (0, 0)
+                self.begin_move_selection_preview(self._move_selection_bounds)
                 self.status_text("Перемещение пикселей внутри выделения")
                 return
             handle = self.object_handle_at(point)
@@ -109,7 +110,11 @@ class PointerEventsMixin:
                 self.begin_object_resize(handle, point)
                 return
             auto_select = str(self.auto_select.get())
-            layer = self.select_object_at(point, add=bool(event.state & 0x0001)) if auto_select != "Выкл" else self.doc.layer
+            layer = self.select_object_at(
+                point,
+                add=bool(event.state & 0x0001),
+                cycle=event_alt_down(event),
+            ) if auto_select != "Выкл" else self.doc.layer
             if layer is not None and auto_select == "Группа" and layer.group_id:
                 self.selected_layer_ids = {candidate.id for candidate in self.doc.layers if candidate.group_id == layer.group_id}
                 self.refresh_layers()
@@ -118,8 +123,9 @@ class PointerEventsMixin:
                 if layer_contains_point(candidate, point, 0):
                     layer = candidate
             if layer is None or not layer_contains_point(layer, point, max(2, round(5 / max(self.zoom.get(), 0.01)))):
-                self.drag_start = None
-                self.status_text("На этом месте нет редактируемого объекта")
+                self._object_marquee_start = point
+                self._object_marquee_add = bool(event.state & 0x0001)
+                self.status_text("Протяните рамку, чтобы выбрать объекты")
                 return
             if layer.locked:
                 self.status_text("Объект выбран, но слой заблокирован")
@@ -174,6 +180,11 @@ class PointerEventsMixin:
                 x1, y1, x2, y2 = bounds
                 coords = (*self.doc_to_canvas(x1 + dx, y1 + dy), *self.doc_to_canvas(x2 + dx, y2 + dy))
                 self.update_drag_preview_item("rectangle", coords, outline=TOKENS.ACCENT, dash=(5, 4), width=2)
+                self.update_move_selection_preview(dx, dy)
+        elif tool == "move" and self._object_marquee_start is not None:
+            start = self._object_marquee_start
+            coords = (*self.doc_to_canvas(*start), *self.doc_to_canvas(*point))
+            self.update_drag_preview_item("rectangle", coords, outline=TOKENS.ACCENT, dash=(5, 4), width=1)
         elif tool == "move" and self.drag_start:
             self.move_selected_layers_live(point)
         elif tool in ["select", "ellipse_select", "crop", "gradient", "text", "rect_shape", "ellipse_shape", "line_shape", "bezier_shape", "polygon_shape", "star_shape", "custom_shape"]:
@@ -219,6 +230,22 @@ class PointerEventsMixin:
                 self.finish_object_resize()
             elif self._move_selection_start is not None:
                 self.end_move_selection()
+            elif self._object_marquee_start is not None:
+                start = self._object_marquee_start
+                selected = layers_inside_box(self.doc, (start[0], start[1], point[0], point[1]))
+                if self._object_marquee_add:
+                    self.selected_layer_ids.update(layer.id for layer in selected)
+                else:
+                    self.selected_layer_ids = {layer.id for layer in selected}
+                if selected:
+                    active = selected[-1]
+                    self.doc.active_layer = self.doc.layers.index(active)
+                self._object_marquee_start = None
+                self._object_marquee_add = False
+                self.clear_drag_preview()
+                self.refresh_layers()
+                self.refresh_properties()
+                self.update_object_bounds()
             else:
                 self.finish_layer_move_preview()
                 self.end_move_layer()
@@ -255,6 +282,7 @@ class PointerEventsMixin:
             geometry = self.shape_geometry_for_drag(tool, self.drag_start, point, event.state)
             if shape_drag_is_meaningful(geometry):
                 self.create_shape_from_drag(tool, geometry)
+                self.tool.set("move")
                 self.refresh()
             else:
                 self.update_selection_overlay()

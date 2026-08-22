@@ -13,9 +13,9 @@ class StartupSettingsMixin:
         self.title("UZYRO - редактор изображений")
         self.geometry("1440x920")
         self.minsize(1000, 640)
-
         self.doc = Document.new()
         self.history = History()
+        self.document_manager = DocumentManager(self.doc, self.history)
         self.executor = ThreadPoolExecutor(max_workers=2)
         self.app_data_dir = user_data_directory(Path(os.environ.get("LOCALAPPDATA", str(Path.home()))))
         self.recovery_path = self.app_data_dir / "recovery.prdx"
@@ -138,12 +138,7 @@ class StartupSettingsMixin:
         self._move_layer_id: str | None = None
         self._move_start: tuple[int, int] | None = None
         self._move_start_mask: np.ndarray | None = None
-        self._move_group_starts: dict[str, tuple[int, int]] = {}
-        self._move_group_masks: dict[str, np.ndarray | None] = {}
-        self._move_last_bounds: tuple[int, int, int, int] | None = None
-        self._move_selection_start: tuple[int, int] | None = None
-        self._move_selection_bounds: tuple[int, int, int, int] | None = None
-        self._move_selection_delta = (0, 0)
+        self._initialize_move_preview_state()
         self._object_resize_handle: str | None = None
         self._object_resize_before: dict | None = None
         self._object_resize_layer_id: str | None = None
@@ -190,6 +185,8 @@ class StartupSettingsMixin:
         self._text_property_before: dict[str, object] | None = None
         self._loading_text_properties = False
         self._shape_drag_options: dict | None = None
+        self._object_marquee_start: tuple[int, int] | None = None
+        self._object_marquee_add = False
         self.selection_box: tuple[int, int, int, int] | None = None
         self._lasso_points: list[tuple[int, int]] = []
         self._polygon_points: list[tuple[int, int]] = []
@@ -305,6 +302,7 @@ class StartupSettingsMixin:
         self.show_start_screen()
         self.deiconify()
         self.schedule_autosave()
+        self.protocol("WM_DELETE_WINDOW", self.close_application)
     def destroy(self) -> None:
         from ..local_generative import shutdown_local_servers
         if self._selection_animation_id is not None:
@@ -319,6 +317,12 @@ class StartupSettingsMixin:
             except tk.TclError:
                 pass
             self._initial_fit_after_id = None
+        if self._move_after_id is not None:
+            try:
+                self.after_cancel(self._move_after_id)
+            except tk.TclError:
+                pass
+            self._move_after_id = None
         self.autosave_recovery()
         self.save_settings()
         self.executor.shutdown(wait=False, cancel_futures=True)

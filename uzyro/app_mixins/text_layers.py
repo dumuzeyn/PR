@@ -196,6 +196,20 @@ class TextLayersMixin:
             self.push_command(LayerReorderCommand("Layer reorder", layer_id, i, j))
             self.refresh()
 
+    def move_layer_to(self, target: int) -> None:
+        if not self.doc.layers:
+            return
+        before = self.doc.active_layer
+        target = max(0, min(int(target), len(self.doc.layers) - 1))
+        if target == before:
+            return
+        layer = self.doc.layers.pop(before)
+        self.doc.layers.insert(target, layer)
+        self.doc.active_layer = target
+        self.doc.dirty = True
+        self.push_command(LayerReorderCommand("Изменить порядок объекта", layer.id, before, target))
+        self.refresh()
+
     def free_transform_layer(self) -> None:
         layer = self.doc.layer
         if layer.locked:

@@ -28,12 +28,8 @@ class SmartFilesMixin:
             return Document.open_project(source_path) if source_path.lower().endswith(".prdx") else Document.from_image(source_path)
 
         def opened(document: Document) -> None:
-            self.doc = document
-            self._edit_generation += 1
-            self.history.clear()
-            self.selection_box = self.doc.selection_bounds()
             self.add_recent_file(source_path)
-            self.show_editor()
+            self.open_document_session(document)
             compatibility = document.metadata.get("psd_compatibility", {})
             warnings = compatibility.get("warnings", []) if isinstance(compatibility, dict) else []
             if warnings:
@@ -228,16 +224,20 @@ class SmartFilesMixin:
     def save_project_async(self, path: str) -> None:
         snapshot = self.document_copy()
         generation = self._edit_generation
+        document = self.doc
+        session = self.document_manager.active
 
         def worker():
             snapshot.save_project(path)
             return path
 
         def done(saved_path):
-            self.doc.path = saved_path
-            if self._edit_generation == generation:
-                self.doc.dirty = False
+            document.path = saved_path
+            current_generation = self._edit_generation if self.doc is document else session.edit_generation if session is not None else -1
+            if current_generation == generation:
+                document.dirty = False
             self.add_recent_file(saved_path)
+            self.refresh_document_tabs()
 
         self.run_background("Save project", worker, done)
 

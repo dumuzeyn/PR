@@ -50,12 +50,7 @@ class PluginsViewMixin:
             return
 
         def done(document) -> None:
-            self.doc = document
-            self.history.clear()
-            self._edit_generation += 1
-            self.selection_box = self.doc.selection_bounds()
-            self.show_editor()
-            self.refresh()
+            self.open_document_session(document)
 
         self.run_background("Импорт через плагин", lambda: self.plugin_registry.import_document(name, path, params), done)
 

@@ -103,11 +103,8 @@ def document_from(image: Image.Image, name: str):
 
 
 def show_document(app, document, tool: str) -> None:
-    app.doc = document
-    app.history.clear()
-    app.selected_layer_ids = {document.layer.id}
+    app.open_document_session(document, replace_startup=True)
     app.tool.set(tool)
-    app.show_editor()
     pump(app, 0.65)
     app.state("normal")
     app.geometry("1500x920+120+70")
