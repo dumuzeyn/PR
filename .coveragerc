@@ -1,0 +1,13 @@
+[run]
+branch = True
+source = uzyro
+
+[report]
+show_missing = True
+skip_covered = True
+fail_under = 37
+precision = 0
+exclude_lines =
+    pragma: no cover
+    if TYPE_CHECKING:
+    if __name__ == .__main__.:

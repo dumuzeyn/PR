@@ -47,9 +47,21 @@ jobs:
             exit 1
           }
 
-      - name: Run tests
+      - name: Run core tests with branch coverage
         shell: powershell
-        run: .\run_tests.ps1 -Python .\.venv\Scripts\python.exe
+        run: .\run_tests.ps1 -Python .\.venv\Scripts\python.exe -Mode Core -Coverage
+
+      - name: Run security tests
+        shell: powershell
+        run: .\run_tests.ps1 -Python .\.venv\Scripts\python.exe -Mode Security
+
+      - name: Run performance regression tests
+        shell: powershell
+        run: .\run_tests.ps1 -Python .\.venv\Scripts\python.exe -Mode Performance
+
+      - name: Run UI tests
+        shell: powershell
+        run: .\run_tests.ps1 -Python .\.venv\Scripts\python.exe -Mode Ui
 
       - name: Build executable
         shell: powershell
