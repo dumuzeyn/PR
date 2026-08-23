@@ -49,7 +49,9 @@ class ApplicationWorkspaceUITests(ApplicationUITestCase):
         self.assertEqual(self.app.doc.metadata["source"], "clipboard")
         self.assertTrue(np.array_equal(self.app.doc.layer.pixels[20, 20], np.array((20, 120, 220, 180), dtype=np.uint8)))
         self.assertTrue(self.app.editor_root.winfo_ismapped())
-        self.assertNotEqual(str(self.app.cget("menu")), "")
+        self.assertEqual(str(self.app.cget("menu")), "")
+        self.assertTrue(self.app.desktop_menu_bar.winfo_ismapped())
+        self.assertGreater(len(self.app.desktop_menu_bar._buttons), 5)
         self.assertEqual(self.app.state(), "zoomed")
 
     def test_new_document_dialog_builds_clipboard_preview(self) -> None:

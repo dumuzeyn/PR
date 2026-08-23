@@ -151,7 +151,7 @@ class BrushSettingsMixin:
                 number = float(variable.get())
             text = f"{round(number * 100)}%" if percent else f"{round(number)} {unit}" if integer else f"{number:.2f} {unit}"
             value.configure(text=text.strip())
-        scale = ttk.Scale(row, from_=start, to=end, command=show)
+        scale = AccentScale(row, from_=start, to=end, command=show)
         scale.set(float(variable.get()))
         scale.pack(side=tk.RIGHT, fill=tk.X, expand=True, padx=8)
         if not integer:

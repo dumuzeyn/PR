@@ -55,7 +55,7 @@ class ColorRangeMixin:
         ttk.Label(controls, text="Разброс", style="PanelTitle.TLabel").pack(anchor=tk.W)
         fuzz_value = ttk.Label(controls, style="Secondary.TLabel")
         fuzz_value.pack(anchor=tk.E)
-        ttk.Scale(controls, variable=fuzziness, from_=0, to=128).pack(fill=tk.X)
+        AccentScale(controls, variable=fuzziness, from_=0, to=128).pack(fill=tk.X)
         ttk.Checkbutton(controls, text="Сглаживание", variable=antialias).pack(anchor=tk.W, pady=(10, 2))
         ttk.Label(controls, text="Просмотр", style="PanelTitle.TLabel").pack(anchor=tk.W, pady=(12, 3))
         ttk.Combobox(controls, textvariable=preview_mode, values=SELECT_MASK_PREVIEW_MODES, state="readonly").pack(fill=tk.X)

@@ -11,7 +11,7 @@ class TextLayersMixin:
         frame = ttk.Frame(window)
         frame.pack(fill=tk.BOTH, expand=True)
         area = tk.Text(frame, wrap=tk.WORD)
-        scroll = ttk.Scrollbar(frame, command=area.yview)
+        scroll = SlimScrollbar(frame, command=area.yview)
         area.configure(yscrollcommand=scroll.set)
         area.insert("1.0", text)
         area.configure(state=tk.DISABLED)

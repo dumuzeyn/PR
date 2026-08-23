@@ -128,7 +128,7 @@ class PrintSpotWorkspaceMixin:
         tree.column("lab", width=150)
         tree.column("rgb", width=110)
         tree.grid(row=0, column=0, sticky="nsew")
-        scroll = ttk.Scrollbar(body, orient=tk.VERTICAL, command=tree.yview)
+        scroll = SlimScrollbar(body, orient=tk.VERTICAL, command=tree.yview)
         scroll.grid(row=0, column=1, sticky="ns")
         tree.configure(yscrollcommand=scroll.set)
         status = ttk.Label(body, style="Secondary.TLabel")

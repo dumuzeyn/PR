@@ -64,11 +64,11 @@ class TextVectorMixin:
         ttk.Label(controls, text="Участок контура", style="PanelTitle.TLabel").pack(anchor=tk.W, pady=(2, 5))
         start_label = ttk.Label(controls, text="Начало: 0%")
         start_label.pack(anchor=tk.W)
-        start_scale = ttk.Scale(controls, variable=start_var, from_=0.0, to=1.0)
+        start_scale = AccentScale(controls, variable=start_var, from_=0.0, to=1.0)
         start_scale.pack(fill=tk.X, pady=(0, 8))
         end_label = ttk.Label(controls, text="Конец: 100%")
         end_label.pack(anchor=tk.W)
-        end_scale = ttk.Scale(controls, variable=end_var, from_=0.0, to=1.0)
+        end_scale = AccentScale(controls, variable=end_var, from_=0.0, to=1.0)
         end_scale.pack(fill=tk.X, pady=(0, 12))
 
         ttk.Separator(controls).pack(fill=tk.X, pady=4)

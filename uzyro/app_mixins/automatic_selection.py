@@ -64,7 +64,7 @@ class AutomaticSelectionMixin:
         ttk.Label(controls, text="Чувствительность", style="PanelTitle.TLabel").pack(anchor=tk.W, pady=(14, 3))
         sensitivity_value = ttk.Label(controls, text="55%", style="Secondary.TLabel")
         sensitivity_value.pack(anchor=tk.E)
-        ttk.Scale(controls, variable=sensitivity, from_=0.0, to=1.0).pack(fill=tk.X)
+        AccentScale(controls, variable=sensitivity, from_=0.0, to=1.0).pack(fill=tk.X)
         ttk.Label(controls, text="Просмотр", style="PanelTitle.TLabel").pack(anchor=tk.W, pady=(14, 3))
         mode_box = ttk.Combobox(controls, textvariable=preview_mode, values=SELECT_MASK_PREVIEW_MODES, state="readonly")
         mode_box.pack(fill=tk.X)

@@ -8,18 +8,24 @@ class ShortcutsMixin:
         self._build_menu()
         self.editor_root = ttk.Frame(self, style="App.TFrame")
         self.editor_root.pack(fill=tk.BOTH, expand=True)
-        options_bar = ttk.Frame(self.editor_root, style="Topbar.TFrame", height=46)
+        self.desktop_menu_bar = DesktopMenuBar(self.editor_root, self.editor_menu)
+        self.desktop_menu_bar.pack(fill=tk.X)
+        options_bar = ttk.Frame(self.editor_root, style="Topbar.TFrame", height=40)
+        self.tool_options_bar = options_bar
         options_bar.pack(fill=tk.X)
         options_bar.pack_propagate(False)
         self._build_tool_options(options_bar)
         ttk.Separator(self.editor_root).pack(fill=tk.X)
         self._build_document_tabs(self.editor_root)
         root = ttk.PanedWindow(self.editor_root, orient=tk.HORIZONTAL)
+        self.main_split = root
         root.pack(fill=tk.BOTH, expand=True)
 
-        left = ttk.Frame(root, width=174, style="Panel.TFrame")
+        left = ttk.Frame(root, width=230, style="Panel.TFrame")
         center = ttk.Frame(root, style="Workspace.TFrame")
-        right = ttk.Frame(root, width=282, style="Panel.TFrame")
+        right = ttk.Frame(root, width=312, style="Panel.TFrame")
+        self.tool_sidebar = left
+        self.panel_sidebar = right
         root.add(left, weight=0)
         root.add(center, weight=1)
         root.add(right, weight=0)

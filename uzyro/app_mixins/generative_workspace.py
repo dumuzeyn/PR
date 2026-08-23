@@ -176,7 +176,7 @@ class GenerativeWorkspaceMixin:
                 ttk.Label(row, text=label).pack(side=tk.LEFT)
                 ttk.Spinbox(row, textvariable=variable, from_=0, to=100000, width=10).pack(side=tk.RIGHT)
             ttk.Label(controls, text="Творческая свобода", style="Secondary.TLabel").pack(anchor=tk.W, pady=(12, 2))
-            ttk.Scale(controls, variable=creativity, from_=0.0, to=1.0).pack(fill=tk.X)
+            AccentScale(controls, variable=creativity, from_=0.0, to=1.0).pack(fill=tk.X)
 
         action_row = ttk.Frame(controls)
         action_row.pack(fill=tk.X, pady=(20, 0))

@@ -81,6 +81,22 @@ class ApplicationControlUITests(ApplicationUITestCase):
         self.app.update()
         self.assertEqual(str(self.app.tool_options_panel.title.cget("text")), "Параметры: Размытие")
 
+    def test_editor_layout_is_stable_at_supported_window_sizes(self) -> None:
+        self.app.show_editor()
+        for geometry in ("1000x640", "1280x760", "1600x900"):
+            self.app.geometry(geometry)
+            self.app.update()
+            self.assertGreaterEqual(self.app.tool_sidebar.winfo_width(), 180)
+            self.assertGreaterEqual(self.app.panel_sidebar.winfo_width(), 290)
+            self.assertGreater(self.app.canvas.winfo_width(), 300)
+            self.assertEqual(self.app.tool_options_bar.winfo_height(), 40)
+        first_button = next(iter(self.app.tool_palette.buttons.values()))
+        before = (first_button.winfo_width(), first_button.winfo_height())
+        first_button.event_generate("<Enter>")
+        self.app.update_idletasks()
+        self.assertEqual((first_button.winfo_width(), first_button.winfo_height()), before)
+        first_button.event_generate("<Leave>")
+
     def test_ctrl_z_uses_physical_key_with_russian_layout(self) -> None:
         calls: list[str] = []
         self.app._editor_active = True

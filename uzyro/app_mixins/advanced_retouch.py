@@ -76,7 +76,7 @@ class AdvancedRetouchMixin:
         )
         for row, (key, title, start, end, _digits) in enumerate(specs):
             ttk.Label(controls, text=title).grid(row=row, column=0, sticky="w", pady=3)
-            ttk.Scale(controls, from_=start, to=end, variable=variables[key], orient=tk.HORIZONTAL).grid(
+            AccentScale(controls, from_=start, to=end, variable=variables[key], orient=tk.HORIZONTAL).grid(
                 row=row, column=1, sticky="ew", padx=8, pady=3
             )
             value_labels[key] = ttk.Label(controls, width=7)

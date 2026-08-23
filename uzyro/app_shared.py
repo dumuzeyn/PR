@@ -167,6 +167,8 @@ from .ui.shortcuts import TOOL_SHORTCUT_GROUPS, accelerator, command_for_event, 
 from .ui.scrollable_frame import ScrollableFrame
 from .ui.theme import TOKENS, configure_theme
 from .ui.tooltip import ToolTip, tool_demo_path
+from .ui.desktop_controls import AccentScale, LayerList, PropertySection, SlimScrollbar
+from .ui.menu_bar import DesktopMenuBar
 
 
 TOOL_DEFINITIONS = [

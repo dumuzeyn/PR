@@ -245,6 +245,8 @@ class RenderingViewMixin:
                 if existing[index] != row:
                     self.layer_list.delete(index)
                     self.layer_list.insert(index, row)
+        if hasattr(self.layer_list, "set_layers"):
+            self.layer_list.set_layers(list(reversed(self.doc.layers)), self.make_layer_thumbnail)
         self.layer_list.selection_clear(0, tk.END)
         for row, layer in enumerate(reversed(self.doc.layers)):
             if layer.id in self.selected_layer_ids:

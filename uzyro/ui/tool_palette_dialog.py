@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from .tool_palette_shared import *
+from .desktop_controls import SlimScrollbar
 
 
 class ToolPaletteDialog(tk.Toplevel):
@@ -40,7 +41,7 @@ class ToolPaletteDialog(tk.Toplevel):
         list_area = ttk.Frame(body)
         list_area.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self.listbox = tk.Listbox(list_area, exportselection=False, activestyle="dotbox", cursor="hand2")
-        scrollbar = ttk.Scrollbar(list_area, orient=tk.VERTICAL, command=self.scroll_list)
+        scrollbar = SlimScrollbar(list_area, orient=tk.VERTICAL, command=self.scroll_list)
         self.scrollbar = scrollbar
         self.listbox.configure(yscrollcommand=self.on_listbox_scroll)
         self.listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)

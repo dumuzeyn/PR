@@ -306,8 +306,8 @@ class ColorsCanvasMixin:
         frame = ttk.Frame(parent, style="Workspace.TFrame")
         frame.pack(fill=tk.BOTH, expand=True)
         self.canvas = tk.Canvas(frame, bg=TOKENS.WORKSPACE, highlightthickness=0, borderwidth=0)
-        xbar = ttk.Scrollbar(frame, orient=tk.HORIZONTAL, command=self.canvas.xview)
-        ybar = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=self.canvas.yview)
+        xbar = SlimScrollbar(frame, orient=tk.HORIZONTAL, command=self.canvas.xview, background=TOKENS.WORKSPACE)
+        ybar = SlimScrollbar(frame, orient=tk.VERTICAL, command=self.canvas.yview, background=TOKENS.WORKSPACE)
         self.canvas.configure(xscrollcommand=xbar.set, yscrollcommand=ybar.set)
         self.canvas.grid(row=0, column=0, sticky="nsew")
         ybar.grid(row=0, column=1, sticky="ns")
@@ -376,41 +376,35 @@ class ColorsCanvasMixin:
         self.right_tabs.add(properties_tab, text="Свойства")
         self.right_tabs.add(history_tab, text="История")
 
-        self.layer_list = tk.Listbox(
-            layers_tab,
-            height=16,
-            exportselection=False,
-            selectmode=tk.EXTENDED,
-            activestyle="none",
-            background=TOKENS.SURFACE,
-            foreground=TOKENS.TEXT_PRIMARY,
-            selectbackground=TOKENS.SURFACE_SELECTED,
-            selectforeground=TOKENS.TEXT_PRIMARY,
-            highlightthickness=0,
-            borderwidth=0,
-            font=("Segoe UI", 10),
-        )
-        self.layer_list.pack(fill=tk.BOTH, expand=True, padx=6, pady=(6, 0))
-        self.layer_list.bind("<Button-1>", self.layer_list_click)
-        self.layer_list.bind("<<ListboxSelect>>", self.layer_selected)
+        layer_list_area = ttk.Frame(layers_tab, style="Panel.TFrame")
+        layer_list_area.pack(fill=tk.BOTH, expand=True, padx=6, pady=(6, 0))
+        self.layer_list = LayerList(layer_list_area)
+        layer_scroll = SlimScrollbar(layer_list_area, orient=tk.VERTICAL, command=self.layer_list.yview)
+        self.layer_list.configure(yscrollcommand=layer_scroll.set)
+        self.layer_list.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        layer_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self.layer_list.bind("<Button-1>", self.layer_list_click, add="+")
+        self.layer_list.bind("<<ListboxSelect>>", self.layer_selected, add="+")
         buttons = ttk.Frame(layers_tab)
         buttons.pack(fill=tk.X, padx=6, pady=6)
         self._panel_icons = {
             name: action_icon(self, name, color=TOKENS.DANGER if name == "delete" else TOKENS.TEXT_PRIMARY)
-            for name in ("add", "delete", "duplicate", "up", "down")
+            for name in ("add", "delete", "duplicate", "group", "up", "down")
         }
         add = ttk.Button(buttons, image=self._panel_icons["add"], width=2, command=self.new_layer, style="PanelIcon.TButton")
         delete = ttk.Button(buttons, image=self._panel_icons["delete"], width=2, command=self.delete_layer, style="PanelIcon.TButton")
         duplicate = ttk.Button(buttons, image=self._panel_icons["duplicate"], width=2, command=self.duplicate_layer, style="PanelIcon.TButton")
+        group = ttk.Button(buttons, image=self._panel_icons["group"], width=2, command=self.group_selected_layers, style="PanelIcon.TButton")
         up = ttk.Button(buttons, image=self._panel_icons["up"], width=2, command=lambda: self.move_layer(1), style="PanelIcon.TButton")
         down = ttk.Button(buttons, image=self._panel_icons["down"], width=2, command=lambda: self.move_layer(-1), style="PanelIcon.TButton")
-        for button in (add, delete, duplicate, up, down):
+        for button in (add, delete, duplicate, group, up, down):
             button.pack(side=tk.LEFT, padx=(0, 3))
         solo = ttk.Button(buttons, text="Только", command=self.toggle_layer_solo)
         solo.pack(side=tk.RIGHT)
         ToolTip(add, "Новый слой")
         ToolTip(delete, "Удалить выбранные слои")
         ToolTip(duplicate, "Дублировать слой")
+        ToolTip(group, "Сгруппировать выбранные слои")
         ToolTip(up, "Поднять слой")
         ToolTip(down, "Опустить слой")
         ToolTip(solo, "Показать только активный слой; повторный клик вернёт прежнюю видимость")
@@ -429,10 +423,16 @@ class ColorsCanvasMixin:
         properties = ScrollableFrame(properties_tab, height=500)
         properties.pack(fill=tk.BOTH, expand=True)
         property_root = properties.content
-        ttk.Label(property_root, text="Слой", style="PanelTitle.TLabel").pack(anchor=tk.W, padx=10, pady=(10, 4))
+        PropertySection(property_root, "Слой").pack(fill=tk.X, padx=10, pady=(10, 6))
         ttk.Label(property_root, text="Непрозрачность", style="Secondary.TLabel").pack(anchor=tk.W, padx=10)
         self.layer_opacity = tk.DoubleVar(value=1.0)
-        self.layer_opacity_scale = ttk.Scale(property_root, from_=0.0, to=1.0, variable=self.layer_opacity, command=self.change_layer_opacity)
+        self.layer_opacity_scale = AccentScale(
+            property_root,
+            from_=0.0,
+            to=1.0,
+            variable=self.layer_opacity,
+            command=self.change_layer_opacity,
+        )
         self.layer_opacity_scale.pack(fill=tk.X, padx=10)
         self.layer_opacity_scale.bind("<ButtonPress-1>", self.begin_layer_opacity_change)
         self.layer_opacity_scale.bind("<ButtonRelease-1>", self.end_layer_opacity_change)

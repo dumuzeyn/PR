@@ -7,7 +7,7 @@ class MenusToolsMixin:
     def _build_menu(self) -> None:
         menu = tk.Menu(self)
         self.editor_menu = menu
-        self.config(menu=menu)
+        self.config(menu="")
 
         file_menu = tk.Menu(menu, tearoff=False)
         menu.add_cascade(label="Файл", menu=file_menu)
@@ -291,7 +291,7 @@ class MenusToolsMixin:
         models.add_command(label="Управление локальными моделями...", command=self.model_manager_dialog)
 
     def _build_tools(self, parent: ttk.Frame) -> None:
-        parent.configure(width=174)
+        parent.configure(width=230)
         parent.pack_propagate(False)
         self._build_color_control(parent)
         self.tool_palette = ToolPalette(

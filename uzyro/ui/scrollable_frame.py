@@ -3,12 +3,15 @@ from __future__ import annotations
 import tkinter as tk
 from tkinter import ttk
 
+from .desktop_controls import SlimScrollbar
+from .theme import TOKENS
+
 
 class ScrollableFrame(ttk.Frame):
     def __init__(self, parent: tk.Widget, *, height: int = 260, width: int = 240) -> None:
         super().__init__(parent)
-        self.canvas = tk.Canvas(self, highlightthickness=0, borderwidth=0)
-        self.scrollbar = ttk.Scrollbar(self, orient=tk.VERTICAL, command=self.canvas.yview)
+        self.canvas = tk.Canvas(self, highlightthickness=0, borderwidth=0, background=TOKENS.PANEL_BG)
+        self.scrollbar = SlimScrollbar(self, orient=tk.VERTICAL, command=self.canvas.yview)
         self.content = ttk.Frame(self.canvas)
         self._window_id = self.canvas.create_window((0, 0), window=self.content, anchor=tk.NW)
         self.canvas.configure(yscrollcommand=self.scrollbar.set, height=height, width=width)

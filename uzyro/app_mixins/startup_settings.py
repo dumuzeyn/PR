@@ -2,13 +2,14 @@ from __future__ import annotations
 
 from ..app_shared import *
 from ..brush_config import default_brush_config, is_test_polluted_brush_settings, normalize_brush_config
-from ..brand import user_data_directory
+from ..brand import install_dialog_branding, user_data_directory
 class StartupSettingsMixin:
     def __init__(self) -> None:
         super().__init__()
         self.theme = TOKENS
         self.ui_style = configure_theme(self)
         self.configure(background=TOKENS.BACKGROUND)
+        install_dialog_branding(self)
         self.withdraw()
         self.title("UZYRO - редактор изображений")
         self.geometry("1440x920")
@@ -264,7 +265,6 @@ class StartupSettingsMixin:
         self._composite_dirty = True
         self._view_dirty = True
         self.render_engine = RenderEngine(tile_size=256)
-
         self._build_ui()
         self.tool.trace_add("write", self.tool_changed)
         self.brush_size.trace_add("write", self.brush_size_changed)

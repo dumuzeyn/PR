@@ -20,7 +20,7 @@ class FilterMasksMixin:
         ttk.Label(dialog, text="Кисть").grid(row=0, column=1, sticky="w", padx=(0, 12), pady=(12, 4))
         ttk.Combobox(dialog, textvariable=mode, values=["Белая кисть", "Чёрная кисть"], state="readonly", width=20).grid(row=1, column=1, sticky="ew", padx=(0, 12))
         ttk.Label(dialog, text="Размер").grid(row=2, column=1, sticky="w", padx=(0, 12), pady=(12, 4))
-        ttk.Scale(dialog, from_=2, to=max(20, min(mask.shape) // 2), variable=size, orient=tk.HORIZONTAL).grid(row=3, column=1, sticky="ew", padx=(0, 12))
+        AccentScale(dialog, from_=2, to=max(20, min(mask.shape) // 2), variable=size, orient=tk.HORIZONTAL).grid(row=3, column=1, sticky="ew", padx=(0, 12))
         ttk.Button(dialog, text="Из текущего выделения", command=lambda: set_from_selection()).grid(row=4, column=1, sticky="ew", padx=(0, 12), pady=(14, 4))
         ttk.Button(dialog, text="Инвертировать", command=lambda: invert()).grid(row=5, column=1, sticky="ew", padx=(0, 12), pady=4)
         fill_buttons = ttk.Frame(dialog)

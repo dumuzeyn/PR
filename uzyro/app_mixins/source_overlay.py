@@ -180,7 +180,7 @@ class SourceOverlayMixin:
         opacity_row = ttk.Frame(overlay)
         opacity_row.pack(fill=tk.X, pady=(5, 0))
         ttk.Label(opacity_row, text="Непрозрачность").pack(side=tk.LEFT)
-        ttk.Scale(opacity_row, variable=self.clone_overlay_opacity, from_=0.05, to=1.0).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=8)
+        AccentScale(opacity_row, variable=self.clone_overlay_opacity, from_=0.05, to=1.0).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=8)
         healing = ttk.LabelFrame(body, text="Восстанавливающая кисть", padding=8)
         healing.pack(fill=tk.X, pady=(10, 0))
         ttk.Label(healing, text="Диффузия 1–7").pack(side=tk.LEFT)

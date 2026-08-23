@@ -267,6 +267,9 @@ def action_icon_bitmap(action: str, size: int = 15, color: str = TOKENS.TEXT_PRI
     elif action == "duplicate":
         draw.rectangle((p(3), p(5), p(size - 5), p(size - 3)), outline=color, width=width)
         draw.rectangle((p(6), p(2), p(size - 2), p(size - 6)), outline=color, width=width)
+    elif action == "group":
+        draw.rectangle((p(2), p(5), p(size - 2), p(size - 3)), outline=color, width=width)
+        draw.line((p(3), p(5), p(6), p(2), p(10), p(2), p(12), p(5)), fill=color, width=width)
     elif action in {"up", "down"}:
         if action == "up":
             points = [(p(3), p(size - 4)), (center, p(4)), (p(size - 3), p(size - 4))]

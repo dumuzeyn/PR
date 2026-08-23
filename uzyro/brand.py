@@ -56,6 +56,41 @@ def apply_window_branding(window: tk.Tk) -> None:
         )
 
 
+def apply_dialog_branding(window: tk.Toplevel, owner: tk.Tk) -> None:
+    if getattr(window, "_uzyro_dialog_styled", False) or window.overrideredirect():
+        return
+    window._uzyro_dialog_styled = True
+    try:
+        window.configure(background="#222328")
+        icon = getattr(owner, "_brand_icon", None)
+        if icon is not None:
+            window.iconphoto(False, icon)
+    except tk.TclError:
+        pass
+    _apply_windows_dark_titlebar(window)
+    window.after_idle(lambda: _apply_windows_dark_titlebar(window) if window.winfo_exists() else None)
+    try:
+        if window.grab_current() is window:
+            owner.attributes("-alpha", 0.94)
+            window.bind(
+                "<Destroy>",
+                lambda event: owner.attributes("-alpha", 1.0) if event.widget is window and owner.winfo_exists() else None,
+                add="+",
+            )
+    except tk.TclError:
+        pass
+
+
+def install_dialog_branding(owner: tk.Tk) -> None:
+    def style_window(event) -> None:
+        window = getattr(event, "widget", None)
+        if isinstance(window, tk.Toplevel):
+            apply_dialog_branding(window, owner)
+
+    owner.bind_class("Toplevel", "<Map>", style_window, add="+")
+    owner._uzyro_dialog_binding = style_window
+
+
 def _apply_windows_dark_titlebar(window: tk.Misc) -> None:
     """Ask DWM for native dark chrome while keeping standard window behavior."""
     if os.name != "nt":

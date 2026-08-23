@@ -103,10 +103,17 @@ class DocumentWorkspaceMixin:
             style = "ActiveDocumentTab.TButton" if session.id == active_id else "DocumentTab.TButton"
             tab = ttk.Frame(self.document_tabs, style="DocumentTabs.TFrame")
             tab.pack(side=tk.LEFT, fill=tk.Y)
-            button = ttk.Button(tab, text=session.display_title, style=style, command=lambda sid=session.id: self.switch_document(sid))
+            button = ttk.Button(tab, text=session.title, style=style, command=lambda sid=session.id: self.switch_document(sid))
             button.pack(side=tk.LEFT, fill=tk.Y)
+            tab_surface = TOKENS.CONTROL_SELECTED if session.id == active_id else TOKENS.APP_BG
+            dirty = tk.Canvas(tab, width=10, height=35, background=tab_surface, highlightthickness=0, borderwidth=0)
+            dirty.pack(side=tk.LEFT, fill=tk.Y)
+            if session.document.dirty:
+                dirty.create_oval(2, 15, 7, 20, fill=TOKENS.ACCENT_HOVER, outline="")
             close = ttk.Button(tab, text="×", width=3, style="DocumentTabClose.TButton", command=lambda sid=session.id: self.close_document_tab(sid))
             close.pack(side=tk.LEFT, fill=tk.Y)
+            indicator = tk.Frame(tab, height=2, background=TOKENS.ACCENT if session.id == active_id else TOKENS.APP_BG)
+            indicator.place(x=0, rely=1.0, relwidth=1.0, anchor=tk.SW)
             ToolTip(button, "Переключиться на документ")
             ToolTip(close, "Закрыть документ")
             self._document_tab_buttons[session.id] = button

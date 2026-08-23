@@ -71,7 +71,7 @@ class DocumentsMixin:
             cursor="hand2",
             takefocus=True,
         )
-        preset_scroll = ttk.Scrollbar(preset_list_area, orient=tk.VERTICAL, command=preset_list.yview)
+        preset_scroll = SlimScrollbar(preset_list_area, orient=tk.VERTICAL, command=preset_list.yview)
         preset_list.configure(yscrollcommand=preset_scroll.set)
         preset_list.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         preset_scroll.pack(side=tk.RIGHT, fill=tk.Y)

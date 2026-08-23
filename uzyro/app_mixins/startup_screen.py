@@ -140,7 +140,7 @@ class StartupScreenMixin:
             borderwidth=0,
             font=("Segoe UI", 10),
         )
-        recent_scroll = ttk.Scrollbar(recent_area, orient=tk.VERTICAL, command=self.startup_recent_list.yview)
+        recent_scroll = SlimScrollbar(recent_area, orient=tk.VERTICAL, command=self.startup_recent_list.yview)
         self.startup_recent_list.configure(yscrollcommand=recent_scroll.set)
         self.startup_recent_list.grid(row=1, column=0, sticky="nsew")
         recent_scroll.grid(row=1, column=1, sticky="ns")
@@ -211,7 +211,7 @@ class StartupScreenMixin:
         if self.startup_frame is not None and self.startup_frame.winfo_exists():
             self.startup_frame.destroy()
         self.startup_frame = None
-        self.config(menu=self.editor_menu)
+        self.config(menu="")
         self.geometry("1440x920")
         self.minsize(1000, 640)
         document_name = Path(self.doc.path).name if self.doc.path else "Новый документ"

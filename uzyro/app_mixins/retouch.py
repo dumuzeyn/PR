@@ -44,10 +44,10 @@ class RetouchMixin:
         radius_value = ttk.Label(controls, width=8)
         texture_value = ttk.Label(controls, width=8)
         ttk.Label(controls, text="Радиус размытия").grid(row=0, column=0, sticky="w")
-        ttk.Scale(controls, from_=0.5, to=40.0, variable=radius, orient=tk.HORIZONTAL).grid(row=0, column=1, sticky="ew", padx=8)
+        AccentScale(controls, from_=0.5, to=40.0, variable=radius, orient=tk.HORIZONTAL).grid(row=0, column=1, sticky="ew", padx=8)
         radius_value.grid(row=0, column=2, sticky="e")
         ttk.Label(controls, text="Сила текстуры").grid(row=1, column=0, sticky="w", pady=(8, 0))
-        ttk.Scale(controls, from_=0.0, to=2.0, variable=texture_strength, orient=tk.HORIZONTAL).grid(row=1, column=1, sticky="ew", padx=8, pady=(8, 0))
+        AccentScale(controls, from_=0.0, to=2.0, variable=texture_strength, orient=tk.HORIZONTAL).grid(row=1, column=1, sticky="ew", padx=8, pady=(8, 0))
         texture_value.grid(row=1, column=2, sticky="e", pady=(8, 0))
         controls.columnconfigure(1, weight=1)
 
@@ -162,7 +162,7 @@ class RetouchMixin:
         ]
         for row, (key, title, start, end) in enumerate(specs):
             ttk.Label(controls, text=title).grid(row=row, column=0, sticky="w", pady=3)
-            ttk.Scale(controls, from_=start, to=end, variable=variables[key], orient=tk.HORIZONTAL).grid(row=row, column=1, sticky="ew", padx=8, pady=3)
+            AccentScale(controls, from_=start, to=end, variable=variables[key], orient=tk.HORIZONTAL).grid(row=row, column=1, sticky="ew", padx=8, pady=3)
             value_labels[key] = ttk.Label(controls, width=7)
             value_labels[key].grid(row=row, column=2, sticky="e")
         controls.columnconfigure(1, weight=1)

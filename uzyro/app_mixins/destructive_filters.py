@@ -16,7 +16,7 @@ class DestructiveFiltersMixin:
         value_labels: dict[str, ttk.Label] = {}
         for row, (key, label, _default, low, high, step) in enumerate(specs):
             ttk.Label(controls, text=label).grid(row=row, column=0, sticky="w", pady=4)
-            ttk.Scale(controls, from_=low, to=high, variable=variables[key], orient=tk.HORIZONTAL).grid(row=row, column=1, sticky="ew", padx=8)
+            AccentScale(controls, from_=low, to=high, variable=variables[key], orient=tk.HORIZONTAL).grid(row=row, column=1, sticky="ew", padx=8)
             value = ttk.Label(controls, width=8, anchor=tk.E); value.grid(row=row, column=2, sticky="e")
             value_labels[key] = value
             variables[key]._filter_step = step

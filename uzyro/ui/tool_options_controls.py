@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from .tool_options_shared import *
+from .desktop_controls import AccentScale
+from .menu_bar import DarkMenuButton
 
 
 OPTION_HINTS = {
@@ -51,7 +53,7 @@ class ToolOptionsControlsMixin:
         self._brush_preset_editor(self.body, compact=False)
 
     def _compact_brush_presets(self, parent: ttk.Frame) -> None:
-        menu_button = ttk.Menubutton(parent, text="Перо и пресеты")
+        menu_button = DarkMenuButton(parent, text="Перо и пресеты", width=16)
         menu = tk.Menu(menu_button, tearoff=False)
         menu.add_checkbutton(label="Нажим → размер", variable=self.pressure_size)
         menu.add_checkbutton(label="Нажим → непрозрачность", variable=self.pressure_opacity)
@@ -102,7 +104,15 @@ class ToolOptionsControlsMixin:
         caption.pack(side=tk.LEFT, padx=(5, 2))
         value = ttk.Label(parent, width=5, style="Topbar.TLabel")
         value.pack(side=tk.LEFT)
-        scale = ttk.Scale(parent, variable=variable, from_=0.0, to=1.0, length=90, command=lambda raw: value.configure(text=f"{round(float(raw) * 100)}%"))
+        scale = AccentScale(
+            parent,
+            variable=variable,
+            from_=0.0,
+            to=1.0,
+            length=90,
+            background=TOKENS.APP_BG,
+            command=lambda raw: value.configure(text=f"{round(float(raw) * 100)}%"),
+        )
         scale.pack(side=tk.LEFT, padx=(0, 4))
         value.configure(text=f"{round(float(variable.get()) * 100)}%")
         self._attach_option_hint((caption, value, scale), label)
@@ -172,7 +182,7 @@ class ToolOptionsControlsMixin:
                 text = f"{number:.2f} {unit}".strip()
             value_label.configure(text=text)
 
-        scale = ttk.Scale(self.body, from_=start, to=end, variable=variable, orient=tk.HORIZONTAL, command=show)
+        scale = AccentScale(self.body, from_=start, to=end, variable=variable, orient=tk.HORIZONTAL, command=show)
         scale.pack(fill=tk.X, padx=8)
         self._attach_option_hint((caption, value_label, scale), label)
         show()

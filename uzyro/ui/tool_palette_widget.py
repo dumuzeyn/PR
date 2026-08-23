@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from .tool_palette_shared import *
+from .menu_bar import DarkMenuButton
 
 
 class ToolPalette(ttk.Frame):
@@ -116,8 +117,7 @@ class ToolPalette(ttk.Frame):
             variable=self.tool_var, command=lambda value=selected: self.select_tool(value),
             style="Tool.TRadiobutton", takefocus=True,
         )
-        button.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        picker = ttk.Menubutton(row, text="▾", width=2)
+        picker = DarkMenuButton(row, text="", width=2)
         menu = tk.Menu(picker, tearoff=False)
         for value in variants:
             item_label, _item, item_description = by_id[value]
@@ -128,6 +128,7 @@ class ToolPalette(ttk.Frame):
             self.buttons[value] = button
         picker.configure(menu=menu)
         picker.pack(side=tk.RIGHT, padx=(2, 0))
+        button.pack(side=tk.LEFT, fill=tk.X, expand=True)
         if self.tooltip_factory is not None:
             shortcut = SHORTCUTS.get(selected)
             title = f"{label} ({shortcut})" if shortcut else label

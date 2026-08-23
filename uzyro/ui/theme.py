@@ -7,27 +7,27 @@ from tkinter import ttk
 
 @dataclass(frozen=True)
 class DesignTokens:
-    APP_BG: str = "#15161a"
-    WORKSPACE_BG: str = "#0d0e11"
-    PANEL_BG: str = "#1a1b20"
-    PANEL_RAISED: str = "#212329"
-    CONTROL_BG: str = "#24262c"
-    CONTROL_HOVER: str = "#2a2c33"
-    CONTROL_PRESSED: str = "#202126"
-    CONTROL_SELECTED: str = "#292631"
-    BORDER_SUBTLE: str = "#2d2f36"
-    BORDER_STRONG: str = "#454852"
-    ACTIVE_EDGE: str = "#755aa8"
-    ACTIVE_SHADOW: str = "#101115"
+    APP_BG: str = "#1b1c20"
+    WORKSPACE_BG: str = "#141519"
+    PANEL_BG: str = "#222328"
+    PANEL_RAISED: str = "#292b30"
+    CONTROL_BG: str = "#2b2d33"
+    CONTROL_HOVER: str = "#33353c"
+    CONTROL_PRESSED: str = "#26282d"
+    CONTROL_SELECTED: str = "#312e39"
+    BORDER_SUBTLE: str = "#36383f"
+    BORDER_STRONG: str = "#4b4e57"
+    ACTIVE_EDGE: str = "#7866aa"
+    ACTIVE_SHADOW: str = "#111216"
     TEXT_PRIMARY: str = "#edeef2"
     TEXT_SECONDARY: str = "#b8bbc4"
     TEXT_MUTED: str = "#8a8e99"
     TEXT_DISABLED: str = "#626670"
-    ACCENT: str = "#9568fb"
-    ACCENT_HOVER: str = "#a77cff"
-    ACCENT_PRESSED: str = "#8054e8"
-    SELECTION: str = "#302a3d"
-    FOCUS: str = "#b190ff"
+    ACCENT: str = "#8b73d6"
+    ACCENT_HOVER: str = "#9a83df"
+    ACCENT_PRESSED: str = "#765fc0"
+    SELECTION: str = "#34303e"
+    FOCUS: str = "#aa94e8"
     SUCCESS: str = "#56b889"
     WARNING: str = "#e1b65f"
     DANGER: str = "#e06c78"
@@ -124,6 +124,7 @@ def configure_theme(root: tk.Misc, tokens: DesignTokens = TOKENS) -> ttk.Style:
     style.configure("Warning.TLabel", foreground=tokens.WARNING)
     style.configure("Danger.TLabel", foreground=tokens.DANGER)
     style.configure("PanelTitle.TLabel", font=("Segoe UI Semibold", 9), foreground=tokens.TEXT_PRIMARY)
+    style.configure("SectionTitle.TLabel", font=("Segoe UI Semibold", 8), foreground=tokens.TEXT_MUTED)
     style.configure(
         "TButton",
         background=tokens.CONTROL_BG,
@@ -195,9 +196,6 @@ def configure_theme(root: tk.Misc, tokens: DesignTokens = TOKENS) -> ttk.Style:
         style.map(widget, bordercolor=[("focus", tokens.FOCUS), ("active", tokens.BORDER_STRONG)], fieldbackground=[("readonly", tokens.CONTROL_BG), ("disabled", tokens.PANEL_BG)], foreground=[("disabled", tokens.TEXT_DISABLED)])
     style.configure("TCheckbutton", background=tokens.SURFACE, foreground=tokens.TEXT_PRIMARY, indicatorcolor=tokens.SURFACE_HOVER, padding=3)
     style.map("TCheckbutton", indicatorcolor=[("selected", tokens.ACCENT), ("active", tokens.SURFACE_HOVER)])
-    style.configure("TScale", background=tokens.SURFACE, troughcolor=tokens.SURFACE_HOVER, bordercolor=tokens.SURFACE, lightcolor=tokens.ACCENT, darkcolor=tokens.ACCENT, borderwidth=0, relief="flat", sliderlength=14, sliderthickness=12)
-    style.configure("TScrollbar", background=tokens.SURFACE_HOVER, troughcolor=tokens.SURFACE, bordercolor=tokens.SURFACE, arrowcolor=tokens.TEXT_SECONDARY, width=9)
-    style.map("TScrollbar", background=[("active", tokens.TEXT_DISABLED)])
     style.configure("TNotebook", background=tokens.SURFACE, borderwidth=0, tabmargins=0)
     style.configure("TNotebook.Tab", background=tokens.PANEL_BG, foreground=tokens.TEXT_SECONDARY, padding=(9, 6), borderwidth=1, relief="flat")
     style.map("TNotebook.Tab", background=[("selected", tokens.CONTROL_SELECTED), ("active", tokens.CONTROL_HOVER)], foreground=[("selected", tokens.TEXT_PRIMARY)], bordercolor=[("selected", tokens.ACTIVE_EDGE)], lightcolor=[("selected", tokens.BORDER_STRONG)], darkcolor=[("selected", tokens.ACTIVE_SHADOW)], relief=[("selected", "raised")])
@@ -207,7 +205,7 @@ def configure_theme(root: tk.Misc, tokens: DesignTokens = TOKENS) -> ttk.Style:
     style.configure("TPanedwindow", background=tokens.BORDER, sashwidth=1)
     style.configure("TSeparator", background=tokens.SEPARATOR)
     style.configure("DocumentTabs.TFrame", background=tokens.BACKGROUND)
-    style.configure("DocumentTab.TButton", background=tokens.BACKGROUND, foreground=tokens.TEXT_SECONDARY, padding=(12, 6), borderwidth=0)
+    style.configure("DocumentTab.TButton", background=tokens.BACKGROUND, foreground=tokens.TEXT_SECONDARY, bordercolor=tokens.BACKGROUND, padding=(11, 5), borderwidth=1, relief="flat")
     style.map("DocumentTab.TButton", background=[("active", tokens.SURFACE_HOVER)], foreground=[("active", tokens.TEXT_PRIMARY)])
     style.configure("ActiveDocumentTab.TButton", background=tokens.CONTROL_SELECTED, foreground=tokens.TEXT_PRIMARY, bordercolor=tokens.ACTIVE_EDGE, lightcolor=tokens.BORDER_STRONG, darkcolor=tokens.ACTIVE_SHADOW, padding=(11, 5), borderwidth=1, relief="raised")
     style.map("ActiveDocumentTab.TButton", background=[("active", tokens.CONTROL_HOVER), ("pressed", tokens.CONTROL_PRESSED)], bordercolor=[("focus", tokens.FOCUS), ("active", tokens.ACTIVE_EDGE)])

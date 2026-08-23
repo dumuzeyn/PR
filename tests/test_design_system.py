@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 import tkinter as tk
+from types import SimpleNamespace
 
+import numpy as np
 import pytest
+from PIL import Image
 
+from uzyro.ui.desktop_controls import AccentScale, LayerList, SlimScrollbar
 from uzyro.ui.icons import action_icon, tool_icon, tool_icon_bitmap
+from uzyro.ui.menu_bar import DarkMenuButton, DesktopMenuBar
 from uzyro.ui.theme import DesignTokens, TOKENS, configure_theme
 from uzyro.ui.tooltip import ToolTip
 
@@ -86,5 +91,79 @@ def test_tooltip_uses_raised_surface_and_cleans_up() -> None:
         assert body.cget("background") == TOKENS.PANEL_RAISED
         tooltip.hide()
         assert tooltip._tip is None
+    finally:
+        root.destroy()
+
+
+@pytest.mark.ui
+def test_desktop_controls_keep_geometry_and_listbox_contract() -> None:
+    root = tk.Tk()
+    root.geometry("360x260")
+    configure_theme(root)
+    value = tk.DoubleVar(root, value=0.25)
+    changes: list[float] = []
+    scale = AccentScale(root, variable=value, length=180, command=lambda raw: changes.append(float(raw)))
+    scale.pack(fill=tk.X)
+    scrollbar = SlimScrollbar(root, command=lambda *_args: None)
+    scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+    layers = LayerList(root)
+    layers.pack(fill=tk.BOTH, expand=True)
+    layers.insert(tk.END, "Первый", "Второй")
+    pixels = np.zeros((12, 12, 4), dtype=np.uint8)
+    layer_data = [
+        SimpleNamespace(id="one", pixels=pixels, pixels_revision=0, name="Первый", visible=True, locked=False, mask=None, effects=[]),
+        SimpleNamespace(id="two", pixels=pixels, pixels_revision=0, name="Второй", visible=False, locked=True, mask=pixels[..., 0], effects=[]),
+    ]
+    layers.set_layers(layer_data, lambda _pixels, size: Image.new("RGBA", (size, size), (70, 80, 90, 255)))
+    try:
+        root.update()
+        geometry = (scale.winfo_width(), scale.winfo_height())
+        scale._enter(None)
+        assert (scale.winfo_width(), scale.winfo_height()) == geometry
+        scale.set(0.75, notify=True)
+        assert value.get() == pytest.approx(0.75)
+        assert changes[-1] == pytest.approx(0.75)
+        layers.selection_set(1)
+        layers.activate(1)
+        assert layers.get(0, tk.END) == ("Первый", "Второй")
+        assert layers.curselection() == (1,)
+        assert layers.index(tk.ACTIVE) == 1
+        assert layers.bbox(1) is not None
+    finally:
+        root.destroy()
+
+
+@pytest.mark.ui
+def test_dark_menu_components_render_custom_popup_rows() -> None:
+    root = tk.Tk()
+    root.geometry("480x240")
+    configure_theme(root)
+    menu = tk.Menu(root, tearoff=False)
+    file_menu = tk.Menu(menu, tearoff=False)
+    file_menu.add_command(label="Открыть", accelerator="Ctrl+O")
+    file_menu.add_separator()
+    file_menu.add_command(label="Закрыть")
+    menu.add_cascade(label="Файл", menu=file_menu)
+    bar = DesktopMenuBar(root, menu)
+    bar.pack(fill=tk.X)
+    button = DarkMenuButton(root, text="Пресеты", width=14)
+    button_menu = tk.Menu(button, tearoff=False)
+    button_menu.add_command(label="Круглая кисть")
+    button.configure(menu=button_menu)
+    button.pack(anchor=tk.W, pady=12)
+    try:
+        root.update()
+        bar.open_popup(bar._buttons[0], 0)
+        root.update()
+        assert bar.popup is not None
+        popup_edge = bar.popup.winfo_children()[0]
+        assert popup_edge.cget("background") == TOKENS.PANEL_RAISED
+        assert popup_edge.winfo_children()[0].winfo_height() == 28
+        bar.close_popup()
+        button._toggle()
+        root.update()
+        assert button.popup is not None
+        assert button.winfo_height() == 28
+        button.close_popup()
     finally:
         root.destroy()
