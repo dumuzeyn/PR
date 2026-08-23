@@ -105,7 +105,7 @@ class GenerativeWorkspaceMixin:
         controls = ttk.Frame(body, width=300, padding=(12, 4))
         body.add(preview_panel, weight=1)
         body.add(controls, weight=0)
-        canvas = tk.Canvas(preview_panel, background="#202226", highlightthickness=0)
+        canvas = tk.Canvas(preview_panel, background=TOKENS.WORKSPACE_BG, highlightthickness=0)
         canvas.pack(fill=tk.BOTH, expand=True)
         variants_bar = ttk.Frame(preview_panel, padding=(0, 8, 0, 0))
         variants_bar.pack(fill=tk.X)

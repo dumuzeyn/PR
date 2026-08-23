@@ -28,7 +28,7 @@ class ShapeVectorMixin:
         dialog.transient(self)
         dialog.resizable(False, False)
         dialog.grab_set()
-        canvas = tk.Canvas(dialog, width=620, height=440, background="#22252b", highlightthickness=0, cursor="crosshair")
+        canvas = tk.Canvas(dialog, width=620, height=440, background=TOKENS.WORKSPACE_BG, highlightthickness=0, cursor="crosshair")
         canvas.pack(padx=12, pady=(12, 6))
         buttons = ttk.Frame(dialog)
         buttons.pack(fill=tk.X, padx=12, pady=(0, 12))

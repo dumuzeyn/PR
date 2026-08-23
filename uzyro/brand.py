@@ -29,8 +29,16 @@ def apply_window_branding(window: tk.Tk) -> None:
         except tk.TclError:
             pass
         _apply_windows_titlebar_icon(window, icon_path)
+        _apply_windows_dark_titlebar(window)
         if not getattr(window, "_brand_map_binding", False):
-            window.bind("<Map>", lambda _event: _apply_windows_titlebar_icon(window, icon_path), add="+")
+            window.bind(
+                "<Map>",
+                lambda _event: (
+                    _apply_windows_titlebar_icon(window, icon_path),
+                    _apply_windows_dark_titlebar(window),
+                ),
+                add="+",
+            )
             window._brand_map_binding = True
         if not getattr(window, "_brand_destroy_binding", False):
             window.bind(
@@ -39,7 +47,35 @@ def apply_window_branding(window: tk.Tk) -> None:
                 add="+",
             )
             window._brand_destroy_binding = True
-        window.after(200, lambda: _apply_windows_titlebar_icon(window, icon_path))
+        window.after(
+            200,
+            lambda: (
+                _apply_windows_titlebar_icon(window, icon_path),
+                _apply_windows_dark_titlebar(window),
+            ),
+        )
+
+
+def _apply_windows_dark_titlebar(window: tk.Misc) -> None:
+    """Ask DWM for native dark chrome while keeping standard window behavior."""
+    if os.name != "nt":
+        return
+    try:
+        user32 = ctypes.windll.user32
+        client_handle = int(window.winfo_id())
+        window_handle = int(user32.GetParent(client_handle)) or client_handle
+        enabled = ctypes.c_int(1)
+        for attribute in (20, 19):
+            result = ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                window_handle,
+                attribute,
+                ctypes.byref(enabled),
+                ctypes.sizeof(enabled),
+            )
+            if result == 0:
+                break
+    except (AttributeError, OSError, tk.TclError):
+        return
 
 
 def _apply_windows_titlebar_icon(window: tk.Misc, icon_path: Path) -> None:

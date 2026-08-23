@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from functools import lru_cache
 import math
 import tkinter as tk
 from PIL import Image, ImageDraw, ImageTk
@@ -29,6 +30,7 @@ TOOL_GROUPS = {
 }
 
 
+@lru_cache(maxsize=512)
 def tool_icon_bitmap(tool: str, size: int = 20, color: str = TOKENS.TEXT_PRIMARY) -> Image.Image:
     """Draw one coherent, dependency-free outline icon set for the tool palette."""
     scale = 4
@@ -220,11 +222,38 @@ def tool_icon_bitmap(tool: str, size: int = 20, color: str = TOKENS.TEXT_PRIMARY
     return image.resize((size, size), Image.Resampling.LANCZOS)
 
 
+def _dpi_scale(master: tk.Misc) -> float:
+    try:
+        # Tk defines 1.0 scaling as 72 DPI; Windows logical controls use 96 DPI.
+        return max(1.0, min(4.0, float(master.tk.call("tk", "scaling")) / (96.0 / 72.0)))
+    except (AttributeError, TypeError, ValueError, tk.TclError):
+        return 1.0
+
+
+def _window_icon_cache(master: tk.Misc) -> dict[tuple[object, ...], ImageTk.PhotoImage]:
+    try:
+        owner = master.winfo_toplevel()
+    except (AttributeError, tk.TclError):
+        owner = master
+    cache = getattr(owner, "_uzyro_icon_cache", None)
+    if cache is None:
+        cache = {}
+        setattr(owner, "_uzyro_icon_cache", cache)
+    return cache
+
+
 def tool_icon(master: tk.Misc, tool: str, size: int = 20, color: str = TOKENS.TEXT_PRIMARY) -> ImageTk.PhotoImage:
-    return ImageTk.PhotoImage(tool_icon_bitmap(tool, size, color), master=master)
+    scale = _dpi_scale(master)
+    physical_size = max(1, round(size * scale))
+    key = ("tool", tool, size, round(scale, 3), color)
+    cache = _window_icon_cache(master)
+    if key not in cache:
+        cache[key] = ImageTk.PhotoImage(tool_icon_bitmap(tool, physical_size, color), master=master)
+    return cache[key]
 
 
-def action_icon(master: tk.Misc, action: str, size: int = 15, color: str = TOKENS.TEXT_PRIMARY) -> ImageTk.PhotoImage:
+@lru_cache(maxsize=256)
+def action_icon_bitmap(action: str, size: int = 15, color: str = TOKENS.TEXT_PRIMARY) -> Image.Image:
     scale = 3
     image = Image.new("RGBA", (size * scale, size * scale), (0, 0, 0, 0))
     draw = ImageDraw.Draw(image)
@@ -257,4 +286,14 @@ def action_icon(master: tk.Misc, action: str, size: int = 15, color: str = TOKEN
         draw.ellipse((center - radius, center - radius, center + radius, center + radius), outline=color, width=width)
         draw.ellipse((center - inner, center - inner, center + inner, center + inner), outline=color, width=width)
     image = image.resize((size, size), Image.Resampling.LANCZOS)
-    return ImageTk.PhotoImage(image, master=master)
+    return image
+
+
+def action_icon(master: tk.Misc, action: str, size: int = 15, color: str = TOKENS.TEXT_PRIMARY) -> ImageTk.PhotoImage:
+    scale = _dpi_scale(master)
+    physical_size = max(1, round(size * scale))
+    key = ("action", action, size, round(scale, 3), color)
+    cache = _window_icon_cache(master)
+    if key not in cache:
+        cache[key] = ImageTk.PhotoImage(action_icon_bitmap(action, physical_size, color), master=master)
+    return cache[key]

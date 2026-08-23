@@ -80,7 +80,7 @@ class TransformWorkspaceMixin:
         status.pack(side=tk.RIGHT)
         body = ttk.PanedWindow(dialog, orient=tk.HORIZONTAL)
         body.pack(fill=tk.BOTH, expand=True, padx=12)
-        canvas = tk.Canvas(body, background="#202226", highlightthickness=0, cursor="crosshair")
+        canvas = tk.Canvas(body, background=TOKENS.WORKSPACE_BG, highlightthickness=0, cursor="crosshair")
         controls = ttk.Frame(body, width=260, padding=(12, 4))
         body.add(canvas, weight=1)
         body.add(controls, weight=0)
@@ -178,7 +178,7 @@ class TransformWorkspaceMixin:
                 return
             canvas.delete("all")
             doc_a = doc_to_preview((0, 0)); doc_b = doc_to_preview((self.doc.width, self.doc.height))
-            canvas.create_rectangle(*doc_a, *doc_b, fill="#2c2f35", outline="#666c76")
+            canvas.create_rectangle(*doc_a, *doc_b, fill=TOKENS.PANEL_RAISED, outline=TOKENS.BORDER_STRONG)
             photo_image = rgba_array_to_pil(output)
             display_scale = scale / pixel_scale
             if abs(display_scale - 1.0) > 0.001:

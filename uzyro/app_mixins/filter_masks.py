@@ -13,7 +13,7 @@ class FilterMasksMixin:
         dialog.resizable(False, False)
         dialog.grab_set()
         canvas_width, canvas_height = 520, 360
-        canvas = tk.Canvas(dialog, width=canvas_width, height=canvas_height, background="#202226", highlightthickness=0)
+        canvas = tk.Canvas(dialog, width=canvas_width, height=canvas_height, background=TOKENS.WORKSPACE_BG, highlightthickness=0)
         canvas.grid(row=0, column=0, rowspan=7, padx=12, pady=12)
         mode = tk.StringVar(value="Белая кисть")
         size = tk.DoubleVar(value=40)

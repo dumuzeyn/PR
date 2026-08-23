@@ -52,5 +52,14 @@ def test_titlebar_receives_native_small_and_large_icons() -> None:
         top_level = int(user32.GetParent(window.winfo_id())) or int(window.winfo_id())
         assert int(user32.SendMessageW(top_level, 0x007F, 0, 0)) == handles[0]
         assert int(user32.SendMessageW(top_level, 0x007F, 1, 0)) == handles[1]
+        dark_values = []
+        for attribute in (20, 19):
+            enabled = ctypes.c_int()
+            result = ctypes.windll.dwmapi.DwmGetWindowAttribute(
+                top_level, attribute, ctypes.byref(enabled), ctypes.sizeof(enabled)
+            )
+            if result == 0:
+                dark_values.append(enabled.value)
+        assert 1 in dark_values
     finally:
         window.destroy()

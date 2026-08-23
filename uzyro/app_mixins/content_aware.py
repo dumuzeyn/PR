@@ -109,8 +109,8 @@ class ContentAwareMixin:
         result_panel.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(4, 0))
         ttk.Label(source_panel, text="Область-источник", style="PanelTitle.TLabel").pack(anchor=tk.W, pady=(0, 4))
         ttk.Label(result_panel, text="Предпросмотр результата", style="PanelTitle.TLabel").pack(anchor=tk.W, pady=(0, 4))
-        source_canvas = tk.Canvas(source_panel, background="#202226", highlightthickness=0, cursor="crosshair")
-        result_canvas = tk.Canvas(result_panel, background="#202226", highlightthickness=0)
+        source_canvas = tk.Canvas(source_panel, background=TOKENS.WORKSPACE_BG, highlightthickness=0, cursor="crosshair")
+        result_canvas = tk.Canvas(result_panel, background=TOKENS.WORKSPACE_BG, highlightthickness=0)
         source_canvas.pack(fill=tk.BOTH, expand=True)
         result_canvas.pack(fill=tk.BOTH, expand=True)
 

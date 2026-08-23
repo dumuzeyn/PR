@@ -21,7 +21,7 @@ class FreeTransformMixin:
         keep_ratio = tk.BooleanVar(value=True)
         original_ratio = layer.pixels.shape[1] / max(1, layer.pixels.shape[0])
 
-        canvas = tk.Canvas(dialog, width=500, height=340, background="#22252b", highlightthickness=0, cursor="crosshair")
+        canvas = tk.Canvas(dialog, width=500, height=340, background=TOKENS.WORKSPACE_BG, highlightthickness=0, cursor="crosshair")
         canvas.grid(row=0, column=0, rowspan=9, padx=12, pady=12)
         source = rgba_array_to_pil(layer.pixels)
         handle_positions: dict[str, tuple[float, float]] = {}
@@ -41,7 +41,7 @@ class FreeTransformMixin:
             x, y, width, height, angle = safe_values()
             scale, ox, oy = preview_geometry()
             canvas.delete("all")
-            canvas.create_rectangle(ox, oy, ox + self.doc.width * scale, oy + self.doc.height * scale, fill="#343840", outline="#707680")
+            canvas.create_rectangle(ox, oy, ox + self.doc.width * scale, oy + self.doc.height * scale, fill=TOKENS.PANEL_RAISED, outline=TOKENS.BORDER_STRONG)
             preview = source.resize((max(1, int(width * scale)), max(1, int(height * scale))), Image.Resampling.BILINEAR)
             if flip_h_var.get():
                 preview = preview.transpose(Image.Transpose.FLIP_LEFT_RIGHT)

@@ -45,7 +45,7 @@ class BooleanShapesMixin:
         list_buttons = ttk.Frame(left)
         list_buttons.pack(fill=tk.X, pady=6)
 
-        preview = tk.Canvas(right, height=330, background="#252a30", highlightthickness=1, highlightbackground=TOKENS.BORDER)
+        preview = tk.Canvas(right, height=330, background=TOKENS.PANEL_RAISED, highlightthickness=1, highlightbackground=TOKENS.BORDER_SUBTLE)
         preview.pack(fill=tk.BOTH, expand=True, padx=(10, 0))
         editor = ttk.LabelFrame(right, text="Параметры выбранного контура")
         editor.pack(fill=tk.X, padx=(10, 0), pady=(8, 0))
