@@ -43,8 +43,9 @@ class StartupScreenMixin:
         header.pack(fill=tk.X)
         header.pack_propagate(False)
         try:
-            source_icon = tk.PhotoImage(file=str(branding_asset("uzyro-icon.png")))
-            self._startup_brand_icon = source_icon.subsample(8, 8)
+            with Image.open(branding_asset("uzyro-icon.png")) as source_icon:
+                icon = source_icon.convert("RGBA").resize((64, 64), Image.Resampling.LANCZOS)
+            self._startup_brand_icon = ImageTk.PhotoImage(icon, master=self)
             tk.Label(header, image=self._startup_brand_icon, background=TOKENS.BACKGROUND).pack(side=tk.LEFT, padx=(32, 14), pady=12)
         except tk.TclError:
             self._startup_brand_icon = None

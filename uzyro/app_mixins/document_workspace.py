@@ -134,7 +134,8 @@ class DocumentWorkspaceMixin:
             return True
         path = session.document.path
         if not path or not path.lower().endswith(".prdx"):
-            path = filedialog.asksaveasfilename(parent=self, defaultextension=".prdx", filetypes=[("Проект UZYRO", "*.prdx")])
+            initial = Path.home() / "Documents" / f"{Path(session.title).stem}.prdx"
+            path = ask_project_save_path(self, initial)
         if not path:
             return False
         try:

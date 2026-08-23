@@ -7,9 +7,11 @@ import numpy as np
 import pytest
 from PIL import Image
 
+from uzyro.brand import branding_asset
 from uzyro.ui.desktop_controls import AccentScale, LayerList, SlimScrollbar
 from uzyro.ui.icons import action_icon, tool_icon, tool_icon_bitmap
 from uzyro.ui.menu_bar import DarkMenuButton, DesktopMenuBar
+from uzyro.ui.project_save_dialog import ProjectSaveDialog
 from uzyro.ui.theme import DesignTokens, TOKENS, configure_theme
 from uzyro.ui.tooltip import ToolTip
 
@@ -33,6 +35,14 @@ def test_tool_bitmap_rendering_is_sized_and_cached() -> None:
     assert first is second
     assert first.size == (24, 24)
     assert first.getbbox() is not None
+
+
+def test_application_icon_has_real_transparency() -> None:
+    with Image.open(branding_asset("uzyro-icon.png")) as icon:
+        assert icon.mode == "RGBA"
+        assert icon.size == (512, 512)
+        assert icon.getpixel((0, 0))[3] == 0
+        assert icon.getchannel("A").getextrema() == (0, 255)
 
 
 @pytest.mark.ui
@@ -166,4 +176,28 @@ def test_dark_menu_components_render_custom_popup_rows() -> None:
         assert button.winfo_height() == 28
         button.close_popup()
     finally:
+        root.destroy()
+
+
+@pytest.mark.ui
+def test_project_save_dialog_matches_theme_and_confirms_overwrite(tmp_path) -> None:
+    existing = tmp_path / "Макет.prdx"
+    existing.write_bytes(b"existing")
+    root = tk.Tk()
+    root.geometry("1000x700")
+    configure_theme(root)
+    dialog = ProjectSaveDialog(root, existing)
+    try:
+        root.update()
+        assert dialog.cget("background") == TOKENS.APP_BG
+        assert dialog.current_directory == tmp_path
+        assert any(path == existing for path in dialog._entries.values())
+        dialog.accept()
+        assert dialog.winfo_exists()
+        assert dialog.save_button.cget("text") == "Перезаписать"
+        dialog.accept()
+        assert dialog.result == str(existing)
+    finally:
+        if dialog.winfo_exists():
+            dialog.destroy()
         root.destroy()

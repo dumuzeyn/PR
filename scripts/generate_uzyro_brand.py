@@ -1,19 +1,42 @@
 from __future__ import annotations
 
 from pathlib import Path
+import sys
 
+import numpy as np
 from PIL import Image
 
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 from uzyro.core import Document, render_shape_layer
 
 
-ROOT = Path(__file__).resolve().parents[1]
 DESIGN_DIR = ROOT / "design_assets" / "branding"
 ASSET_DIR = ROOT / "uzyro" / "assets" / "branding"
 SIZE = 2048
 BACKGROUND = (18, 19, 22, 255)
 WHITE = (250, 250, 252, 255)
 PURPLE = (155, 111, 255, 255)
+
+
+def transparent_icon(source: Image.Image) -> Image.Image:
+    pixels = np.asarray(source.convert("RGB"), dtype=np.float32)
+    background = np.asarray(BACKGROUND[:3], dtype=np.float32)
+    targets = [np.asarray(WHITE[:3], dtype=np.float32), np.asarray(PURPLE[:3], dtype=np.float32)]
+    candidates = []
+    for target in targets:
+        direction = target - background
+        alpha = np.clip(np.sum((pixels - background) * direction, axis=2) / np.sum(direction * direction), 0.0, 1.0)
+        reconstructed = background + alpha[..., None] * direction
+        error = np.sum((pixels - reconstructed) ** 2, axis=2)
+        candidates.append((alpha, error, target))
+    use_purple = candidates[1][1] < candidates[0][1]
+    alpha = np.where(use_purple, candidates[1][0], candidates[0][0])
+    rgb = np.where(use_purple[..., None], targets[1], targets[0])
+    rgba = np.concatenate((rgb, np.round(alpha[..., None] * 255.0)), axis=2).astype(np.uint8)
+    rgba[rgba[..., 3] == 0, :3] = 0
+    return Image.fromarray(rgba, "RGBA")
 
 
 def add_rectangle(document: Document, box: tuple[int, int, int, int], color, rotation: float, radius: int, name: str):
@@ -58,8 +81,9 @@ def main() -> None:
     document.save_project(project_path)
     source = Image.fromarray(document.composite(False), "RGBA")
     source.save(source_path, optimize=True)
-    source.resize((512, 512), Image.Resampling.LANCZOS).save(app_png_path, optimize=True)
-    source.save(
+    icon_source = transparent_icon(source)
+    icon_source.resize((512, 512), Image.Resampling.LANCZOS).save(app_png_path, optimize=True)
+    icon_source.save(
         ico_path,
         format="ICO",
         sizes=[(16, 16), (20, 20), (24, 24), (32, 32), (40, 40), (48, 48), (64, 64), (128, 128), (256, 256)],

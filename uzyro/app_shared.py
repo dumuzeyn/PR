@@ -169,6 +169,7 @@ from .ui.theme import TOKENS, configure_theme
 from .ui.tooltip import ToolTip, tool_demo_path
 from .ui.desktop_controls import AccentScale, LayerList, PropertySection, SlimScrollbar
 from .ui.menu_bar import DesktopMenuBar
+from .ui.project_save_dialog import ask_project_save_path
 
 
 TOOL_DEFINITIONS = [

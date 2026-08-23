@@ -21,6 +21,8 @@ class ApplicationWorkspaceUITests(ApplicationUITestCase):
         self.assertFalse(self.app.editor_root.winfo_ismapped())
         self.assertEqual(str(self.app.cget("menu")), "")
         self.assertEqual(self.app.state(), "normal")
+        self.assertEqual(self.app._startup_brand_icon.width(), 64)
+        self.assertEqual(self.app._startup_brand_icon.height(), 64)
         expected_x = (self.app.winfo_screenwidth() - self.app.winfo_width()) // 2
         expected_y = (self.app.winfo_screenheight() - self.app.winfo_height()) // 2
         self.assertAlmostEqual(self.app.winfo_x(), expected_x, delta=3)

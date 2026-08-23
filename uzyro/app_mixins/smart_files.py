@@ -217,7 +217,8 @@ class SmartFilesMixin:
             self.save_as_project()
 
     def save_as_project(self) -> None:
-        path = filedialog.asksaveasfilename(defaultextension=".prdx", filetypes=[("UZYRO project", "*.prdx")])
+        initial = self.doc.path or str(Path.home() / "Documents" / "Новый проект.prdx")
+        path = ask_project_save_path(self, initial)
         if path:
             self.save_project_async(path)
 
