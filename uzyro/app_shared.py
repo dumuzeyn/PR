@@ -170,6 +170,7 @@ from .ui.tooltip import ToolTip, tool_demo_path
 from .ui.desktop_controls import AccentScale, LayerList, PropertySection, SlimScrollbar
 from .ui.menu_bar import DesktopMenuBar
 from .ui.project_save_dialog import ask_project_save_path
+from .layer_thumbnails import build_layer_thumbnail
 
 
 TOOL_DEFINITIONS = [

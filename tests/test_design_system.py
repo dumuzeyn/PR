@@ -124,7 +124,7 @@ def test_desktop_controls_keep_geometry_and_listbox_contract() -> None:
         SimpleNamespace(id="one", pixels=pixels, pixels_revision=0, name="Первый", visible=True, locked=False, mask=None, effects=[]),
         SimpleNamespace(id="two", pixels=pixels, pixels_revision=0, name="Второй", visible=False, locked=True, mask=pixels[..., 0], effects=[]),
     ]
-    layers.set_layers(layer_data, lambda _pixels, size: Image.new("RGBA", (size, size), (70, 80, 90, 255)))
+    layers.set_layers(layer_data, lambda _layer, size: Image.new("RGBA", (size, size), (70, 80, 90, 255)))
     try:
         root.update()
         geometry = (scale.winfo_width(), scale.winfo_height())

@@ -272,10 +272,20 @@ class RenderingViewMixin:
 
     def refresh_layer_previews(self) -> None:
         layer = self.doc.layer
-        layer_key = (layer.id, layer.pixels_revision, id(layer.pixels), layer.pixels.shape)
+        layer_key = (
+            layer.id,
+            layer.pixels_revision,
+            layer.mask_revision,
+            repr(layer.filters),
+            repr(layer.effects),
+            layer.opacity,
+            layer.mask_enabled,
+            layer.mask_density,
+            layer.pixels.shape,
+        )
         layer_preview = self._layer_thumbnail_cache.get(layer_key)
         if layer_preview is None:
-            layer_preview = self.make_layer_thumbnail(layer.pixels)
+            layer_preview = self.make_layer_thumbnail(layer)
             self._layer_thumbnail_cache[layer_key] = layer_preview
             self._trim_thumbnail_cache(self._layer_thumbnail_cache)
         self._layer_thumb_image = ImageTk.PhotoImage(layer_preview)
@@ -294,17 +304,8 @@ class RenderingViewMixin:
         while len(cache) > limit:
             cache.pop(next(iter(cache)))
 
-    def make_layer_thumbnail(self, pixels: np.ndarray, size: int = 64) -> Image.Image:
-        height, width = pixels.shape[:2]
-        scale = min(1.0, size / max(1, width), size / max(1, height))
-        preview_size = max(1, round(width * scale)), max(1, round(height * scale))
-        preview = pixels if preview_size == (width, height) else cv2.resize(pixels, preview_size, interpolation=cv2.INTER_AREA)
-        image = rgba_array_to_pil(preview)
-        canvas = Image.new("RGBA", (size, size), (44, 46, 52, 255))
-        x = (size - image.width) // 2
-        y = (size - image.height) // 2
-        canvas.alpha_composite(image, (x, y))
-        return canvas
+    def make_layer_thumbnail(self, source: Layer | np.ndarray, size: int = 64) -> Image.Image:
+        return build_layer_thumbnail(source, size)
 
     def make_mask_thumbnail(self, mask: np.ndarray | None, size: int = 64) -> Image.Image:
         if mask is None:

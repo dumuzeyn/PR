@@ -360,10 +360,26 @@ class LayerList(tk.Canvas):
     def _thumbnail(self, layer) -> ImageTk.PhotoImage | None:
         if self._thumbnail_factory is None or layer is None:
             return None
-        key = (getattr(layer, "id", id(layer)), getattr(layer, "pixels_revision", 0), 28)
+        key = (
+            getattr(layer, "id", id(layer)),
+            getattr(layer, "pixels_revision", 0),
+            getattr(layer, "mask_revision", 0),
+            repr(getattr(layer, "filters", None)),
+            repr(getattr(layer, "effects", None)),
+            getattr(layer, "opacity", 1.0),
+            getattr(layer, "mask_enabled", True),
+            getattr(layer, "mask_density", 1.0),
+            28,
+        )
         image = self._thumbnail_cache.get(key)
         if image is None:
-            image = ImageTk.PhotoImage(self._thumbnail_factory(layer.pixels, 28), master=self)
+            image = ImageTk.PhotoImage(self._thumbnail_factory(layer, 28), master=self)
+            layer_id = key[0]
+            self._thumbnail_cache = {
+                cached_key: cached_image
+                for cached_key, cached_image in self._thumbnail_cache.items()
+                if cached_key[0] != layer_id
+            }
             self._thumbnail_cache[key] = image
         return image
 
@@ -393,6 +409,7 @@ class LayerList(tk.Canvas):
             thumbnail = self._thumbnail(layer)
             if thumbnail is not None:
                 self._row_images.append(thumbnail)
+                self.create_rectangle(37, y1 + 6, 67, y1 + 36, outline=TOKENS.BORDER_STRONG, width=1)
                 self.create_image(38, y1 + 7, image=thumbnail, anchor=tk.NW)
             name = str(getattr(layer, "name", text)).strip()
             self.create_text(74, y1 + self.ROW_HEIGHT // 2, text=name, anchor=tk.W, fill=TOKENS.TEXT_PRIMARY, font=("Segoe UI", 9), width=max(60, width - 112))
